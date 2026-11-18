@@ -58,6 +58,7 @@ export type CancellationReason =
   | 'team_dissolved'
   | 'market_window_missed'
   | 'player_decision'
+  | 'pause_timeout'
 
 // ===== 项目内角色 =====
 export type ProjectRole = 'lead' | 'senior' | 'generalist' | 'junior'

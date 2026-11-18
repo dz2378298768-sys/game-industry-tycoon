@@ -3,6 +3,14 @@ import type { ProjectPhase } from '@domain/enums'
 import { TUNING } from '@content/tuning'
 import { computeInitialDefectLevel } from '@simulation/systems/qa-quality'
 
+/** 连续暂停满该天数后由每日调度触发系统自动取消（D-01） */
+export const PAUSE_TIMEOUT_DAYS = 60
+
+/** 终态项目（LAUNCHED/CANCELLED）不累计暂停、不判超时、不推进研发 */
+export function isTerminalProjectPhase(phase: ProjectPhase): boolean {
+  return phase === 'LAUNCHED' || phase === 'CANCELLED'
+}
+
 /**
  * 项目阶段转换表 —— 唯一定义处。
  * PAUSED 不是主状态，暂停使用 project.isPaused。

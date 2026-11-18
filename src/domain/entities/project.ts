@@ -45,7 +45,10 @@ export interface Project {
   riskFlags: string[]
   changeLog: ChangeLogEntry[]
   cancellationReason: CancellationReason | null
-  consecutivePauseDays: number
+  /** 连续暂停计数（完整游戏日），存档保留；终态项目不再累计 */
+  pausedDays: number
+  /** 本次暂停的原因；null 表示未暂停或原因未知 */
+  pauseReason?: 'manual' | 'budget_exhausted' | null
   version: number
   createdAt: number
   updatedAt: number

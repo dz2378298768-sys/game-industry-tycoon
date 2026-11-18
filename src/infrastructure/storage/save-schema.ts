@@ -76,6 +76,9 @@ const projectSchema = z
       'CANCELLED',
     ]),
     isPaused: z.boolean(),
+    /** D-01：连续暂停天数，旧存档缺省 0；NaN/负数/非整数由 zod 拒绝 */
+    pausedDays: z.number().int().nonnegative().default(0),
+    pauseReason: z.enum(['manual', 'budget_exhausted']).nullish(),
     plannedLaunchDay: z.number().int().nonnegative(),
     budgetTotalCapCents: z.number().int().nonnegative(),
     teamAssignments: z.array(teamAssignment),

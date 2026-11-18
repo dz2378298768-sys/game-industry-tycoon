@@ -160,7 +160,8 @@ export class ProjectService {
       riskFlags: [],
       changeLog: [],
       cancellationReason: null,
-      consecutivePauseDays: 0,
+      pausedDays: 0,
+      pauseReason: null,
       version: 1,
       createdAt: cmd.plannedStartDay,
       updatedAt: cmd.plannedStartDay,
@@ -258,7 +259,15 @@ export class ProjectService {
       return fail('PRJ_CANNOT_PAUSE', 'Terminal phase cannot be paused')
     }
     if (p.isPaused) return { success: true, result: p, idempotent: true }
-    return ok(this.updateInPlace({ ...p, isPaused: true, version: p.version + 1 }))
+    return ok(
+      this.updateInPlace({
+        ...p,
+        isPaused: true,
+        pausedDays: 0,
+        pauseReason: 'manual',
+        version: p.version + 1,
+      }),
+    )
   }
 
   resume(projectId: string): CommandResult<Project> {
@@ -267,7 +276,15 @@ export class ProjectService {
       return fail('PRJ_CANNOT_RESUME', 'Terminal phase cannot be resumed')
     }
     if (!p.isPaused) return { success: true, result: p, idempotent: true }
-    return ok(this.updateInPlace({ ...p, isPaused: false, consecutivePauseDays: 0, version: p.version + 1 }))
+    return ok(
+      this.updateInPlace({
+        ...p,
+        isPaused: false,
+        pausedDays: 0,
+        pauseReason: null,
+        version: p.version + 1,
+      }),
+    )
   }
 
   cancel(projectId: string, reason: CancellationReason): CommandResult<Project> {

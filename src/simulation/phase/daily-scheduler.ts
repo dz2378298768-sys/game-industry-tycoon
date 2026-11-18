@@ -1,10 +1,11 @@
-import type { Discipline } from '@domain/enums'
+import type { CancellationReason, Discipline, ProjectPhase } from '@domain/enums'
 import type { Employee } from '@domain/entities/employee'
 import type { Project } from '@domain/entities/project'
 import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
 import type { FinanceService } from '@simulation/services/finance-service'
 import { uuid } from '@domain/types'
+import { createPauseTimeoutCancelledEvent } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import {
@@ -19,7 +20,11 @@ import {
   roleToDiscipline,
   round2,
 } from '@simulation/systems/work-systems'
-import { transitionProject } from '@simulation/systems/phase-rules'
+import {
+  isTerminalProjectPhase,
+  PAUSE_TIMEOUT_DAYS,
+  transitionProject,
+} from '@simulation/systems/phase-rules'
 import { growQualityEstimate } from '@simulation/systems/qa-quality'
 import { cityRentMultiplier } from '@content/queries'
 
@@ -49,10 +54,60 @@ export class DailyScheduler {
     if (world.currentDayIndex === dayIndex) return world
 
     let state: WorldState = { ...world, currentDayIndex: dayIndex }
+    // 先累计暂停天数/触发超时取消，再推进研发：被取消的项目当日即不再产出
+    state = this.applyPauseTimeout(state, dayIndex)
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)
     state = this.applyMonthlySettlement(state, dayIndex)
     return this.syncCompanyCash(state)
+  }
+
+  // ---------- 暂停计时与超时自动取消（D-01） ----------
+
+  /**
+   * 每个游戏日累计一次完整暂停天数：进入暂停当天计 0，次日起 +1。
+   * 只要 isPaused=true 即累计，不区分手动/预算耗尽原因（TASK-D01 §9.8）。
+   * 达到 60 天当日触发系统自动取消；终态项目不累计、不判超时。
+   */
+  private applyPauseTimeout(state: WorldState, dayIndex: number): WorldState {
+    const events: DomainEvent[] = []
+    let changed = false
+
+    const projects = state.projects.map((project) => {
+      if (!project.isPaused || isTerminalProjectPhase(project.phase)) return project
+
+      const pausedDays = project.pausedDays + 1
+      changed = true
+
+      if (pausedDays >= PAUSE_TIMEOUT_DAYS) {
+        events.push(createPauseTimeoutCancelledEvent(uuid(), project.id, dayIndex))
+        const cancelled: Project = {
+          ...project,
+          phase: 'CANCELLED' as ProjectPhase,
+          isPaused: false,
+          pausedDays,
+          pauseReason: null,
+          cancellationReason: 'pause_timeout' as CancellationReason,
+          version: project.version + 1,
+          updatedAt: dayIndex,
+        }
+        return cancelled
+      }
+
+      return {
+        ...project,
+        pausedDays,
+        version: project.version + 1,
+        updatedAt: dayIndex,
+      }
+    })
+
+    if (!changed) return state
+    return {
+      ...state,
+      projects,
+      events: events.length > 0 ? [...state.events, ...events] : state.events,
+    }
   }
 
   // ---------- 项目研发 ----------
@@ -66,7 +121,7 @@ export class DailyScheduler {
 
     const projects = state.projects.map((project) => {
       if (project.isPaused) return project
-      if (project.phase === 'LAUNCHED' || project.phase === 'CANCELLED') return project
+      if (isTerminalProjectPhase(project.phase)) return project
 
       const allowed = allowedDisciplinesForPhase(project.phase)
       if (allowed.length === 0) return project

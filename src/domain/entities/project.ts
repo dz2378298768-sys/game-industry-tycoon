@@ -38,7 +38,9 @@ export interface Project {
   initialDefectLevel?: number
   /** 上市时锁定的最终缺陷等级（0-100） */
   finalDefectLevel?: number
-  /** 上市时锁定的最终质量分布 */
+  /** 上市时锁定的最终总质量 = 100 - finalDefectLevel（0-100） */
+  finalQualityScore?: number
+  /** 上市时锁定的「原始五维质量快照」，不是最终总质量 */
   finalQuality?: QualityProfile
   riskFlags: string[]
   changeLog: ChangeLogEntry[]

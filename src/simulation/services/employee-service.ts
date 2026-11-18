@@ -35,11 +35,15 @@ export class EmployeeService {
   }
 
   hire(cmd: HireCmd): CommandResult<Employee> {
-    if (cmd.skillLevel < 1 || cmd.skillLevel > 5) {
-      return fail('EMP_INVALID_SKILL', 'skillLevel must be 1-5')
+    if (!Number.isFinite(cmd.skillLevel) || !Number.isInteger(cmd.skillLevel) || cmd.skillLevel < 1 || cmd.skillLevel > 5) {
+      return fail('EMP_INVALID_SKILL', 'skillLevel must be integer in 1-5')
     }
-    if (cmd.salaryMonthlyCents <= 0) {
-      return fail('EMP_INVALID_SALARY', 'salaryMonthlyCents must be positive')
+    if (
+      !Number.isFinite(cmd.salaryMonthlyCents) ||
+      !Number.isInteger(cmd.salaryMonthlyCents) ||
+      cmd.salaryMonthlyCents <= 0
+    ) {
+      return fail('EMP_INVALID_SALARY', 'salaryMonthlyCents must be a positive integer')
     }
     const e: Employee = {
       id: uuid(),

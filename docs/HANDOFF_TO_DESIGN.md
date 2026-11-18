@@ -221,27 +221,27 @@ M2 阻塞项已单独登记在 `docs/M2_BLOCKERS.md`（退款幂等键、SalesRe
 
 ## 8. 设计裁定状态
 
-> **M1.1 已将本节全部 21 项标记为已裁定或未裁定，结论见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。**
+> **A1–G21 全部 21 项均已裁定**，第二轮审核补齐了 A1、A5、B7、B8 的正式结论，结论见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 >
-> 其中 **A1、A5 为未裁定**（A1 沿用 M1 实现、A5 不实现）；**B7 / B8 为已裁定但公式待确认**（组成要素已定，具体公式由程序侧定义并集中在 TUNING）。详情见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
+> 当前不存在「未裁定」或「公式待确认」项。若后续裁定变更，请注明编号，程序侧按编号调整。
 
 ### A. 研发与工期
 
 | 编号 | 问题 | 结论 | 状态 |
 |---|---|---|---|
-| A1 | 项目工作量与预算的换算公式 | 沿用 M1 的 `budgetFactor = clamp(0.5, 4, 预算/1e6)` × {100/150/120} | ⚠️ 未裁定 |
+| A1 | 项目工作量与预算的换算公式 | 确认采用 TUNING 参数形式，现有公式保留 | ✅ 已裁定 |
 | A2 | 员工产能 5 点/天与四个系数 | 已集中到 TUNING，数值保留 | ✅ 已裁定 |
 | A3 | 制作 → 测试 90% 阈值 | 固定 90%，来自 TUNING | ✅ 已裁定 |
 | A4 | 进度累计阶段 | 仅 PRODUCTION（设计/程序/美术）与 QA（仅 QA） | ✅ 已裁定 |
-| A5 | 工期与工作量强约束 | 不实现 | ⚠️ 未裁定 |
+| A5 | 工期与工作量强约束 | 计划日期为目标日期，允许延期；不自动失败/取消；UI 显示预计完成与延期风险 | ✅ 已裁定 |
 
 ### B. QA
 
 | 编号 | 问题 | 结论 | 状态 |
 |---|---|---|---|
 | B6 | QA 是否必须清零才能上市准备 | 必须 100% | ✅ 已裁定 |
-| B7 | 提前进 QA 的风险机制 | 90%–99% 进入按完成度施加惩罚，参数 `earlyEntryPenaltyMax = 40` | ✅ 已裁定（公式待确认） |
-| B8 | 缺陷与修复规则 | `initialDefectLevel` → `defectLevel` → `finalQuality`，参数在 TUNING.qa | ✅ 已裁定（公式待确认） |
+| B7 | 提前进 QA 的风险机制 | 提前惩罚 = 平均剩余生产完成度 × 50；`initialDefectLevel = clamp(round(100 - productionQuality + 惩罚), 0, 100)` | ✅ 已裁定 |
+| B8 | 缺陷与修复规则 | 修复比例 70%；`defectLevel = clamp(round(initial × (1 - 0.7 × QA完成度)), 0, 100)`；最终总质量 = 100 - defectLevel | ✅ 已裁定 |
 
 ### C. 上市
 

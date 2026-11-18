@@ -7,19 +7,16 @@
 ## 0. 文档效力说明（必读）
 
 1. 本文件是**程序侧实际执行的规则清单**，用于消除代码中所有 `[待设计确认]` 标记。
-2. **程序侧未收到 A1–G21 原始裁定的逐字文本**，只收到 M1.1 任务书。因此本文件按任务书第 1–10 节回填：
-   - 任务书**明确写出**的规则 → 标为「已裁定」，并注明任务书章节。
-   - 任务书**只给了组成要素、未给公式**的（如 B7/B8） → 标为「已裁定（公式待确认）」，公式在代码中以 TUNING 参数形式集中，便于调整。
-   - 任务书**完全未提及**的（如 A1 预算换算、A5 工期强约束） → 标为「未裁定」，沿用 M1 实现。
-3. 任何「未裁定」项都不会阻止 M1.1 运行，但**不具备正式设计效力**，请项目规划者补充。
+2. A1–G21 已于 2026-11-18 由设计负责人（兼独立审核负责人）在第二轮审核中给出正式裁定；A1、A5、B7、B8 的缺口已补齐并被采纳。
+3. 全部 21 项均为「已裁定」，本轮不再存在「未裁定」或「公式待确认」项。
 4. 禁止提前实现 M2 销售与退款。`docs/M2_BLOCKERS.md` 继续有效。
 
 ---
 
 ## A. 研发与工期
 
-### A1 项目工作量与预算的换算 —— 未裁定（沿用 M1）
-- 任务书未重述。当前实现：
+### A1 项目工作量与预算的换算 —— 已裁定
+- 正式裁定：确认采用 TUNING 参数形式，现有公式保留。
   ```
   budgetFactor = clamp(TUNING.project.budgetFactorMin, budgetFactorMax, 预算分 / 1_000_000)
   design      = TUNING.project.workPerMillionBudget.design      × budgetFactor
@@ -54,9 +51,12 @@
 - 唯一实现：`allowedDisciplinesForPhase()`（`src/simulation/systems/project-progress.ts`）
 - 来源：任务书第 3 节。
 
-### A5 工期与工作量强约束 —— 未裁定
-- 任务书未提出。当前**不强制**，工期过短只会导致项目延期（无惩罚）。
-- 待规划者决定是否引入「超期惩罚 / 强制取消」。
+### A5 工期与工作量强约束 —— 已裁定
+- 正式裁定：`plannedLaunchDay` 是**目标日期**，不是强制失败日期。项目可以延期，**不因超过计划日期自动失败或自动取消**。
+- 必须提供「预计完成时间」与「延期风险提示」：
+  - 项目详情页显示预计完成日（按当前团队每日产能估算）与「晚 N 天 / 按计划」提示。
+  - 估算实现：`estimateDaysToFinish()`（`src/simulation/systems/project-progress.ts`）。
+- 不引入超期惩罚、自动失败或自动取消。
 
 ---
 
@@ -67,27 +67,30 @@
 - 守卫在 `ProjectService.advanceToReadyToLaunch()`，返回 `PRJ_QA_INCOMPLETE`。
 - 来源：任务书第 3 节。
 
-### B7 提前进入 QA 的质量惩罚 —— 已裁定（公式待确认）
+### B7 提前进入 QA 的质量惩罚 —— 已裁定
 - 「提前进入」指在生产完成度 **90%–99%** 之间进入 QA（`<90%` 已由 A3 禁止）。
-- 公式（程序侧定义，参数可调）：
+- 正式公式：
   ```
-  earlyPenalty       = round((1 - 三项最小完成度) × earlyEntryPenaltyMax)
-  earlyEntryPenaltyMax = 40（缺陷点）
-  initialDefectLevel = clamp(round(100 - 平均质量) + earlyPenalty, 0, 100)
+  平均剩余生产完成度 = 三项（设计 / 程序 / 美术）(1 - 完成度) 的平均值
+  earlyEntryPenalty = 平均剩余生产完成度 × 50
+  initialDefectLevel = clamp(round(100 - productionQuality + earlyEntryPenalty), 0, 100)
   ```
-- 100% 完成时惩罚为 0。
+  - `productionQuality` = 当前五维质量估算的平均值（0–100）。
+  - 100% 完成时惩罚为 0。
+  - 参数：`TUNING.qa.earlyEntryPenaltyFactor = 50`。
 - 代码：`src/simulation/systems/qa-quality.ts`
 
-### B8 缺陷等级与最终质量 —— 已裁定（公式待确认）
-- 组成要素由任务书给定：`initialDefectLevel`、QA 完成比例、缺陷修复效果、最终 `defectLevel`、`finalQuality`。
-- 程序侧公式：
+### B8 缺陷等级与最终质量 —— 已裁定
+- 正式公式：
   ```
-  defectLevel = clamp(round(initialDefectLevel × (1 - repairRatio × QA完成度)), 0, 100)
-  repairRatio = 0.8
-  finalQuality = 各维度 × (1 - defectLevel / qualityPenaltyDivisor)，clamp 0–100
-  qualityPenaltyDivisor = 200
+  defectLevel = clamp(round(initialDefectLevel × (1 - 0.7 × QA完成度)), 0, 100)
+  finalQualityScore = clamp(100 - defectLevel, 0, 100)
   ```
-- 性质：缺陷等级随 QA 进度单调不增，始终 0–100。
+  - `repairRatio = 0.7`（`TUNING.qa.repairRatio`）。
+  - 缺陷等级随 QA 进度单调不增，始终 0–100。
+- 口径区分：
+  - **最终总质量** = `finalQualityScore`（单一 0–100 数值，写入 `Project.finalQualityScore` / `Product.finalQualityScore`）。
+  - **原始五维质量** = `qualityProfile` 快照（写入 `Project.finalQuality` / `Product.qualityProfile`），不再参与最终质量公式。
 - 参数全部在 `TUNING.qa`。
 
 ---
@@ -218,8 +221,7 @@ fatigue = clamp(fatigue, 0, 100)
 | fatigueRestRecovery | 1.0 | 疲劳点/天 | TUNING.employee |
 | productionCompletionThreshold | 0.9 | 完成度比例 | TUNING.project |
 | qaWorkRatio | 0.2 | 比例 | TUNING.project |
-| earlyEntryPenaltyMax | 40 | 缺陷点 | TUNING.qa |
-| repairRatio | 0.8 | 比例 | TUNING.qa |
-| qualityPenaltyDivisor | 200 | 除数 | TUNING.qa |
+| earlyEntryPenaltyFactor | 50 | 缺陷点/完整缺口 | TUNING.qa |
+| repairRatio | 0.7 | 比例 | TUNING.qa |
 
 > 所有值均为 **TUNING 候选值**，未经平衡校准。

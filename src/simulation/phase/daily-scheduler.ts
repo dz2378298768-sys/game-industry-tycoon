@@ -13,7 +13,12 @@ import {
   allProductionDisciplinesCompleteAtLeast,
   isQaComplete,
 } from '@simulation/systems/project-progress'
-import { baseEffectiveWorkPerDay, clamp, round2 } from '@simulation/systems/work-systems'
+import {
+  baseEffectiveWorkPerDay,
+  clamp,
+  roleToDiscipline,
+  round2,
+} from '@simulation/systems/work-systems'
 import { transitionProject } from '@simulation/systems/phase-rules'
 import { growQualityEstimate } from '@simulation/systems/qa-quality'
 import { cityRentMultiplier } from '@content/queries'
@@ -40,8 +45,8 @@ export class DailyScheduler {
   }
 
   executeDay(world: WorldState, dayIndex: number): WorldState {
-    // 同一天只执行一次
-    if (world.currentDayIndex === dayIndex && dayIndex !== 0) return world
+    // 同一天只执行一次（含 Day 0）
+    if (world.currentDayIndex === dayIndex) return world
 
     let state: WorldState = { ...world, currentDayIndex: dayIndex }
     state = this.applyProjectWork(state, dayIndex)
@@ -159,13 +164,24 @@ export class DailyScheduler {
     return { ...state, employees }
   }
 
-  /** 员工在当前「可推进且未暂停」项目上的投入比例合计 */
+  /** 员工在当前「可推进且未暂停」项目中、且岗位学科被该阶段允许的投入比例合计 */
   private activeAllocationByEmployee(state: WorldState): Map<string, number> {
     const out = new Map<string, number>()
+    const employeesById = new Map<string, Employee>()
+    for (const e of state.employees) {
+      if (e.status === 'hired') employeesById.set(e.id, e)
+    }
+
     for (const p of state.projects) {
       if (p.isPaused) continue
-      if (allowedDisciplinesForPhase(p.phase).length === 0) continue
+      const allowed = allowedDisciplinesForPhase(p.phase)
+      if (allowed.length === 0) continue
       for (const a of p.teamAssignments) {
+        const emp = employeesById.get(a.employeeId)
+        if (!emp || emp.companyId !== p.companyId) continue
+        // 只有岗位学科在该阶段能产生有效工作时，才计入疲劳
+        const discipline = roleToDiscipline(emp.role)
+        if (!discipline || !allowed.includes(discipline)) continue
         out.set(a.employeeId, (out.get(a.employeeId) ?? 0) + a.allocationRatio)
       }
     }

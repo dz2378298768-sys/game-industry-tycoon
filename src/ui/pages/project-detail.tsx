@@ -1,8 +1,9 @@
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
-import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete } from '@simulation/systems/project-progress'
+import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete, estimateDaysToFinish } from '@simulation/systems/project-progress'
 import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
-import { computeFinalQuality, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
+import { computeFinalQualityScore, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
+import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
@@ -31,13 +32,29 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   )
   const isTerminal = project.phase === 'LAUNCHED' || project.phase === 'CANCELLED'
 
-  // 预估每日产出
-  const dailyPoints = project.teamAssignments.reduce((sum, a) => {
+  // 预估每日产出（按学科拆分，供预计完成时间使用）
+  const dailyByDiscipline = { design: 0, programming: 0, art: 0, qa: 0 }
+  for (const a of project.teamAssignments) {
     const emp = employees.find(e => e.id === a.employeeId)
-    if (!emp || emp.status !== 'hired') return sum
+    if (!emp || emp.status !== 'hired') continue
     const work = baseEffectiveWorkPerDay(emp, a.allocationRatio)
-    return sum + work.design + work.programming + work.art + work.qa
-  }, 0)
+    dailyByDiscipline.design += work.design
+    dailyByDiscipline.programming += work.programming
+    dailyByDiscipline.art += work.art
+    dailyByDiscipline.qa += work.qa
+  }
+  const dailyPoints =
+    dailyByDiscipline.design + dailyByDiscipline.programming + dailyByDiscipline.art + dailyByDiscipline.qa
+
+  const productionThreshold = TUNING.project.productionCompletionThreshold
+  const productionThresholdPct = Math.round(productionThreshold * 100)
+  const estimateDays = project.phase === 'PRODUCTION'
+    ? estimateDaysToFinish(project, dailyByDiscipline, ['design', 'programming', 'art'])
+    : project.phase === 'QA'
+      ? estimateDaysToFinish(project, dailyByDiscipline, ['qa'])
+      : 0
+  const estimateDay = estimateDays === null ? null : store.dayIndex + estimateDays
+  const delayDays = estimateDay === null ? null : estimateDay - project.plannedLaunchDay
 
   const selectedEmp = availableEmployees.find(e => e.id === selectedEmployeeId) ?? availableEmployees[0] ?? null
 
@@ -76,9 +93,9 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       const names = missingProduction
         .map(d => (d === 'design' ? '设计' : d === 'programming' ? '程序' : '美术'))
         .join('、')
-      blockHint = `缺少${names}岗位的员工，对应的研发学科不会增长，项目无法达到 90%。请招聘并分配相应岗位。`
-    } else if (project.phase === 'PRODUCTION' && !allProductionDisciplinesCompleteAtLeast(project, 0.9)) {
-      blockHint = '制作阶段需要设计 / 程序 / 美术都达到 90% 才能进入测试。请继续推进日期（顶部 +30d 或启动时间流速）。'
+      blockHint = `缺少${names}岗位的员工，对应的研发学科不会增长，项目无法达到 ${productionThresholdPct}%。请招聘并分配相应岗位。`
+    } else if (project.phase === 'PRODUCTION' && !allProductionDisciplinesCompleteAtLeast(project, productionThreshold)) {
+      blockHint = `制作阶段需要设计 / 程序 / 美术都达到 ${productionThresholdPct}% 才能进入测试。请继续推进日期（顶部 +30d 或启动时间流速）。`
     } else if (project.phase === 'QA' && !isQaComplete(project)) {
       blockHint = `测试（QA）必须完成 100% 才能进入上市准备（当前 ${Math.round(completionRatio(project, 'qa') * 100)}%）。请分配 QA 员工并继续推进日期。`
     } else if (project.phase === 'READY_TO_LAUNCH' && store.dayIndex < project.plannedLaunchDay) {
@@ -90,7 +107,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const qaInitial = project.phase === 'QA' || project.phase === 'READY_TO_LAUNCH' || project.phase === 'LAUNCHED'
     ? (typeof project.initialDefectLevel === 'number' ? project.initialDefectLevel : computeInitialDefectLevel(project))
     : null
-  const projectedQuality = computeFinalQuality(project, qaDefect)
+  const projectedQuality = computeFinalQualityScore(qaDefect)
 
   const disciplines: Array<{ key: 'design' | 'programming' | 'art' | 'qa'; labelZh: string }> = [
     { key: 'design', labelZh: t('project.discipline.design') },
@@ -184,6 +201,16 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             <div className="label">Planned Launch</div>
             <div className="value">{formatDay(project.plannedLaunchDay)}</div>
           </div>
+          <div className="kpi-card">
+            <div className="label">预计完成</div>
+            <div className="value">{estimateDay === null ? '—' : formatDay(estimateDay)}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="label">延期风险</div>
+            <div className="value" style={{ color: delayDays !== null && delayDays > 0 ? '#e05c5c' : undefined }}>
+              {delayDays === null ? '无法估算' : delayDays > 0 ? `晚 ${delayDays} 天` : '按计划'}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -246,13 +273,8 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             </tr>
             <tr>
               <td>{t('project.qa.finalQuality')}</td>
-              <td>
-                {Math.round(
-                  (projectedQuality.gameplay + projectedQuality.technical + projectedQuality.content +
-                    projectedQuality.art + projectedQuality.innovation) / 5,
-                )}
-              </td>
-              <td className="muted" style={{ fontSize: 11 }}>0–100</td>
+              <td>{Math.round(projectedQuality)}</td>
+              <td className="muted" style={{ fontSize: 11 }}>0–100（= 100 - 最终缺陷等级）</td>
             </tr>
           </tbody>
         </table>

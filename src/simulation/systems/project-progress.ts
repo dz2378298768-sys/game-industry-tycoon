@@ -92,3 +92,24 @@ export function totalCompletion(project: Project): number {
   }
   return total === 0 ? 0 : done / total
 }
+
+/**
+ * 按当前每日产能估算完成指定学科剩余工作量所需天数。
+ * 任一未完成学科没有有效产能时返回 null（无法估算）。
+ * 纯函数，供 UI 展示「预计完成时间 / 延期风险」使用（设计裁定 A5）。
+ */
+export function estimateDaysToFinish(
+  project: Project,
+  dailyByDiscipline: Record<Discipline, number>,
+  disciplines: Discipline[] = PRODUCTION_DISCIPLINES,
+): number | null {
+  let days = 0
+  for (const d of disciplines) {
+    const remaining = project.workRemainingByDiscipline[d]
+    if (remaining <= 0) continue
+    const rate = dailyByDiscipline[d]
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null
+    days = Math.max(days, Math.ceil(remaining / rate))
+  }
+  return days
+}

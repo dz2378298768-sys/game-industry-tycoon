@@ -12,7 +12,7 @@ npm install
 npm run dev        # http://localhost:5173
 npm run typecheck  # TypeScript 类型检查
 npm run lint:check # ESLint 检查
-npm run test       # Vitest（10 个文件 / 69 个用例）
+npm run test       # Vitest（12 个文件 / 92 个用例）
 npm run build      # 生产构建
 ```
 
@@ -64,21 +64,23 @@ src/
 | P0-1 | 初始现金 $50,000 只经唯一 `advance` 交易入账，Company 现金与财务流水一致 |
 | P0-2 | 每日模拟只由 `DailyScheduler` 执行，同日幂等 |
 | P0-3 | 阶段工作量门控 + QA 进/出守卫（ProjectService 层强制，不依赖 UI） |
-| P0-4 | QA 质量机制（提前进入惩罚、初始/最终缺陷等级、最终质量） |
+| P0-4 | QA 质量机制：提前惩罚 = 平均剩余生产完成度 × 50；初始缺陷 = `100 - 生产质量 + 惩罚`；QA 修复 70%；最终总质量 = 100 - 最终缺陷 |
 | P1-5 | 手动上市、无固定售价（`launchPriceCents = null`）、QA 100% + 平台年代校验、一项目一产品 |
 | P1-6 | 士气/疲劳浮点规则、解雇补偿 1 个月工资、管理容量上限 |
 | P1-7 | 月末结算（工资 + 城市租金）、允许负现金与财务困难、不破产 |
 | P1-8 | 年代准入双端校验、城市工资/租金系数来自内容 JSON |
 | P1-9 | TUNING 参数集中到 `src/content/tuning.ts` |
 | P1-10 | 存档 Zod 校验（版本/引用/现金一致性），无效存档不覆盖当前状态 |
+| A5 | 计划上市日是目标日期，允许延期；项目详情页显示预计完成日与延期风险 |
+| 审核整改 | 投入比例拒绝 NaN/Infinity；薪资必须有限正整数且入账失败回滚；疲劳只按实际可执行工作计算；Day 0 同日幂等；UI 阈值统一读 TUNING |
 
 完整结论见 [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)。
 
 ## 已知缺口
 
-- A1（预算 → 工作量换算）、A5（工期强约束）、B7/B8 具体公式仍待项目规划者正式裁定。
 - 所有数值均为 TUNING 候选值，未经平衡校准。
 - 旧存档若现金与流水不一致会被拒绝加载（这是 M1.1 刻意启用的安全校验）。
+- 第二轮审核 R-001–R-007 已修复并新增回归测试；**是否通过仍以审核负责人结论为准**。
 
 ## 状态与反馈
 

@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   computeInitialDefectLevel,
   computeDefectLevel,
-  computeFinalQuality,
+  computeFinalQualityScore,
+  computeEarlyEntryPenalty,
+  averageRemainingProductionRatio,
 } from '@simulation/systems/qa-quality'
 import { makeProject } from '../../__tests__/helpers'
 
@@ -20,12 +22,18 @@ function projectAt(completion: number, qaProgress = 0) {
 }
 
 describe('QA 质量机制 (B7/B8)', () => {
-  it('90% 进入 QA 时产生提前进入惩罚（4 点）', () => {
-    // 平均质量 60 → 基础缺陷 40；完成度 90% → 惩罚 round(0.1 × 40) = 4
-    expect(computeInitialDefectLevel(projectAt(0.9))).toBe(44)
+  it('提前惩罚 = 平均剩余生产完成度 × 50', () => {
+    const p = projectAt(0.9)
+    expect(averageRemainingProductionRatio(p)).toBeCloseTo(0.1, 5)
+    expect(computeEarlyEntryPenalty(p)).toBeCloseTo(5, 5)
+  })
+
+  it('90% 进入 QA 时初始缺陷为 45（基础 40 + 惩罚 5）', () => {
+    expect(computeInitialDefectLevel(projectAt(0.9))).toBe(45)
   })
 
   it('100% 生产完成时惩罚为 0', () => {
+    expect(computeEarlyEntryPenalty(projectAt(1))).toBe(0)
     expect(computeInitialDefectLevel(projectAt(1))).toBe(40)
   })
 
@@ -36,10 +44,15 @@ describe('QA 质量机制 (B7/B8)', () => {
     }
   })
 
-  it('QA 100% 时按修复比例计算最终缺陷', () => {
+  it('QA 100% 时按 70% 修复比例计算最终缺陷', () => {
     const p = projectAt(0.9, 1)
-    // 44 × (1 - 0.8) = 8.8 → round = 9
-    expect(computeDefectLevel(p)).toBe(9)
+    // 45 × (1 - 0.7) = 13.5 → round = 14
+    expect(computeDefectLevel(p)).toBe(14)
+  })
+
+  it('生产 100% 且 QA 100% 时最终缺陷为 12', () => {
+    // 40 × (1 - 0.7) = 12
+    expect(computeDefectLevel(projectAt(1, 1))).toBe(12)
   })
 
   it('缺陷等级始终在 0-100', () => {
@@ -52,12 +65,11 @@ describe('QA 质量机制 (B7/B8)', () => {
     }
   })
 
-  it('最终质量随缺陷下降且不超过 100', () => {
-    const p = projectAt(1, 1)
-    const q0 = computeFinalQuality(p, 0)
-    const q50 = computeFinalQuality(p, 50)
-    expect(q0.gameplay).toBe(60)
-    expect(q50.gameplay).toBe(45)
-    expect(Object.values(q50).every((v) => v >= 0 && v <= 100)).toBe(true)
+  it('最终总质量 = 100 - 最终缺陷等级', () => {
+    expect(computeFinalQualityScore(0)).toBe(100)
+    expect(computeFinalQualityScore(14)).toBe(86)
+    expect(computeFinalQualityScore(100)).toBe(0)
+    expect(computeFinalQualityScore(140)).toBe(0)
+    expect(computeFinalQualityScore(-5)).toBe(100)
   })
 })

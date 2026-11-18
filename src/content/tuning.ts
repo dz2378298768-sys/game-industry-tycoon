@@ -104,12 +104,10 @@ export const TUNING = {
   },
 
   qa: {
-    /** 单位：缺陷点。生产完成度不足时的最大额外缺陷惩罚（0% 完成时）。 */
-    earlyEntryPenaltyMax: 40,
-    /** 单位：比例。QA 完成 100% 时可修复的缺陷比例。 */
-    repairRatio: 0.8,
-    /** 单位：比例。最终质量折算时缺陷的惩罚权重（defect/200）。 */
-    qualityPenaltyDivisor: 200,
+    /** 单位：缺陷点/完整缺口。提前进入 QA 的惩罚 = 平均剩余生产完成度（0-1）× 本值。 */
+    earlyEntryPenaltyFactor: 50,
+    /** 单位：比例。QA 完成 100% 时可修复的缺陷比例（设计裁定 B8）。 */
+    repairRatio: 0.7,
   },
 
   finance: {

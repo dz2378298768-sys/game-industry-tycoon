@@ -14,7 +14,8 @@ import {
 import { transitionProject } from '@simulation/systems/phase-rules'
 import {
   computeDefectLevel,
-  computeFinalQuality,
+  computeFinalQualityScore,
+  snapshotQualityProfile,
 } from '@simulation/systems/qa-quality'
 
 export interface CreateProjectCmd {
@@ -317,17 +318,16 @@ export class ProjectService {
     if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot transition to LAUNCHED')
 
     const defectLevel = computeDefectLevel(advanced)
-    const finalQuality = computeFinalQuality(advanced, defectLevel)
+    const finalQualityScore = computeFinalQualityScore(defectLevel)
+    const finalQualityProfile = snapshotQualityProfile(advanced)
     const launched: Project = {
       ...advanced,
       actualLaunchDay: dayIndex,
       finalDefectLevel: defectLevel,
-      finalQuality,
+      finalQualityScore,
+      finalQuality: finalQualityProfile,
     }
     this.updateInPlace(launched)
-
-    const avgQ =
-      (finalQuality.gameplay + finalQuality.technical + finalQuality.content + finalQuality.art + finalQuality.innovation) / 5
 
     const product: Product = {
       id: uuid(),
@@ -340,10 +340,11 @@ export class ProjectService {
       launchDay: dayIndex,
       // M1 不做真实定价
       launchPriceCents: null,
-      qualityProfile: finalQuality,
+      qualityProfile: finalQualityProfile,
       defectLevel,
+      finalQualityScore,
       reviewScore: null,
-      brandImpact: Math.round(avgQ / 10),
+      brandImpact: Math.round(finalQualityScore / 10),
       lifecycleStage: 'launch',
       awarenessByMarket: {},
       status: 'active',
@@ -398,6 +399,17 @@ export class ProjectService {
       totals.set(a.employeeId, (totals.get(a.employeeId) ?? 0) + a.allocationRatio)
     }
     for (const a of cmd.assignments) {
+      // 拒绝 NaN / Infinity / 0 / 负数 / 大于 1 的投入比例
+      if (
+        !Number.isFinite(a.allocationRatio) ||
+        a.allocationRatio <= 0 ||
+        a.allocationRatio > 1
+      ) {
+        return fail(
+          'EMP_INVALID_ALLOCATION',
+          `Employee ${a.employeeId} allocationRatio must be in (0, 1]`,
+        )
+      }
       const newTotal = (totals.get(a.employeeId) ?? 0) + a.allocationRatio
       if (newTotal > 1.00001) {
         return fail(

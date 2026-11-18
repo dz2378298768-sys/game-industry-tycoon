@@ -31,18 +31,18 @@
 
 ---
 
-## 3. 只需回复 4 个裁定缺口
+## 3. 裁定状态：无待裁定项
 
-其余 17 项程序侧已按任务书落地，无需重复确认。
+A1–G21 已全部裁定。第二轮审核补充的 A1、A5、B7、B8 已按正式裁定落地：
 
-| 编号 | 待裁定内容 | 当前程序侧实现 |
+| 编号 | 正式裁定 | 程序侧实现 |
 |---|---|---|
-| **A1** | 项目预算 → 设计/程序/美术工作量的正式换算公式 | `budgetFactor = clamp(0.5, 4, 预算分 / 1_000_000)`，再乘 {设计 100 / 程序 150 / 美术 120}（沿用 M1 临时公式） |
-| **A5** | 是否引入工期强约束 / 超期惩罚 | 不实现；计划上市日早于完工只导致延期，无惩罚 |
-| **B7** | 提前进入 QA 的质量惩罚公式 | `initialDefectLevel = round(100 - 平均质量) + round((1 - 最低生产完成度) × 40)` |
-| **B8** | QA 缺陷修复与最终质量公式 | `defectLevel = round(initialDefectLevel × (1 - 0.8 × qaProgress))`；`finalQuality = 质量 × (1 - defectLevel / 200)` |
+| **A1** | 确认采用 TUNING 参数形式，现有预算→工作量公式保留 | `defaultWorkTotalByDiscipline()`，参数在 TUNING |
+| **A5** | `plannedLaunchDay` 是目标日期，允许延期，不自动失败/取消；需展示预计完成时间与延期风险 | `estimateDaysToFinish()`；项目详情页显示「预计完成 / 延期风险」 |
+| **B7** | 提前惩罚 = 平均剩余生产完成度 × 50；`initialDefectLevel = clamp(round(100 - productionQuality + 惩罚), 0, 100)` | `TUNING.qa.earlyEntryPenaltyFactor = 50` |
+| **B8** | QA 修复比例 70%；`defectLevel = clamp(round(initial × (1 - 0.7 × QA完成度)), 0, 100)`；`finalQualityScore = 100 - defectLevel` | `TUNING.qa.repairRatio = 0.7`；五维 `qualityProfile` 作为原始快照单独保留 |
 
-请以书面形式给出正式裁定；程序侧将据此调整并保持其余规则不变。
+如裁定再有变更，请注明编号，程序侧按编号调整。
 
 ---
 
@@ -78,7 +78,7 @@
 |---|---|
 | `npm run typecheck` | 退出码 0 |
 | `npm run lint:check` | 退出码 0 |
-| `npm run test` | 10 个测试文件 / 69 个用例全部通过 |
+| `npm run test` | 12 个测试文件 / 92 个用例全部通过 |
 | `npm run build` | 构建成功 |
 
 M1.1 交付时四项均通过。**程序侧未自行宣布 M1.1 通过，最终验收由项目规划者负责。**

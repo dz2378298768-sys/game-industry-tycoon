@@ -153,6 +153,22 @@ export class GameWorld {
       }
     }
 
+    // 薪资必须是有限的正整数美分（拒绝 NaN / Infinity / 0 / 负数 / 小数）
+    if (
+      !Number.isFinite(params.salaryMonthlyCents) ||
+      !Number.isInteger(params.salaryMonthlyCents) ||
+      params.salaryMonthlyCents <= 0
+    ) {
+      return {
+        success: false,
+        errorCode: 'EMP_INVALID_SALARY',
+        message: '月薪必须是大于 0 的整数（美分）。',
+      }
+    }
+    if (!Number.isFinite(params.skillLevel)) {
+      return { success: false, errorCode: 'EMP_INVALID_SKILL', message: '技能等级必须是 1–5 的整数。' }
+    }
+
     // 城市工资系数应用于基础薪资
     const effectiveSalary = Math.round(params.salaryMonthlyCents * citySalaryMultiplier(company.cityId))
     const hireCostCents = Math.round(effectiveSalary * TUNING.employee.hireCostRatio)
@@ -190,7 +206,8 @@ export class GameWorld {
       referenceId: emp.id,
     })
     if (!tx.success) {
-      // 财务失败则回滚员工
+      // 财务失败则回滚员工：以 world.employees 为准重建 EmployeeService 内部状态
+      this.syncEmployeesFromWorld()
       return { success: false, errorCode: tx.errorCode, message: tx.errorMessage ?? '入职成本支付失败' }
     }
 
@@ -390,8 +407,8 @@ export class GameWorld {
     if (project.teamAssignments.some((a) => a.employeeId === employeeId)) {
       return { success: false, message: '该员工已在此项目中。' }
     }
-    if (allocationRatio <= 0 || allocationRatio > 1) {
-      return { success: false, message: '投入比例必须在 1%–100% 之间。' }
+    if (!Number.isFinite(allocationRatio) || allocationRatio <= 0 || allocationRatio > 1) {
+      return { success: false, message: '投入比例必须是 1%–100% 之间的有效数值。' }
     }
 
     const existing: TeamAssignment[] = []

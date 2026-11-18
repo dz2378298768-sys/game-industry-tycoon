@@ -24,6 +24,7 @@ npm run build      # 生产构建
 |---|---|
 | [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | **设计裁定记录 A1–G21**（M1.1 唯一规则来源） |
 | [docs/NEXT_HANDOFF.md](docs/NEXT_HANDOFF.md) | **给下一棒的交接指令**（当前基线、待裁定项、验收口径） |
+| [docs/M1.1_REMEDIATION_REPORT.md](docs/M1.1_REMEDIATION_REPORT.md) | **M1.1 最终复审整改报告**（DEF-001/002、D-01、DEF-004、TR-01 证据、G-05 只读分析、残余风险） |
 | [docs/REVIEW_HANDOFF_M1.1_ENGINEERING.md](docs/REVIEW_HANDOFF_M1.1_ENGINEERING.md) | **工程整固交接独立审核**（G-01–G-06、验证证据、核对清单、待裁定项） |
 | [docs/HANDOFF_TO_DESIGN.md](docs/HANDOFF_TO_DESIGN.md) | 交接主文档：已实现范围、硬约束、裁定状态、交付清单 |
 | [docs/M2_BLOCKERS.md](docs/M2_BLOCKERS.md) | M2 销售与退款的规格冲突登记（M1.1 不解决） |

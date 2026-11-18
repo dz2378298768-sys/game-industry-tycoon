@@ -5,7 +5,7 @@
  */
 export class Money {
   public readonly amount: number // 整数分
-  public readonly currency: 'USD' = 'USD'
+  public readonly currency = 'USD' as const
 
   constructor(cents: number) {
     if (!Number.isInteger(cents)) {

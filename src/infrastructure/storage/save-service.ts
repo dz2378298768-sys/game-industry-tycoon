@@ -1,20 +1,47 @@
 import { get, set, del } from 'idb-keyval'
 import LZString from 'lz-string'
 import type { WorldState } from '@simulation/services/world-state'
+import { parseSave, SAVE_SCHEMA_VERSION } from './save-schema'
 
 const SAVE_KEY = 'git_save_v1'
 
-export async function saveGame(world: WorldState, _label?: string): Promise<void> {
-  const compressed = LZString.compressToUTF16(JSON.stringify(world))
+export type LoadGameResult =
+  | { status: 'ok'; state: WorldState }
+  | { status: 'empty' }
+  | { status: 'invalid'; errorCode: string; errorMessage: string }
+
+/** 保存：写入 schemaVersion，便于后续迁移 */
+export async function saveGame(world: WorldState): Promise<void> {
+  const payload: WorldState = { ...world, schemaVersion: SAVE_SCHEMA_VERSION }
+  const compressed = LZString.compressToUTF16(JSON.stringify(payload))
   await set(SAVE_KEY, compressed)
 }
 
-export async function loadGame(): Promise<WorldState | null> {
+/**
+ * 读取并校验存档。
+ * 无效存档返回 invalid，调用方不得用它覆盖当前运行状态。
+ */
+export async function loadGame(): Promise<LoadGameResult> {
   const compressed = await get<string>(SAVE_KEY)
-  if (!compressed) return null
+  if (!compressed) return { status: 'empty' }
+
   const json = LZString.decompressFromUTF16(compressed)
-  if (!json) return null
-  return JSON.parse(json) as WorldState
+  if (!json) {
+    return { status: 'invalid', errorCode: 'SAVE_CORRUPTED', errorMessage: '存档数据无法解压，可能已损坏。' }
+  }
+
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch {
+    return { status: 'invalid', errorCode: 'SAVE_CORRUPTED', errorMessage: '存档 JSON 解析失败，可能已损坏。' }
+  }
+
+  const parsed = parseSave(raw)
+  if (!parsed.ok) {
+    return { status: 'invalid', errorCode: parsed.errorCode, errorMessage: parsed.errorMessage }
+  }
+  return { status: 'ok', state: parsed.state }
 }
 
 export async function hasSave(): Promise<boolean> {

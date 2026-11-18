@@ -1,26 +1,21 @@
-import type {
-  ProjectPhase,
-  ConceptSubPhase,
-  Discipline,
-  CancellationReason,
-} from '@domain/enums'
+import type { ProjectPhase, ConceptSubPhase, Discipline, CancellationReason, CompanyStatus } from '@domain/enums'
 import type { Project } from '@domain/entities/project'
 import type { Product } from '@domain/entities/product'
 import type { RangeItem, TeamAssignment } from '@domain/value-objects'
 import type { CommandResult } from '@domain/types'
 import { ok, fail, uuid } from '@domain/types'
-import {
-  InvalidPhaseTransitionError,
-  EmployeeAllocationError,
-  EntityNotFoundError,
-  ValidationError,
-} from '@domain/errors'
+import { EntityNotFoundError } from '@domain/errors'
+import { TUNING } from '@content/tuning'
 import {
   allProductionDisciplinesCompleteAtLeast,
+  completionRatio,
+  isQaComplete,
 } from '@simulation/systems/project-progress'
-import { averageQuality } from '@domain/value-objects/quality-profile'
-
-// 我们不导入 ProductService；而是在调用 launch() 时返回 Product 的最小字段集（由上层决定何时真正持久化）
+import { transitionProject } from '@simulation/systems/phase-rules'
+import {
+  computeDefectLevel,
+  computeFinalQuality,
+} from '@simulation/systems/qa-quality'
 
 export interface CreateProjectCmd {
   name: string
@@ -40,51 +35,53 @@ export interface CreateProjectCmd {
   }
 }
 
-const PRODUCTION_DISCIPLINES: Discipline[] = ['design', 'programming', 'art']
+/** 上市前置条件的跨聚合依赖，由 Application 层注入 */
+export interface ProjectServiceDeps {
+  /** 该项目是否已经生成过 Product */
+  hasProductForProject?: (projectId: string) => boolean
+  /** 平台在该日期是否可用 */
+  isPlatformAvailable?: (platformId: string, dayIndex: number) => boolean
+  /** 公司状态 */
+  getCompanyStatus?: (companyId: string) => CompanyStatus | null
+}
 
 /**
- * 每个项目的"默认工作量"估算 —— 由预算推得。
- * 使用温和的缩放系数，保证「1 个员工 ≈ 6 工作点/天」的基线在计划工期内可以完成。
+ * 每个项目的"默认工作量"估算 —— 由预算推得，全部系数来自 TUNING。
  *
- *   budgetFactor = clamp(0.5, 4, budgetCents / 1_000_000)
+ *   budgetFactor = clamp(min, max, budgetCents / 1_000_000)
  *   design      = 100 × factor
  *   programming = 150 × factor
  *   art         = 120 × factor
- *   qa          = 0（进入 QA 阶段后注入）
- *
- * 例：$30,000 预算 → factor=3 → design 300 / programming 450 / art 360
- *     单个岗位员工约 6 点/天 → 50~75 天可完成制作，符合 120 天计划工期。
- * 注意：这是 TUNING 候选值，不是最终平衡参数。
+ *   qa          = 0（进入 QA 阶段后由 phase-rules 注入）
  */
 function defaultWorkTotalByDiscipline(
   budgetCapCents: number,
 ): Record<Discipline, number> {
   const raw = budgetCapCents / 1_000_000
-  const budgetFactor = Math.max(0.5, Math.min(4, raw))
+  const factor = Math.max(
+    TUNING.project.budgetFactorMin,
+    Math.min(TUNING.project.budgetFactorMax, raw),
+  )
+  const per = TUNING.project.workPerMillionBudget
   return {
-    design: Math.round(100 * budgetFactor),
-    programming: Math.round(150 * budgetFactor),
-    art: Math.round(120 * budgetFactor),
+    design: Math.round(per.design * factor),
+    programming: Math.round(per.programming * factor),
+    art: Math.round(per.art * factor),
     qa: 0,
   }
 }
 
 /**
- * QA 阶段开始时，为 QA discipline 注入工作量。
- */
-function injectQaWork(totalWork: Record<Discipline, number>): Record<Discipline, number> {
-  if (totalWork.qa > 0) return totalWork
-  const qa = Math.round(
-    (totalWork.design + totalWork.programming + totalWork.art) * 0.2,
-  )
-  return { ...totalWork, qa }
-}
-
-/**
- * ProjectService —— 完整状态机 + 生命周期操作
+ * ProjectService —— 项目状态机与生命周期操作。
+ * 所有阶段守卫在此强制校验，UI 隐藏按钮不能替代。
  */
 export class ProjectService {
   private projects: Project[] = []
+  private deps: ProjectServiceDeps
+
+  constructor(deps: ProjectServiceDeps = {}) {
+    this.deps = deps
+  }
 
   reset(initialProjects: Project[] = []): void {
     this.projects = [...initialProjects]
@@ -104,9 +101,7 @@ export class ProjectService {
 
   private updateInPlace(next: Project): Project {
     const idx = this.projects.findIndex((p) => p.id === next.id)
-    if (idx === -1) {
-      throw new EntityNotFoundError('PRJ_NOT_FOUND', `Project ${next.id}`)
-    }
+    if (idx === -1) throw new EntityNotFoundError('PRJ_NOT_FOUND', `Project ${next.id}`)
     this.projects[idx] = next
     return next
   }
@@ -127,19 +122,12 @@ export class ProjectService {
       return fail('PRJ_INVALID_BUDGET', 'budgetTotalCapCents must be positive')
     }
 
-    const defaultTargets = {
-      gameplay: 60,
-      technical: 60,
-      content: 60,
-      art: 60,
-      innovation: 60,
-    }
     const qualityTargets = {
-      gameplay: cmd.qualityTargets?.gameplay ?? defaultTargets.gameplay,
-      technical: cmd.qualityTargets?.technical ?? defaultTargets.technical,
-      content: cmd.qualityTargets?.content ?? defaultTargets.content,
-      art: cmd.qualityTargets?.art ?? defaultTargets.art,
-      innovation: cmd.qualityTargets?.innovation ?? defaultTargets.innovation,
+      gameplay: cmd.qualityTargets?.gameplay ?? 60,
+      technical: cmd.qualityTargets?.technical ?? 60,
+      content: cmd.qualityTargets?.content ?? 60,
+      art: cmd.qualityTargets?.art ?? 60,
+      innovation: cmd.qualityTargets?.innovation ?? 60,
     }
 
     const workTotal = defaultWorkTotalByDiscipline(cmd.budgetTotalCapCents)
@@ -180,262 +168,191 @@ export class ProjectService {
     return ok(p)
   }
 
-  // ============ 状态机：CONCEPT → PRE_PRODUCTION → PRODUCTION → QA → READY_TO_LAUNCH → LAUNCHED ============
+  // ============ 状态机 ============
 
-  approveConcept(projectId: string): CommandResult<Project> {
-    const p = this.assertProject(projectId)
-    if (p.phase !== 'CONCEPT') {
-      return fail('PRJ_WRONG_PHASE', 'Must be in CONCEPT phase')
-    }
-    const withSub: Project = {
-      ...p,
-      subPhase: 'APPROVED',
-      version: p.version + 1,
-      updatedAt: p.updatedAt,
-    }
-    // 自动推进到 PRE_PRODUCTION
-    const advanced = this.transitionTo(withSub, 'PRE_PRODUCTION')
-    if (!advanced) {
-      return fail('PRJ_INVALID_TRANSITION', 'Cannot advance from CONCEPT after approve')
-    }
-    return ok(advanced)
+  private applyTransition(project: Project, to: ProjectPhase, dayIndex: number): CommandResult<Project> {
+    const next = transitionProject(project, to, dayIndex)
+    if (!next) return fail('PRJ_INVALID_TRANSITION', `Cannot transition ${project.phase} → ${to}`)
+    return ok(this.updateInPlace(next))
   }
 
-  advancePastConcept(projectId: string): CommandResult<Project> {
+  approveConcept(projectId: string, dayIndex = 0): CommandResult<Project> {
     const p = this.assertProject(projectId)
-    if (p.phase !== 'CONCEPT') {
-      return fail('PRJ_WRONG_PHASE', 'Must be in CONCEPT phase')
-    }
-    const advanced = this.transitionTo(p, 'PRE_PRODUCTION')
-    if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot advance from CONCEPT')
-    return ok(advanced)
+    if (p.phase !== 'CONCEPT') return fail('PRJ_WRONG_PHASE', 'Must be in CONCEPT phase')
+    return this.applyTransition({ ...p, subPhase: 'APPROVED' }, 'PRE_PRODUCTION', dayIndex)
   }
 
-  advanceToProduction(projectId: string): CommandResult<Project> {
+  advancePastConcept(projectId: string, dayIndex = 0): CommandResult<Project> {
+    const p = this.assertProject(projectId)
+    if (p.phase !== 'CONCEPT') return fail('PRJ_WRONG_PHASE', 'Must be in CONCEPT phase')
+    return this.applyTransition(p, 'PRE_PRODUCTION', dayIndex)
+  }
+
+  advanceToProduction(projectId: string, dayIndex = 0): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase !== 'PRE_PRODUCTION') {
       return fail('PRJ_WRONG_PHASE', 'Must be in PRE_PRODUCTION phase')
     }
-    const advanced = this.transitionTo(p, 'PRODUCTION')
-    if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot advance to PRODUCTION')
-    // PRODUCTION 开始 = actualStartDay
-    const withStart: Project =
-      advanced.actualStartDay == null
-        ? { ...advanced, actualStartDay: advanced.plannedStartDay }
-        : advanced
-    return ok(this.updateInPlace(withStart))
+    const r = this.applyTransition(p, 'PRODUCTION', dayIndex)
+    if (!r.success || !r.result) return r
+    if (r.result.actualStartDay === null || r.result.actualStartDay === undefined) {
+      return ok(this.updateInPlace({ ...r.result, actualStartDay: dayIndex }))
+    }
+    return r
   }
 
-  /** 泛化状态机 —— 根据 phase 推进到下一个阶段 */
-  advancePhaseGeneric(projectId: string): CommandResult<Project> {
+  /** 泛化推进：根据当前阶段前进一格，并强制执行各阶段守卫 */
+  advancePhaseGeneric(projectId: string, dayIndex = 0): CommandResult<Project> {
     const p = this.assertProject(projectId)
-    if (p.phase === 'CONCEPT') return this.advancePastConcept(projectId)
-    if (p.phase === 'PRE_PRODUCTION') return this.advanceToProduction(projectId)
-    if (p.phase === 'PRODUCTION') {
-      const canAutoQA = allProductionDisciplinesCompleteAtLeast(p, 0.9)
-      if (!canAutoQA) {
-        return fail('PRJ_QA_NOT_READY', 'Production disciplines < 90% complete')
+    if (p.isPaused) return fail('PRJ_PAUSED', 'Paused project cannot advance')
+    switch (p.phase) {
+      case 'CONCEPT':
+        return this.advancePastConcept(projectId, dayIndex)
+      case 'PRE_PRODUCTION':
+        return this.advanceToProduction(projectId, dayIndex)
+      case 'PRODUCTION': {
+        if (!allProductionDisciplinesCompleteAtLeast(p, TUNING.project.productionCompletionThreshold)) {
+          return fail('PRJ_QA_NOT_READY', 'Production disciplines below threshold')
+        }
+        return this.enterQA(projectId, dayIndex)
       }
-      return this.enterQA(projectId, undefined, false)
+      case 'QA':
+        return this.advanceToReadyToLaunch(projectId, dayIndex)
+      default:
+        return fail('PRJ_CANNOT_ADVANCE', `Cannot advance from ${p.phase}`)
     }
-    if (p.phase === 'QA') {
-      const advanced = this.transitionTo(p, 'READY_TO_LAUNCH')
-      if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot enter READY_TO_LAUNCH')
-      return ok(advanced)
-    }
-    return fail('PRJ_CANNOT_ADVANCE', `Cannot advance from ${p.phase}`)
-  }
-
-  advanceToReadyToLaunch(projectId: string): CommandResult<Project> {
-    const p = this.assertProject(projectId)
-    if (p.phase !== 'QA') {
-      return fail('PRJ_WRONG_PHASE', 'Must be in QA phase')
-    }
-    const advanced = this.transitionTo(p, 'READY_TO_LAUNCH')
-    if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot enter READY_TO_LAUNCH')
-    return ok(advanced)
   }
 
   /**
-   * 通用 Phase→Phase 转换表
+   * 进入 QA。必须三项生产完成度均达到 TUNING 阈值。
+   * 在 90%–100% 之间进入会按 B7 产生提前进入惩罚（见 qa-quality）。
    */
-  private transitionTo(from: Project, to: ProjectPhase): Project | null {
-    const valid: Record<ProjectPhase, ProjectPhase[]> = {
-      CONCEPT: ['PRE_PRODUCTION'],
-      PRE_PRODUCTION: ['PRODUCTION'],
-      PRODUCTION: ['QA'],
-      QA: ['READY_TO_LAUNCH'],
-      READY_TO_LAUNCH: ['LAUNCHED'],
-      LAUNCHED: [],
-      CANCELLED: [],
+  enterQA(projectId: string, dayIndex = 0): CommandResult<Project> {
+    const p = this.assertProject(projectId)
+    if (p.phase !== 'PRODUCTION') return fail('PRJ_WRONG_PHASE', 'Must be in PRODUCTION phase')
+    if (!allProductionDisciplinesCompleteAtLeast(p, TUNING.project.productionCompletionThreshold)) {
+      return fail('PRJ_PRODUCTION_NOT_COMPLETE', 'Production disciplines below threshold')
     }
-    if (!valid[from.phase].includes(to)) return null
+    return this.applyTransition(p, 'QA', dayIndex)
+  }
 
-    let next: Project = {
-      ...from,
-      phase: to,
-      subPhase: to === 'CONCEPT' ? from.subPhase : null,
-      version: from.version + 1,
+  /** QA → 上市准备：QA 完成度必须为 100% */
+  advanceToReadyToLaunch(projectId: string, dayIndex = 0): CommandResult<Project> {
+    const p = this.assertProject(projectId)
+    if (p.phase !== 'QA') return fail('PRJ_WRONG_PHASE', 'Must be in QA phase')
+    if (!isQaComplete(p)) {
+      return fail(
+        'PRJ_QA_INCOMPLETE',
+        `QA completion ${Math.round(completionRatio(p, 'qa') * 100)}% < 100%`,
+      )
     }
-
-    // 进入 QA 时注入 QA 工作量
-    if (to === 'QA') {
-      const total = injectQaWork(next.workTotalByDiscipline)
-      const remainingInject = { ...next.workRemainingByDiscipline }
-      // 如果 qa workTotal 从 0 增加，remaining 也要同步
-      const totalBefore = next.workTotalByDiscipline.qa
-      const totalAfter = total.qa
-      if (totalAfter > totalBefore) {
-        remainingInject.qa += totalAfter - totalBefore
-      }
-      next = {
-        ...next,
-        workTotalByDiscipline: total,
-        workRemainingByDiscipline: remainingInject,
-      }
-    }
-
-    // LAUNCHED 时写 actualLaunchDay（如果还没写）
-    if (to === 'LAUNCHED' && next.actualLaunchDay == null) {
-      next = { ...next, actualLaunchDay: next.plannedLaunchDay }
-    }
-
-    return this.updateInPlace(next)
+    return this.applyTransition(p, 'READY_TO_LAUNCH', dayIndex)
   }
 
   // ============ 暂停/恢复/取消 ============
 
-  pause(
-    projectId: string,
-    _idempotencyKey?: string,
-  ): CommandResult<Project> {
+  pause(projectId: string): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase === 'LAUNCHED' || p.phase === 'CANCELLED') {
       return fail('PRJ_CANNOT_PAUSE', 'Terminal phase cannot be paused')
     }
-    if (p.isPaused) {
-      return ok(p, undefined)
-    }
-    const paused: Project = {
-      ...p,
-      isPaused: true,
-      consecutivePauseDays: p.consecutivePauseDays,
-      version: p.version + 1,
-    }
-    return ok(this.updateInPlace(paused))
+    if (p.isPaused) return { success: true, result: p, idempotent: true }
+    return ok(this.updateInPlace({ ...p, isPaused: true, version: p.version + 1 }))
   }
 
-  resume(
-    projectId: string,
-    _idempotencyKey?: string,
-  ): CommandResult<Project> {
-    const p = this.assertProject(projectId)
-    if (!p.isPaused) return ok(p, undefined)
-    const resumed: Project = {
-      ...p,
-      isPaused: false,
-      consecutivePauseDays: 0,
-      version: p.version + 1,
-    }
-    return ok(this.updateInPlace(resumed))
-  }
-
-  cancel(
-    projectId: string,
-    reason: CancellationReason,
-    _idempotencyKey?: string,
-  ): CommandResult<Project> {
+  resume(projectId: string): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase === 'LAUNCHED' || p.phase === 'CANCELLED') {
-      return fail('PRJ_ALREADY_TERMINAL', 'Already in terminal phase')
+      return fail('PRJ_CANNOT_RESUME', 'Terminal phase cannot be resumed')
     }
-    const next: Project = {
-      ...p,
-      phase: 'CANCELLED',
-      isPaused: true,
-      cancellationReason: reason,
-      version: p.version + 1,
-    }
-    return ok(this.updateInPlace(next))
+    if (!p.isPaused) return { success: true, result: p, idempotent: true }
+    return ok(this.updateInPlace({ ...p, isPaused: false, consecutivePauseDays: 0, version: p.version + 1 }))
   }
 
-  // ============ QA ============
-
-  enterQA(
-    projectId: string,
-    _idempotencyKey?: string,
-    forced = false,
-  ): CommandResult<Project> {
+  cancel(projectId: string, reason: CancellationReason): CommandResult<Project> {
     const p = this.assertProject(projectId)
-    if (p.phase !== 'PRODUCTION') {
-      return fail('PRJ_WRONG_PHASE', 'Must be in PRODUCTION phase')
-    }
-    if (!forced && !allProductionDisciplinesCompleteAtLeast(p, 0.9)) {
-      return fail(
-        'PRJ_PRODUCTION_NOT_COMPLETE',
-        'production disciplines must be >= 90% complete (or forced)',
-      )
-    }
-    const advanced = this.transitionTo(p, 'QA')
-    if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot enter QA')
-    return ok(advanced)
+    if (p.phase === 'LAUNCHED') return fail('PRJ_ALREADY_LAUNCHED', 'Launched project cannot be cancelled')
+    if (p.phase === 'CANCELLED') return fail('PRJ_ALREADY_TERMINAL', 'Already cancelled')
+    return ok(
+      this.updateInPlace({
+        ...p,
+        phase: 'CANCELLED',
+        isPaused: true,
+        cancellationReason: reason,
+        version: p.version + 1,
+      }),
+    )
   }
 
   // ============ 发布 ============
 
   launch(
     projectId: string,
-    _idempotencyKey?: string,
-    dayIndex?: number,
+    dayIndex: number,
   ): CommandResult<{ projectId: string; productId: string; product: Product }> {
     const p = this.assertProject(projectId)
-    if (p.phase !== 'READY_TO_LAUNCH') {
-      return fail('PRJ_NOT_READY', 'Must be READY_TO_LAUNCH to launch')
-    }
-    const actualDay = dayIndex ?? p.plannedLaunchDay
-    if (actualDay < p.plannedLaunchDay) {
-      return fail('PRJ_LAUNCH_TOO_EARLY', 'Cannot launch before plannedLaunchDay')
+    if (p.phase !== 'READY_TO_LAUNCH') return fail('PRJ_NOT_READY', 'Must be READY_TO_LAUNCH')
+    if (p.isPaused) return fail('PRJ_PAUSED', 'Paused project cannot launch')
+    if (!isQaComplete(p)) return fail('PRJ_QA_INCOMPLETE', 'QA must be 100% complete')
+    if (dayIndex < p.plannedLaunchDay) {
+      return fail('PRJ_LAUNCH_TOO_EARLY', `Cannot launch before plannedLaunchDay ${p.plannedLaunchDay}`)
     }
 
-    const advanced = this.transitionTo(p, 'LAUNCHED')
+    if (this.deps.getCompanyStatus) {
+      const status = this.deps.getCompanyStatus(p.companyId)
+      if (status !== 'active') return fail('PRJ_COMPANY_INACTIVE', 'Company is not active')
+    }
+    if (this.deps.hasProductForProject?.(p.id)) {
+      return fail('PRJ_PRODUCT_EXISTS', 'Product already exists for this project')
+    }
+    if (this.deps.isPlatformAvailable) {
+      for (const platformId of p.targetPlatformIds) {
+        if (!this.deps.isPlatformAvailable(platformId, dayIndex)) {
+          return fail('PRJ_PLATFORM_UNAVAILABLE', `Platform ${platformId} not available`)
+        }
+      }
+    }
+
+    const advanced = transitionProject(p, 'LAUNCHED', dayIndex)
     if (!advanced) return fail('PRJ_INVALID_TRANSITION', 'Cannot transition to LAUNCHED')
 
-    // 构造 Product —— 此处仅生成字段；调用方负责持久化
-    const avgQ = averageQuality(advanced.qualityEstimate)
+    const defectLevel = computeDefectLevel(advanced)
+    const finalQuality = computeFinalQuality(advanced, defectLevel)
+    const launched: Project = {
+      ...advanced,
+      actualLaunchDay: dayIndex,
+      finalDefectLevel: defectLevel,
+      finalQuality,
+    }
+    this.updateInPlace(launched)
+
+    const avgQ =
+      (finalQuality.gameplay + finalQuality.technical + finalQuality.content + finalQuality.art + finalQuality.innovation) / 5
+
     const product: Product = {
       id: uuid(),
-      sourceProjectId: advanced.id,
-      companyId: advanced.companyId,
-      name: advanced.name,
-      genreId: advanced.genreId,
-      audienceSegmentIds: [...advanced.audienceSegmentIds],
-      supportedPlatformIds: [...advanced.targetPlatformIds],
-      launchDay: actualDay,
-      launchPriceCents: 29_999, // TUNING: $29.99 默认首发价
-      qualityProfile: { ...advanced.qualityEstimate },
-      defectLevel: Math.round(Math.max(0, 100 - avgQ)),
+      sourceProjectId: launched.id,
+      companyId: launched.companyId,
+      name: launched.name,
+      genreId: launched.genreId,
+      audienceSegmentIds: [...launched.audienceSegmentIds],
+      supportedPlatformIds: [...launched.targetPlatformIds],
+      launchDay: dayIndex,
+      // M1 不做真实定价
+      launchPriceCents: null,
+      qualityProfile: finalQuality,
+      defectLevel,
       reviewScore: null,
       brandImpact: Math.round(avgQ / 10),
       lifecycleStage: 'launch',
       awarenessByMarket: {},
       status: 'active',
       version: 1,
-      createdAt: actualDay,
-      updatedAt: actualDay,
+      createdAt: dayIndex,
+      updatedAt: dayIndex,
     }
 
-    // 回填项目的 actualLaunchDay
-    const withLaunchDay: Project = {
-      ...advanced,
-      actualLaunchDay: actualDay,
-    }
-    this.updateInPlace(withLaunchDay)
-
-    return ok({
-      projectId: advanced.id,
-      productId: product.id,
-      product,
-    })
+    return ok({ projectId: launched.id, productId: product.id, product })
   }
 
   // ============ 范围 & 团队 ============
@@ -445,12 +362,14 @@ export class ProjectService {
     addItems?: RangeItem[]
     removeItemIds?: string[]
     updateItems?: RangeItem[]
+    dayIndex?: number
   }): CommandResult<Project> {
     const p = this.assertProject(cmd.projectId)
-    let scope = [...p.scope]
-    if (cmd.addItems?.length) {
-      scope = [...scope, ...cmd.addItems]
+    if (p.phase === 'LAUNCHED' || p.phase === 'CANCELLED') {
+      return fail('PRJ_SCOPE_TERMINAL', 'Terminal project scope cannot change')
     }
+    let scope = [...p.scope]
+    if (cmd.addItems?.length) scope = [...scope, ...cmd.addItems]
     if (cmd.removeItemIds?.length) {
       const remove = new Set(cmd.removeItemIds)
       scope = scope.filter((i) => !remove.has(i.id))
@@ -459,12 +378,7 @@ export class ProjectService {
       const updateMap = new Map(cmd.updateItems.map((i) => [i.id, i]))
       scope = scope.map((i) => updateMap.get(i.id) ?? i)
     }
-    const next: Project = {
-      ...p,
-      scope,
-      version: p.version + 1,
-    }
-    return ok(this.updateInPlace(next))
+    return ok(this.updateInPlace({ ...p, scope, version: p.version + 1 }))
   }
 
   reassignTeam(cmd: {
@@ -474,17 +388,17 @@ export class ProjectService {
     allAssignmentsInCompany: TeamAssignment[]
   }): CommandResult<Project> {
     const p = this.assertProject(cmd.projectId)
+    if (p.phase === 'LAUNCHED' || p.phase === 'CANCELLED') {
+      return fail('PRJ_TEAM_TERMINAL', 'Terminal project team cannot change')
+    }
 
-    // 构造"除本项目外"的 assignments，再叠加新 assignments，做总量校验
-    const otherAssignments = cmd.allAssignmentsInCompany.filter(
-      (a) => a.projectId !== cmd.projectId,
-    )
-    const totalsBefore = new Map<string, number>()
+    const otherAssignments = cmd.allAssignmentsInCompany.filter((a) => a.projectId !== cmd.projectId)
+    const totals = new Map<string, number>()
     for (const a of otherAssignments) {
-      totalsBefore.set(a.employeeId, (totalsBefore.get(a.employeeId) ?? 0) + a.allocationRatio)
+      totals.set(a.employeeId, (totals.get(a.employeeId) ?? 0) + a.allocationRatio)
     }
     for (const a of cmd.assignments) {
-      const newTotal = (totalsBefore.get(a.employeeId) ?? 0) + a.allocationRatio
+      const newTotal = (totals.get(a.employeeId) ?? 0) + a.allocationRatio
       if (newTotal > 1.00001) {
         return fail(
           'EMP_ALLOCATION_EXCEEDS_100_PERCENT',
@@ -493,23 +407,10 @@ export class ProjectService {
       }
     }
 
-    const next: Project = {
-      ...p,
-      teamAssignments: cmd.assignments,
-      version: p.version + 1,
-    }
-    return ok(this.updateInPlace(next))
+    return ok(this.updateInPlace({ ...p, teamAssignments: cmd.assignments, version: p.version + 1 }))
   }
-
-  // ============ 纯计算 ============
 
   computeWorkRemaining(project: Project): Record<Discipline, number> {
     return { ...project.workRemainingByDiscipline }
   }
 }
-
-// 引用保持：避免未使用 lint 报错
-void PRODUCTION_DISCIPLINES
-void InvalidPhaseTransitionError
-void EmployeeAllocationError
-void ValidationError

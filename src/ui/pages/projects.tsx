@@ -1,6 +1,6 @@
 import React from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
-import { completionRatio, totalCompletion } from '@simulation/systems/project-progress'
+import { totalCompletion } from '@simulation/systems/project-progress'
 
 interface Props { onNavigate: (route: string, param?: string) => void }
 

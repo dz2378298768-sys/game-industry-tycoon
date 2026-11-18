@@ -1,23 +1,13 @@
-import type {
-  EmployeeRole,
-  EmployeeStatus,
-  Discipline,
-} from '@domain/enums'
+import type { EmployeeRole, EmployeeStatus, Discipline } from '@domain/enums'
 import type { Employee } from '@domain/entities/employee'
 import type { TeamAssignment } from '@domain/value-objects'
 import type { CommandResult } from '@domain/types'
 import { ok, fail, uuid } from '@domain/types'
-import {
-  roleToDiscipline,
-  skillFactor,
-  moraleFactor,
-  fatigueFactor,
-} from '@simulation/systems/work-systems'
-import { EntityNotFoundError } from '@domain/errors'
+import { TUNING } from '@content/tuning'
+import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
 
-// 依赖注入：通过构造传入 assignmentGetter
 export interface EmployeeServiceDeps {
-  /** 取所有 team assignments（从 ProjectService） */
+  /** 取公司内所有 team assignments（从 ProjectService） */
   getAssignmentsByCompany: (companyId: string) => TeamAssignment[]
 }
 
@@ -48,6 +38,9 @@ export class EmployeeService {
     if (cmd.skillLevel < 1 || cmd.skillLevel > 5) {
       return fail('EMP_INVALID_SKILL', 'skillLevel must be 1-5')
     }
+    if (cmd.salaryMonthlyCents <= 0) {
+      return fail('EMP_INVALID_SALARY', 'salaryMonthlyCents must be positive')
+    }
     const e: Employee = {
       id: uuid(),
       companyId: cmd.companyId,
@@ -58,8 +51,8 @@ export class EmployeeService {
       salaryMonthlyCents: cmd.salaryMonthlyCents,
       contractStartDay: cmd.contractStartDay,
       contractEndDay: cmd.contractEndDay ?? null,
-      morale: 70,
-      fatigue: 20,
+      morale: TUNING.employee.startingMorale,
+      fatigue: TUNING.employee.startingFatigue,
       experience: 0,
       status: 'hired' as EmployeeStatus,
       hireDay: cmd.contractStartDay,
@@ -71,15 +64,14 @@ export class EmployeeService {
     return ok(e)
   }
 
-  fire(cmd: {
-    employeeId: string
-    reason?: string
-    idempotencyKey?: string
-  }): CommandResult<Employee> {
-    const emp = this.employees.find((e) => e.id === cmd.employeeId)
-    if (!emp) {
-      return fail('EMP_NOT_FOUND', `No employee ${cmd.employeeId}`)
-    }
+  /**
+   * 仅变更员工状态，不产生财务交易。
+   * 解雇补偿由 Application 层通过 FinanceService 入账，保证「状态与交易」一致。
+   * 重复解雇会被拒绝（返回 EMP_ALREADY_TERMINATED），因此不会重复支付补偿。
+   */
+  fire(employeeId: string): CommandResult<Employee> {
+    const emp = this.employees.find((e) => e.id === employeeId)
+    if (!emp) return fail('EMP_NOT_FOUND', `No employee ${employeeId}`)
     if (emp.status !== 'hired' && emp.status !== 'on_leave') {
       return fail('EMP_ALREADY_TERMINATED', `Employee ${emp.id} status=${emp.status}`)
     }
@@ -98,8 +90,7 @@ export class EmployeeService {
     if (!emp) return fail('EMP_NOT_FOUND', `No employee ${employeeId}`)
     const clamped = Math.max(0, Math.min(100, emp.morale + delta))
     const updated: Employee = { ...emp, morale: clamped, version: emp.version + 1 }
-    const idx = this.employees.indexOf(emp)
-    this.employees[idx] = updated
+    this.employees[this.employees.indexOf(emp)] = updated
     return ok(updated)
   }
 
@@ -108,8 +99,7 @@ export class EmployeeService {
     if (!emp) return fail('EMP_NOT_FOUND', `No employee ${employeeId}`)
     const clamped = Math.max(0, Math.min(100, emp.fatigue + delta))
     const updated: Employee = { ...emp, fatigue: clamped, version: emp.version + 1 }
-    const idx = this.employees.indexOf(emp)
-    this.employees[idx] = updated
+    this.employees[this.employees.indexOf(emp)] = updated
     return ok(updated)
   }
 
@@ -119,45 +109,25 @@ export class EmployeeService {
 
   listByCompany(companyId: string): Employee[] {
     return this.employees.filter(
-      (e) =>
-        e.companyId === companyId &&
-        (e.status === 'hired' || e.status === 'on_leave'),
+      (e) => e.companyId === companyId && (e.status === 'hired' || e.status === 'on_leave'),
     )
+  }
+
+  /** 在职（计入管理容量）的员工数量 */
+  countActiveByCompany(companyId: string): number {
+    return this.employees.filter((e) => e.companyId === companyId && e.status === 'hired').length
   }
 
   listAll(): Employee[] {
     return [...this.employees]
   }
 
-  /**
-   * 员工每日产能（未分配到某项目之前的原始工作点/天）。
-   * 后续会乘以 team assignment 的 allocationRatio 再汇总到项目。
-   */
-  getEffectiveCapacityPerDay(
-    employee: Employee,
-  ): Record<Discipline, number> {
-    const base = 5
-    const sf = skillFactor(employee.skillLevel)
-    const mf = moraleFactor(employee.morale)
-    const ff = fatigueFactor(employee.fatigue)
-    const roleDisc = roleToDiscipline(employee.role)
-    const result: Record<Discipline, number> = {
-      design: 0,
-      programming: 0,
-      art: 0,
-      qa: 0,
-    }
-    if (!roleDisc) return result
-    result[roleDisc] = Math.max(
-      0,
-      Math.round(base * sf * mf * ff),
-    )
-    return result
+  /** 员工每日原始产能（未按项目分配之前） */
+  getEffectiveCapacityPerDay(employee: Employee): Record<Discipline, number> {
+    return baseEffectiveWorkPerDay(employee)
   }
 
-  /**
-   * 该员工在整个公司所有项目上的累计分配（0-1）
-   */
+  /** 该员工在整个公司所有项目上的累计分配（0-1） */
   getAllocationByEmployeeId(companyId: string): Map<string, number> {
     const all = this.deps.getAssignmentsByCompany(companyId)
     const out = new Map<string, number>()
@@ -166,6 +136,9 @@ export class EmployeeService {
     }
     return out
   }
-}
 
-void EntityNotFoundError
+  /** 员工当前是否承担可推进的研发任务（受阶段门控） */
+  hasActiveWork(employeeId: string, assignments: TeamAssignment[], phaseOf: (projectId: string) => string | null): boolean {
+    return assignments.some((a) => a.employeeId === employeeId && phaseOf(a.projectId) !== null)
+  }
+}

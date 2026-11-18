@@ -1,7 +1,13 @@
 # M2 阻塞事项登记（Game Industry Tycoon V2.1.7）
 
-> M1 不得擅自解决这些规则问题，也不得提前实现相关功能。
+> M1 / M1.1 不得擅自解决这些规则问题，也不得提前实现相关功能。
 > 本文件记录规格中明确标注 BLOCKED 或 V2.1.7 审计发现的未解决一致性问题。
+
+## 0. M1.1 状态（2026-11-18）
+
+- **M1.1 未实现 M2 任何功能**，也未修改本文件登记的 7 项规则。
+- 全部 7 项（1.1–1.7）状态仍为 **未解决 / 待裁定**。
+- M1.1 唯一相关变更：存档新增 Zod 结构化校验（`src/infrastructure/storage/save-schema.ts`），但 `schemaVersion` 仍为 **1**，未提前增加 SalesRecord / RefundBatch 等 M2 字段。v1→v2 迁移规则仍只保留设计（见 3.1）。
 
 ## 1. 销售与退款规则
 
@@ -54,7 +60,8 @@ M1 实现了以下 Service/Command 的占位接口但未填充逻辑：
 ## 3. 其他 M2 级别不确定项
 
 ### 3.1 存档 schemaVersion 升级策略
-- M1 使用 schemaVersion = 1。M2 新增 SalesRecord、RefundBatch 后必须升级 schemaVersion = 2 并提供 v1→v2 迁移函数。迁移必须在 SaveService 中声明 canMigrate(v1, v2) = true。
+- M1 / M1.1 使用 schemaVersion = 1。M2 新增 SalesRecord、RefundBatch 后必须升级 schemaVersion = 2 并提供 v1→v2 迁移函数。迁移必须在 SaveService 中声明 canMigrate(v1, v2) = true。
+- M1.1 已在 `parseSave()` 中实现 `SAVE_VERSION_UNSUPPORTED` 拒绝逻辑，但**未实现任何迁移函数**（设计已保留，代码未提前加 M2 字段）。
 
 ### 3.2 平台抽成 + 退款 + 税务的入账顺序
 - M1 只实现了 salary / office_rent / project_expense / advance 四类 TransactionCategory 的实际入账。
@@ -79,4 +86,4 @@ M1 实现了以下 Service/Command 的占位接口但未填充逻辑：
 
 ---
 
-_本文件由 M1 主程序开发 Agent 在 2026-11-18 创建。任何 M2 修复都必须先更新此文件再实施。_
+_本文件由 M1 主程序开发 Agent 在 2026-11-18 创建，M1.1 复核后保留。任何 M2 修复都必须先更新此文件再实施。_

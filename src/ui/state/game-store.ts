@@ -6,10 +6,12 @@ import type { Employee } from '@domain/entities/employee'
 import type { Project } from '@domain/entities/project'
 import type { Product } from '@domain/entities/product'
 import type { Transaction } from '@domain/entities/transaction'
-import type { CalendarSpeed } from '@domain/enums'
+import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
 import { t, formatMoney, formatDay, setLocale as setI18nLocale, getLocale as getI18nLocale } from '@i18n'
 
 interface Message { id: string; text: string; type: 'info' | 'error' | 'success' }
+
+interface ActionResult { success: boolean; message?: string | undefined }
 
 interface GameStore {
   game: GameWorld | null
@@ -24,19 +26,22 @@ interface GameStore {
   locale: 'en' | 'zh-CN'
   init(seed?: number): void
   createCompany(name: string, cityId: string): void
-  hireEmployee(name: string, role: any, skillLevel: number, salaryMonthlyCents: number): { error?: string }
+  hireEmployee(name: string, role: EmployeeRole, skillLevel: number, salaryMonthlyCents: number): { error?: string }
+  fireEmployee(employeeId: string): ActionResult
   createProject(params: {
     name: string
     genreId: string
     budgetTotalCapCents: number
     plannedLaunchDay: number
+    audienceSegmentIds?: string[]
+    targetPlatformIds?: string[]
   }): { error?: string }
-  advanceProjectPhase(projectId: string): { success: boolean; message?: string }
-  launchProject(projectId: string): { success: boolean; message?: string }
-  toggleProjectPause(projectId: string): { success: boolean; message?: string }
-  cancelProject(projectId: string): { success: boolean; message?: string }
-  assignEmployeeToProject(employeeId: string, projectId: string, allocationRatio: number, roleOnProject: string): { success: boolean; message?: string }
-  unassignEmployeeFromProject(employeeId: string, projectId: string): { success: boolean; message?: string }
+  advanceProjectPhase(projectId: string): ActionResult
+  launchProject(projectId: string): ActionResult
+  toggleProjectPause(projectId: string): ActionResult
+  cancelProject(projectId: string): ActionResult
+  assignEmployeeToProject(employeeId: string, projectId: string, allocationRatio: number, roleOnProject: ProjectRole): ActionResult
+  unassignEmployeeFromProject(employeeId: string, projectId: string): ActionResult
   advanceDays(days: number): void
   setSpeed(speed: CalendarSpeed): void
   refresh(): void
@@ -45,6 +50,7 @@ interface GameStore {
   save(): Promise<void>
   load(): Promise<boolean>
   getHasSave(): Promise<boolean>
+  isFinanciallyDistressed(): boolean
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -76,17 +82,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
   hireEmployee(name, role, skillLevel, salaryMonthlyCents) {
     const gw = get().game
     if (!gw) return { error: t('error.noCompany') }
-    const emp = gw.hireEmployee({ name, role, skillLevel, salaryMonthlyCents })
-    if (!emp) return { error: t('error.insufficientCash') }
+    const outcome = gw.hireEmployee({ name, role, skillLevel, salaryMonthlyCents })
+    if (!outcome.success) {
+      get().toast(outcome.message ?? t('error.insufficientCash'), 'error')
+      return { error: outcome.message ?? t('error.insufficientCash') }
+    }
     get().refresh()
     return {}
+  },
+
+  fireEmployee(employeeId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const outcome = gw.fireEmployee(employeeId)
+    get().refresh()
+    if (!outcome.success) {
+      get().toast(outcome.message ?? t('error.unknown'), 'error')
+      return { success: false, message: outcome.message }
+    }
+    get().toast(t('employee.fire.success'), 'info')
+    return { success: true }
   },
 
   createProject(params) {
     const gw = get().game
     if (!gw) return { error: t('error.noCompany') }
-    const p = gw.createProject(params)
-    if (!p) return { error: t('error.noCompany') }
+    const outcome = gw.createProject(params)
+    if (!outcome.success) {
+      get().toast(outcome.message ?? t('error.unknown'), 'error')
+      return { error: outcome.message ?? t('error.unknown') }
+    }
     get().refresh()
     return {}
   },
@@ -97,7 +122,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const result = gw.advanceProjectPhase(projectId)
     get().refresh()
     if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
-    return result
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
   launchProject(projectId) {
@@ -105,9 +130,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!gw) return { success: false, message: t('error.noCompany') }
     const result = gw.launchProject(projectId)
     get().refresh()
-    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
-    else get().toast('🚀 Project Launched!', 'success')
-    return result
+    if (!result.success) {
+      get().toast(result.message ?? t('error.unknown'), 'error')
+      return { success: false, message: result.message }
+    }
+    get().toast(t('project.launch.success'), 'success')
+    return { success: true }
   },
 
   toggleProjectPause(projectId) {
@@ -115,7 +143,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!gw) return { success: false, message: t('error.noCompany') }
     const result = gw.toggleProjectPause(projectId)
     get().refresh()
-    return result
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
   cancelProject(projectId) {
@@ -123,7 +152,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!gw) return { success: false, message: t('error.noCompany') }
     const result = gw.cancelProject(projectId)
     get().refresh()
-    return result
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
   assignEmployeeToProject(employeeId, projectId, allocationRatio, roleOnProject) {
@@ -132,7 +162,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const result = gw.assignEmployeeToProject(employeeId, projectId, allocationRatio, roleOnProject)
     get().refresh()
     if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
-    return result
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
   unassignEmployeeFromProject(employeeId, projectId) {
@@ -141,7 +171,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const result = gw.unassignEmployeeFromProject(employeeId, projectId)
     get().refresh()
     if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
-    return result
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
   advanceDays(days) {
@@ -161,18 +191,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
   refresh() {
     const gw = get().game
     if (!gw) return
+    const company = gw.getPlayerCompany() ?? null
     set({
-      company: gw.getPlayerCompany() ?? null,
+      company,
       employees: gw.world.employees,
       projects: gw.world.projects,
       products: gw.world.products,
-      transactions: gw.finance.getTransactionsByCompany(gw.getPlayerCompany()?.id ?? ''),
+      transactions: company ? gw.finance.getTransactionsByCompany(company.id) : [],
       dayIndex: gw.calendar.currentDayIndex,
     })
   },
 
   toast(text, type = 'info') {
-    const id = Math.random().toString(36)
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     set(state => ({ messages: [...state.messages, { id, text, type }] }))
     setTimeout(() => {
       set(state => ({ messages: state.messages.filter(m => m.id !== id) }))
@@ -189,25 +220,35 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const gw = get().game
     if (!gw) return
     await saveGame(gw.serialize())
-    get().toast('✓ 保存成功', 'success')
+    get().toast(t('save.success'), 'success')
   },
 
   async load() {
-    const state = await loadGame()
-    if (!state) {
-      get().toast('没有存档', 'error')
+    const result = await loadGame()
+    if (result.status === 'empty') {
+      get().toast(t('load.empty'), 'error')
       return false
     }
-    const gw = get().game ?? new GameWorld(state.saveSeed)
-    gw.restore(state)
+    if (result.status === 'invalid') {
+      // 无效存档不得覆盖当前运行状态
+      get().toast(result.errorMessage, 'error')
+      return false
+    }
+    const gw = get().game ?? new GameWorld(result.state.saveSeed)
+    gw.restore(result.state)
     set({ game: gw, speed: gw.calendar.getSpeed(), dayIndex: gw.calendar.currentDayIndex })
     get().refresh()
-    get().toast('✓ 读取成功', 'success')
+    get().toast(t('load.success'), 'success')
     return true
   },
 
   async getHasSave() {
     return hasSave()
+  },
+
+  isFinanciallyDistressed() {
+    const gw = get().game
+    return gw ? gw.isFinanciallyDistressed() : false
   },
 }))
 

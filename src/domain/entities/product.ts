@@ -12,8 +12,9 @@ export interface Product {
   genreId: string
   audienceSegmentIds: string[]
   supportedPlatformIds: string[]
-  launchDay: number
-  launchPriceCents: number
+  launchDay: number              // 真实上市日（actualLaunchDay）
+  /** M1 不做真实定价；null 表示未定价 */
+  launchPriceCents: number | null
   qualityProfile: QualityProfile
   defectLevel: number      // 0-100
   reviewScore: number | null

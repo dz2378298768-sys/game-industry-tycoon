@@ -1,7 +1,8 @@
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
-import { completionRatio, allProductionDisciplinesCompleteAtLeast } from '@simulation/systems/project-progress'
+import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete } from '@simulation/systems/project-progress'
 import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
+import { computeFinalQuality, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
 import { content } from '@infrastructure/loading/content-loader'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
@@ -78,12 +79,18 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       blockHint = `缺少${names}岗位的员工，对应的研发学科不会增长，项目无法达到 90%。请招聘并分配相应岗位。`
     } else if (project.phase === 'PRODUCTION' && !allProductionDisciplinesCompleteAtLeast(project, 0.9)) {
       blockHint = '制作阶段需要设计 / 程序 / 美术都达到 90% 才能进入测试。请继续推进日期（顶部 +30d 或启动时间流速）。'
+    } else if (project.phase === 'QA' && !isQaComplete(project)) {
+      blockHint = `测试（QA）必须完成 100% 才能进入上市准备（当前 ${Math.round(completionRatio(project, 'qa') * 100)}%）。请分配 QA 员工并继续推进日期。`
     } else if (project.phase === 'READY_TO_LAUNCH' && store.dayIndex < project.plannedLaunchDay) {
       blockHint = `已进入上市准备，但还没到计划上市日（Day ${project.plannedLaunchDay}，当前 Day ${store.dayIndex}）。`
-    } else if (project.phase === 'QA' && project.workRemainingByDiscipline.qa > 0) {
-      blockHint = '测试（QA）工作量尚未完成，但有 QA 员工时会计入进度。可以直接推进到「上市准备」。'
     }
   }
+
+  const qaDefect = defectLevelOf(project)
+  const qaInitial = project.phase === 'QA' || project.phase === 'READY_TO_LAUNCH' || project.phase === 'LAUNCHED'
+    ? (typeof project.initialDefectLevel === 'number' ? project.initialDefectLevel : computeInitialDefectLevel(project))
+    : null
+  const projectedQuality = computeFinalQuality(project, qaDefect)
 
   const disciplines: Array<{ key: 'design' | 'programming' | 'art' | 'qa'; labelZh: string }> = [
     { key: 'design', labelZh: t('project.discipline.design') },
@@ -117,7 +124,11 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 {project.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
               </button>
               {project.phase === 'READY_TO_LAUNCH' ? (
-                <button className="btn" onClick={() => launchProject(project.id)}>{t('project.actions.launch')}</button>
+                <button
+                  className="btn"
+                  onClick={() => launchProject(project.id)}
+                  disabled={!isQaComplete(project) || store.dayIndex < project.plannedLaunchDay}
+                >{t('project.actions.launch')}</button>
               ) : (
                 <button className="btn" onClick={() => advanceProjectPhase(project.id)}>{t('project.actions.advancePhase')}</button>
               )}
@@ -204,6 +215,45 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 </tr>
               )
             })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <h2>{t('project.qa.section')}</h2>
+        <table className="data-table">
+          <tbody>
+            <tr>
+              <td>{t('project.qa.qaProgress')}</td>
+              <td>{Math.round(completionRatio(project, 'qa') * 100)}%</td>
+              <td style={{ width: 200 }}>
+                <div className="progress-bar">
+                  <div className="fill" style={{ width: `${Math.round(completionRatio(project, 'qa') * 100)}%` }} />
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td>{t('project.qa.initialDefect')}</td>
+              <td>{qaInitial === null ? '—' : qaInitial}</td>
+              <td />
+            </tr>
+            <tr>
+              <td>{t('project.qa.currentDefect')}</td>
+              <td>{qaDefect}</td>
+              <td className="muted" style={{ fontSize: 11 }}>
+                {qaDefect > 0 ? t('project.qa.earlyWarning') : ''}
+              </td>
+            </tr>
+            <tr>
+              <td>{t('project.qa.finalQuality')}</td>
+              <td>
+                {Math.round(
+                  (projectedQuality.gameplay + projectedQuality.technical + projectedQuality.content +
+                    projectedQuality.art + projectedQuality.innovation) / 5,
+                )}
+              </td>
+              <td className="muted" style={{ fontSize: 11 }}>0–100</td>
+            </tr>
           </tbody>
         </table>
       </div>

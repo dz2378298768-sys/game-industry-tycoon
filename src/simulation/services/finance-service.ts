@@ -2,7 +2,6 @@ import type { TransactionCategory, TransactionStatus } from '@domain/enums'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CommandResult } from '@domain/types'
 import { ok, fail, uuid } from '@domain/types'
-import { InsufficientCashError, ValidationError } from '@domain/errors'
 
 export interface PostTransactionCmd {
   idempotencyKey: string
@@ -14,77 +13,75 @@ export interface PostTransactionCmd {
   description: string
 }
 
+export interface PostTransactionOptions {
+  /**
+   * 允许余额变为负数。
+   * 仅用于不可拒绝的固定结算（工资、租金、解雇补偿），以及读档重放。
+   * 招聘、建项目等自主支出必须使用默认值 false。
+   */
+  allowNegativeBalance?: boolean
+}
+
 /**
- * FinanceService —— 所有现金变动的唯一入口
- * 幂等、支持批量回滚。
+ * FinanceService —— 所有现金变动的唯一入口。
+ *
+ * 规则：
+ *   - 初始现金只能通过一笔 `advance` 交易入账一次（幂等键由调用方固定）。
+ *   - 固定结算允许负现金（财务困难状态由 Application 层读取）。
+ *   - 自主支出在余额不足时拒绝。
+ *   - 所有交易按幂等键去重。
  */
 export class FinanceService {
   private transactions: Transaction[] = []
-  /** 公司最新余额快照（加速 getCashBalance） */
+  /** 公司最新余额快照 */
   private balanceByCompany = new Map<string, number>()
   /** 幂等键 → transaction id */
   private idempotencyIndex = new Map<string, string>()
-  /** 用于清理的幂等键 → day */
+  /** 幂等键 → day，用于清理 */
   private idempotencyDay = new Map<string, number>()
 
-  /** 最多保留最近 N 天的幂等键 */
   private readonly IDEMPOTENCY_RETENTION_DAYS = 30
 
-  private getNextId(): string {
-    return uuid()
-  }
-
-  private getBalance(companyId: string): number {
-    return this.balanceByCompany.get(companyId) ?? 0
-  }
-
-  /**
-   * 向状态中"同步"注册一家公司。
-   * 实际业务里应该由 CompanyService 调用。
-   */
-  registerCompany(companyId: string, openingCashCents: number): void {
+  /** 注册公司，初始余额固定为 0；真实现金必须由交易入账 */
+  registerCompany(companyId: string): void {
     if (!this.balanceByCompany.has(companyId)) {
-      this.balanceByCompany.set(companyId, openingCashCents)
+      this.balanceByCompany.set(companyId, 0)
     }
   }
 
-  /**
-   * 强制设置现金余额 —— 用于初始化/重置（非交易途径，不会产生 Transaction）。
-   */
-  setCashBalance(companyId: string, cashCents: number): void {
-    this.balanceByCompany.set(companyId, cashCents)
-  }
-
-  postTransaction(cmd: PostTransactionCmd): CommandResult<Transaction> {
-    // 1. 验证基本字段
+  postTransaction(
+    cmd: PostTransactionCmd,
+    options: PostTransactionOptions = {},
+  ): CommandResult<Transaction> {
+    if (!Number.isInteger(cmd.amountCents)) {
+      return fail('FIN_AMOUNT_NOT_INTEGER', 'Transaction amount must be an integer number of cents')
+    }
     if (cmd.amountCents === 0) {
       return fail('FIN_AMOUNT_ZERO', 'Transaction amount must be non-zero')
     }
+    if (!this.balanceByCompany.has(cmd.companyId)) {
+      return fail('FIN_COMPANY_NOT_REGISTERED', `Company ${cmd.companyId} is not registered`)
+    }
 
-    // 2. 幂等命中
     const existingId = this.idempotencyIndex.get(cmd.idempotencyKey)
     if (existingId) {
       const found = this.transactions.find((t) => t.id === existingId)
       if (found) {
-        return ok(found, undefined) as CommandResult<Transaction>
+        return { success: true, result: found, idempotent: true }
       }
     }
 
-    // 3. 余额检查
     const currentBalance = this.getBalance(cmd.companyId)
     const newBalance = currentBalance + cmd.amountCents
-    // 只允许因支出出现负数（公司破产检查在 CompanyService），
-    // 这里仅禁止在正常状态下余额 < 0
-    if (newBalance < 0) {
+    if (newBalance < 0 && options.allowNegativeBalance !== true) {
       return fail(
         'FIN_INSUFFICIENT_CASH',
-        `Cannot post transaction of ${cmd.amountCents}; balance would go ${newBalance}`,
+        `Cannot post transaction of ${cmd.amountCents}; balance would be ${newBalance}`,
       )
     }
 
-    // 4. 写入
     const tx: Transaction = {
-      id: this.getNextId(),
+      id: uuid(),
       idempotencyKey: cmd.idempotencyKey,
       companyId: cmd.companyId,
       day: cmd.day,
@@ -99,45 +96,29 @@ export class FinanceService {
     this.balanceByCompany.set(cmd.companyId, newBalance)
     this.idempotencyIndex.set(cmd.idempotencyKey, tx.id)
     this.idempotencyDay.set(cmd.idempotencyKey, cmd.day)
-
-    // 5. 清理过旧幂等键
     this.pruneIdempotency(cmd.day)
-
     return ok(tx)
   }
 
-  bulkPostTransactions(
-    cmds: PostTransactionCmd[],
-  ): CommandResult<Transaction[]> {
-    const results: Transaction[] = []
-    const prevBalances = new Map<string, number>()
+  bulkPostTransactions(cmds: PostTransactionCmd[]): CommandResult<Transaction[]> {
+    const prevTxs = [...this.transactions]
+    const prevBal = new Map(this.balanceByCompany)
     const prevIdx = new Map(this.idempotencyIndex)
     const prevDay = new Map(this.idempotencyDay)
-    const prevTxs = [...this.transactions]
-    const prevBalCopy = new Map(this.balanceByCompany)
-
-    let rolledBack = false
+    const results: Transaction[] = []
     for (const cmd of cmds) {
       const r = this.postTransaction(cmd)
       if (!r.success || !r.result) {
-        // 回滚：恢复所有状态
         this.transactions = prevTxs
-        this.balanceByCompany = prevBalCopy
+        this.balanceByCompany = prevBal
         this.idempotencyIndex = prevIdx
         this.idempotencyDay = prevDay
-        rolledBack = true
         return fail(
           r.errorCode ?? 'FIN_BULK_POST_FAILED',
-          r.errorMessage ?? `Bulk transaction failed; rolled back ${results.length}`,
+          r.errorMessage ?? `Bulk transaction failed after ${results.length}`,
         )
       }
       results.push(r.result)
-      if (!prevBalances.has(cmd.companyId)) {
-        prevBalances.set(cmd.companyId, prevBalCopy.get(cmd.companyId) ?? 0)
-      }
-    }
-    if (rolledBack) {
-      return fail('FIN_BULK_POST_FAILED', 'Unexpected rollback state')
     }
     return ok(results)
   }
@@ -147,43 +128,36 @@ export class FinanceService {
     reason: string,
     newKey: string,
   ): CommandResult<Transaction> {
-    const target = this.transactions.find(
-      (t) => t.id === transactionId && t.status === 'posted',
-    )
+    const target = this.transactions.find((t) => t.id === transactionId && t.status === 'posted')
     if (!target) {
       return fail('FIN_TX_NOT_FOUND', `No posted transaction ${transactionId}`)
     }
-
-    const reverseAmt = -target.amountCents
     const rev: Transaction = {
       id: uuid(),
       idempotencyKey: newKey,
       companyId: target.companyId,
       day: target.day,
       category: target.category,
-      amountCents: reverseAmt,
-      balanceAfterCents: 0, // 下面重算
+      amountCents: -target.amountCents,
+      balanceAfterCents: this.getBalance(target.companyId) - target.amountCents,
       referenceId: target.id,
       description: `REVERSE ${reason}: ${target.description}`,
       status: 'reversed',
       reversedBy: target.id,
     }
-
-    const currentBalance = this.getBalance(target.companyId)
-    const newBalance = currentBalance + reverseAmt
-    rev.balanceAfterCents = newBalance
     this.transactions.push(rev)
-    this.balanceByCompany.set(target.companyId, newBalance)
-
-    // 原交易也标记
+    this.balanceByCompany.set(target.companyId, rev.balanceAfterCents)
     target.status = 'reversed'
     target.reversedBy = rev.id
-
     return ok(rev)
   }
 
   getCashBalance(companyId: string): number {
     return this.getBalance(companyId)
+  }
+
+  isInFinancialDistress(companyId: string): boolean {
+    return this.getBalance(companyId) < 0
   }
 
   getTransactionsByCompany(
@@ -200,8 +174,39 @@ export class FinanceService {
       .sort((a, b) => a.day - b.day)
   }
 
+  getAllTransactions(): Transaction[] {
+    return [...this.transactions]
+  }
+
+  hasTransaction(idempotencyKey: string): boolean {
+    return this.idempotencyIndex.has(idempotencyKey)
+  }
+
+  /**
+   * 从存档交易重放余额。仅用于读档，不做余额检查。
+   * 返回重放后的余额表，供调用方做一致性校验。
+   */
+  replay(transactions: Transaction[], companyIds: string[]): Map<string, number> {
+    this.transactions = []
+    this.balanceByCompany = new Map()
+    this.idempotencyIndex = new Map()
+    this.idempotencyDay = new Map()
+    for (const id of companyIds) this.balanceByCompany.set(id, 0)
+    for (const tx of transactions) {
+      const prev = this.getBalance(tx.companyId)
+      const next = prev + tx.amountCents
+      this.transactions.push({ ...tx, balanceAfterCents: next })
+      this.balanceByCompany.set(tx.companyId, next)
+      this.idempotencyIndex.set(tx.idempotencyKey, tx.id)
+    }
+    return new Map(this.balanceByCompany)
+  }
+
+  private getBalance(companyId: string): number {
+    return this.balanceByCompany.get(companyId) ?? 0
+  }
+
   private pruneIdempotency(currentDay: number): void {
-    // 这是一个懒清理；只有当幂等索引规模过大时才裁剪
     if (this.idempotencyIndex.size < 1024) return
     const cutoff = currentDay - this.IDEMPOTENCY_RETENTION_DAYS
     for (const [key, day] of this.idempotencyDay) {
@@ -212,7 +217,3 @@ export class FinanceService {
     }
   }
 }
-
-// 防止未使用导入被 tree-shake 警告
-void InsufficientCashError
-void ValidationError

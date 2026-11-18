@@ -60,7 +60,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
 
     const final = tick(scheduler, world, PAUSE_TIMEOUT_DAYS)
     const p = final.projects[0]
-    expect(p?.pausedDays).toBe(PAUSE_TIMEOUT_DAYS)
+    // 终态清理口径（DESIGN-G05 §6.3）：超时取消不留暂停计数
+    expect(p?.pausedDays).toBe(0)
     expect(p?.phase).toBe('CANCELLED')
     expect(p?.isPaused).toBe(false)
     expect(p?.cancellationReason).toBe('pause_timeout')
@@ -136,9 +137,37 @@ describe('D-01 暂停计时与超时自动取消', () => {
 
     const final = tick(scheduler, world, PAUSE_TIMEOUT_DAYS)
     const p = final.projects[0]
-    expect(p?.pausedDays).toBe(PAUSE_TIMEOUT_DAYS)
+    expect(p?.pausedDays).toBe(0)
     expect(p?.phase).toBe('CANCELLED')
     expect(p?.cancellationReason).toBe('pause_timeout')
+  })
+
+  it('超时自动取消清除预算耗尽过程态标记（终态清理口径 DESIGN-G05 §6.3）', () => {
+    const { scheduler } = makeScheduler()
+    // 预算耗尽态叠加暂停超时：次日起即达 60 天触发自动取消
+    const world = makeWorld({
+      projects: [
+        makeProject({
+          isPaused: true,
+          pauseReason: 'budget_exhausted',
+          budgetExhausted: true,
+          pausedDays: PAUSE_TIMEOUT_DAYS - 1,
+          riskFlags: ['budget_exhausted', 'quality_risk'],
+        }),
+      ],
+    })
+
+    const next = scheduler.executeDay(world, 1)
+    const p = next.projects[0]
+    expect(p?.phase).toBe('CANCELLED')
+    expect(p?.cancellationReason).toBe('pause_timeout')
+    expect(p?.isPaused).toBe(false)
+    expect(p?.pauseReason).toBeNull()
+    expect(p?.budgetExhausted).toBe(false)
+    expect(p?.pausedDays).toBe(0)
+    expect(p?.riskFlags).not.toContain('budget_exhausted')
+    // 其他风险标记不受影响
+    expect(p?.riskFlags).toContain('quality_risk')
   })
 
   it('终态项目（LAUNCHED/CANCELLED）不累计暂停也不判超时', () => {

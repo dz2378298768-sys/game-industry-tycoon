@@ -303,6 +303,10 @@ export class ProjectService {
         phase: 'CANCELLED',
         isPaused: false,
         pauseReason: null,
+        // 终态清理口径（DESIGN-G05 §6.3）：过程态标记不留入终态
+        budgetExhausted: false,
+        pausedDays: 0,
+        riskFlags: p.riskFlags.filter((f) => f !== 'budget_exhausted'),
         cancellationReason: reason,
         version: p.version + 1,
       }),

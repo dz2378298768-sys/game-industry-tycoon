@@ -89,6 +89,40 @@ describe('项目状态机', () => {
     expect(p?.cancellationReason).toBe('player_decision')
   })
 
+  it('手动 cancel() 清除预算耗尽过程态标记（终态清理口径 DESIGN-G05 §6.3）', () => {
+    const svc = serviceWith(
+      makeProject({
+        phase: 'PRODUCTION',
+        isPaused: true,
+        pauseReason: 'budget_exhausted',
+        budgetExhausted: true,
+        pausedDays: 7,
+        riskFlags: ['budget_exhausted', 'quality_risk'],
+      }),
+    )
+    const r = svc.cancel('project-1', 'player_decision')
+    expect(r.success).toBe(true)
+    const p = svc.getById('project-1')
+    expect(p?.phase).toBe('CANCELLED')
+    expect(p?.isPaused).toBe(false)
+    expect(p?.pauseReason).toBeNull()
+    expect(p?.budgetExhausted).toBe(false)
+    expect(p?.pausedDays).toBe(0)
+    expect(p?.riskFlags).not.toContain('budget_exhausted')
+    // 其他风险标记不受影响
+    expect(p?.riskFlags).toContain('quality_risk')
+    expect(p?.cancellationReason).toBe('player_decision')
+  })
+
+  it('cancel() 在 riskFlags 无 budget_exhausted 时移除操作无害', () => {
+    const svc = serviceWith(
+      makeProject({ phase: 'PRODUCTION', riskFlags: ['quality_risk'] }),
+    )
+    const r = svc.cancel('project-1', 'player_decision')
+    expect(r.success).toBe(true)
+    expect(svc.getById('project-1')?.riskFlags).toEqual(['quality_risk'])
+  })
+
   it('不存在 PAUSED 主状态，暂停只设置 isPaused', () => {
     const svc = serviceWith(makeProject({ phase: 'PRODUCTION' }))
     svc.pause('project-1')

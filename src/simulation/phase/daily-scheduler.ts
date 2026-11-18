@@ -93,8 +93,11 @@ export class DailyScheduler {
           ...project,
           phase: 'CANCELLED' as ProjectPhase,
           isPaused: false,
-          pausedDays,
+          // 终态清理口径（DESIGN-G05 §6.3）：过程态标记不留入终态，超时计数统一清零
+          pausedDays: 0,
           pauseReason: null,
+          budgetExhausted: false,
+          riskFlags: project.riskFlags.filter((f) => f !== 'budget_exhausted'),
           cancellationReason: 'pause_timeout' as CancellationReason,
           version: project.version + 1,
           updatedAt: dayIndex,

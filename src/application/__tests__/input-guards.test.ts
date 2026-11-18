@@ -88,6 +88,25 @@ describe('R-005 薪资非法输入与回滚', () => {
     expect(gw.finance.getCashBalance(gw.world.companies[0]!.id)).toBe(cashBefore)
   })
 
+  it.each([1.4, 2.5, 0, 6, -1])('拒绝非法技能等级 %s，且不产生员工与流水', (skillLevel) => {
+    const gw = new GameWorld(13)
+    gw.createCompany({ name: 'Skill Studios', cityId: 'san_francisco' })
+    const txBefore = gw.finance.getAllTransactions().length
+
+    const result = gw.hireEmployee({
+      name: 'Bad Skill',
+      role: 'programmer',
+      skillLevel,
+      salaryMonthlyCents: 50_000,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('EMP_INVALID_SKILL')
+    expect(gw.world.employees).toHaveLength(0)
+    expect(gw.employees.listAll()).toHaveLength(0)
+    expect(gw.finance.getAllTransactions()).toHaveLength(txBefore)
+  })
+
   it('财务入账失败时回滚 EmployeeService 内部状态', () => {
     const gw = new GameWorld(12)
     gw.createCompany({ name: 'Rollback Studios', cityId: 'san_francisco' })

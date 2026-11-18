@@ -46,16 +46,19 @@
 ### 1.7 市场销售管线公式未对齐 UI 展示
 - **问题**：V2.1.7 规格 08_补齐/09 给出了 purchaseConversion、priceElasticity、qualityImpact 等公式，但 UI 规格要求的"下钻到每笔交易"功能需要公式结果可追溯。M1 的 FinanceService 已经支持交易流水可追溯，M2 的 MarketSimulationService 输出需要保持同样可追溯性。
 
-## 2. M1 显式排除的功能（预留接口但不实现）
+## 2. M1 显式排除的功能（代码中不存在，M2 需从零新增）
 
-M1 实现了以下 Service/Command 的占位接口但未填充逻辑：
-- ~~MarketSimulationService~~ — M1 跳过 Phase 2/4（市场销售），M2 实现
-- ~~MarketingService~~ — M1 跳过 Phase 3，M2 实现
-- ~~ContractService~~ — M1 跳过 Phase 7，M2 实现
-- ~~ProductService~~ — M1 只实现 Product 实体生成（上市时），不实现定价/补丁/生命周期
-- ~~CompanyAIService~~ — M1 跳过 Phase 12，M2 实现 AI 竞争者
+> 核实说明（2026-11-18 接手核查）：此前本节描述为「M1 实现了占位接口但未填充逻辑」。
+> 实际仓库中**不存在**下列任何服务文件，全仓库对类名 grep 零命中。
+> 因此 M2 不是"填充 stub"，而是"新增模块"；不存在"必须保持不变"的 stub 约束。
 
-这些 Service 在 M2 实现前，其模块内部的 stub 实现必须保持不变，避免和 M1 已通过的集成场景产生回归。
+- `MarketSimulationService` — 未创建（M1 跳过 Phase 2/4 市场销售），M2 新增
+- `MarketingService` — 未创建（M1 跳过 Phase 3），M2 新增
+- `ContractService` — 未创建（M1 跳过 Phase 7），M2 新增
+- `ProductService` — 未创建（M1 只在上市时由 `ProjectService.launch()` 生成 Product 实体，无定价/补丁/生命周期服务），M2 新增
+- `CompanyAIService` — 未创建（M1 跳过 Phase 12），M2 新增
+
+M2 实施前需先确认上列模块的接口契约与依赖关系，避免与 M1 已通过的集成场景产生回归。
 
 ## 3. 其他 M2 级别不确定项
 

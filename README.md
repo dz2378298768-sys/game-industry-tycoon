@@ -12,7 +12,7 @@ npm install
 npm run dev        # http://localhost:5173
 npm run typecheck  # TypeScript 类型检查
 npm run lint:check # ESLint 检查
-npm run test       # Vitest（12 个文件 / 92 个用例）
+npm run test       # Vitest（12 个文件 / 100 个用例）
 npm run build      # 生产构建
 ```
 

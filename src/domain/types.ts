@@ -1,7 +1,15 @@
 import type { DomainEvent } from './events'
 
 /**
- * 生成 v4 风格 UUID（纯确定性 fallback，无 Date.now / Math.random）
+ * 生成 v4 风格 UUID。
+ *
+ * 优先使用平台原生 `crypto.randomUUID()`；仅当该 API 不可用时，
+ * 回退到基于 `Math.random()` 的模板生成（此分支**不保证**可复现）。
+ *
+ * 口径说明（确定性）：
+ *   - 实体 ID 只用于标识与引用，不参与任何数值模拟计算；
+ *   - 模拟结果的可复现性由 `RandomService`（mulberry32 + saveSeed）保证；
+ *   - 若将来要求「同存档 + 同种子 → 连 ID 也一致」，需改为 seed + 计数器生成。
  */
 export function uuid(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {

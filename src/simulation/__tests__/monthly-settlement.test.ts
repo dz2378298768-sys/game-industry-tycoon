@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
-import { gregorianToDayIndex } from '@domain/value-objects/day-index'
+import { gregorianToDayIndex, daysInMonth } from '@domain/value-objects/day-index'
+import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+import { FinanceService } from '@simulation/services/finance-service'
+import { makeEmployee, makeWorld } from '../../__tests__/helpers'
 import { TUNING } from '@content/tuning'
 import { cityRentMultiplier } from '@content/queries'
 
@@ -54,6 +57,32 @@ describe('财务月度结算 (D12-D15)', () => {
       .getTransactionsByCompany(emp.companyId)
       .filter(tx => tx.idempotencyKey.includes('m1972-2'))
     expect(after).toHaveLength(2)
+  })
+
+  it('世纪年 2100 不是闰年：2 月 28 日即为月末结算日', () => {
+    // 回归 G-01：调度器必须与 domain 的唯一日期规则一致（2100 能被 100 整除但不可被 400 整除）
+    expect(daysInMonth(2100, 2)).toBe(28)
+
+    const world = makeWorld({
+      employees: [makeEmployee({ id: 'emp-1', salaryMonthlyCents: 100_000 })],
+      projects: [],
+      currentDayIndex: gregorianToDayIndex(2100, 2, 27),
+    })
+    const finance = new FinanceService()
+    finance.registerCompany('company-1')
+    const scheduler = new DailyScheduler({ finance })
+
+    scheduler.executeDay(world, gregorianToDayIndex(2100, 2, 28))
+    const feb = finance
+      .getAllTransactions()
+      .filter(tx => tx.idempotencyKey.includes('m2100-2'))
+    expect(feb).toHaveLength(2)
+
+    scheduler.executeDay(world, gregorianToDayIndex(2100, 3, 1))
+    const mar = finance
+      .getAllTransactions()
+      .filter(tx => tx.idempotencyKey.includes('m2100-3'))
+    expect(mar).toHaveLength(0)
   })
 
   it('负现金仍可继续结算工资和租金', () => {

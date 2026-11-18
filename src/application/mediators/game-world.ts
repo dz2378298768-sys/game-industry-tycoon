@@ -165,7 +165,12 @@ export class GameWorld {
         message: '月薪必须是大于 0 的整数（美分）。',
       }
     }
-    if (!Number.isFinite(params.skillLevel)) {
+    if (
+      !Number.isFinite(params.skillLevel) ||
+      !Number.isInteger(params.skillLevel) ||
+      params.skillLevel < 1 ||
+      params.skillLevel > 5
+    ) {
       return { success: false, errorCode: 'EMP_INVALID_SKILL', message: '技能等级必须是 1–5 的整数。' }
     }
 
@@ -186,7 +191,7 @@ export class GameWorld {
       name: params.name,
       role: params.role,
       primarySkill: params.primarySkill ?? 'gameplay',
-      skillLevel: Math.max(1, Math.min(5, params.skillLevel)),
+      skillLevel: params.skillLevel,
       salaryMonthlyCents: effectiveSalary,
       contractStartDay: this.dayIndex,
       contractEndDay: null,

@@ -6,7 +6,7 @@ import type { DomainEvent } from '@domain/events'
 import type { FinanceService } from '@simulation/services/finance-service'
 import { uuid } from '@domain/types'
 import { TUNING } from '@content/tuning'
-import { dayIndexToGregorian } from '@domain/value-objects/day-index'
+import { dayIndexToGregorian, daysInMonth } from '@domain/value-objects/day-index'
 import {
   advanceProjectWork,
   allowedDisciplinesForPhase,
@@ -242,12 +242,4 @@ export class DailyScheduler {
     })
     return { ...state, companies }
   }
-}
-
-function daysInMonth(year: number, month: number): number {
-  if (month === 2) {
-    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
-    return leap ? 29 : 28
-  }
-  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 30
 }

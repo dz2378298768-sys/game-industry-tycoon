@@ -128,10 +128,28 @@ export class FinanceService {
     reason: string,
     newKey: string,
   ): CommandResult<Transaction> {
+    if (typeof newKey !== 'string' || newKey.trim().length === 0) {
+      return fail('FIN_IDEMPOTENCY_KEY_REQUIRED', 'Reverse transaction requires a non-empty idempotency key')
+    }
+
+    // 冲正同样受幂等键保护：重复冲正同一笔交易不得重复改变余额
+    const existingId = this.idempotencyIndex.get(newKey)
+    if (existingId) {
+      const found = this.transactions.find((t) => t.id === existingId)
+      if (found) {
+        return { success: true, result: found, idempotent: true }
+      }
+    }
+
     const target = this.transactions.find((t) => t.id === transactionId && t.status === 'posted')
     if (!target) {
+      const anyStatus = this.transactions.find((t) => t.id === transactionId)
+      if (anyStatus) {
+        return fail('FIN_TX_ALREADY_REVERSED', `Transaction ${transactionId} is not in posted status`)
+      }
       return fail('FIN_TX_NOT_FOUND', `No posted transaction ${transactionId}`)
     }
+
     const rev: Transaction = {
       id: uuid(),
       idempotencyKey: newKey,
@@ -147,6 +165,9 @@ export class FinanceService {
     }
     this.transactions.push(rev)
     this.balanceByCompany.set(target.companyId, rev.balanceAfterCents)
+    this.idempotencyIndex.set(newKey, rev.id)
+    this.idempotencyDay.set(newKey, rev.day)
+    this.pruneIdempotency(rev.day)
     target.status = 'reversed'
     target.reversedBy = rev.id
     return ok(rev)

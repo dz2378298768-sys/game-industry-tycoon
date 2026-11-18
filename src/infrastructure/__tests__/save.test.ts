@@ -119,4 +119,85 @@ describe('存档安全 (G10/G21)', () => {
       gw.finance.getTransactionsByCompany(company.id).length,
     )
   })
+
+  it('预算公式不符拒绝读档，且不覆盖当前运行状态', async () => {
+    const gw = new GameWorld(9)
+    gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
+    gw.createProject({
+      name: 'Saved Game',
+      genreId: 'action',
+      budgetTotalCapCents: 3_000_000,
+      plannedLaunchDay: 200,
+      targetPlatformIds: ['arcade_pre_1975'],
+      audienceSegmentIds: ['arcade_enthusiasts'],
+    })
+    const original = gw.serialize()
+
+    const tampered = structuredClone(original)
+    const p = tampered.projects[0]!
+    p.remainingCapCents = p.budgetTotalCapCents - p.budgetCommittedCents - p.budgetSpentCents + 1
+    await saveGame(tampered)
+
+    const result = await loadGame()
+    expect(result.status).toBe('invalid')
+    if (result.status === 'invalid') expect(result.errorCode).toBe('SAVE_BUDGET_FORMULA_MISMATCH')
+    // 当前运行状态未被无效存档覆盖
+    expect(gw.serialize()).toEqual(original)
+  })
+
+  it('成本分摊引用完整性校验：引用不存在的现金交易拒绝加载', () => {
+    const world = sampleWorld()
+    const company = world.companies[0]!
+    const project = world.projects[0]!
+    const emp = world.employees[0]!
+    const allocation = {
+      id: 'COST-1',
+      companyId: company.id,
+      projectId: project.id,
+      sourceType: 'salary' as const,
+      sourceRefId: emp.id,
+      cashTransactionId: 'missing-tx',
+      amountCents: 1_000,
+      allocationRatio: 1,
+      periodKey: 'm1970-1',
+      idempotencyKey: `costalloc:salary:${company.id}:${emp.id}:m1970-1:${project.id}`,
+      day: 0,
+      description: 'test allocation',
+      status: 'spent' as const,
+      version: 1,
+      createdAt: 0,
+      updatedAt: 0,
+    }
+
+    const broken = structuredClone(world)
+    broken.projects[0]!.costAllocations = [{ ...allocation }]
+    const r = parseSave(broken)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errorCode).toBe('SAVE_BROKEN_REF')
+
+    // 引用真实存在的交易则通过
+    const valid = structuredClone(world)
+    const tx = valid.transactions[0]!
+    valid.projects[0]!.costAllocations = [{ ...allocation, cashTransactionId: tx.id }]
+    expect(parseSave(valid).ok).toBe(true)
+  })
+
+  it('旧存档缺少新增字段时按缺省值兼容', () => {
+    const world = sampleWorld()
+    const legacy = structuredClone(world)
+    const p = legacy.projects[0]!
+    delete p.remainingCapCents
+    delete p.budgetExhausted
+    delete p.resumeSeq
+    delete p.costAllocations
+
+    const r = parseSave(legacy)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      const saved = r.state.projects[0]!
+      expect(saved.budgetExhausted).toBe(false)
+      expect(saved.resumeSeq).toBe(0)
+      expect(saved.costAllocations).toEqual([])
+    }
+  })
 })

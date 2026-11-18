@@ -23,12 +23,23 @@ import type { Product } from '@domain/entities/product'
 import type { DomainEvent } from '@domain/events'
 import type { EmployeeRole, Discipline, ProjectRole } from '@domain/enums'
 import type { TeamAssignment } from '@domain/value-objects'
+import { topUpIdempotencyKey, createTopUpChangeLogEntry } from '@domain/value-objects'
 
 export interface CommandOutcome<T = undefined> {
   success: boolean
   result?: T | undefined
   errorCode?: string | undefined
   message?: string | undefined
+  /** 命中幂等键时为 true（非错误） */
+  idempotent?: boolean | undefined
+}
+
+/** 预算追加命令（DESIGN-G05 §9 / TASK-M1.1-G05-001-D） */
+export interface TopUpBudgetCmd {
+  projectId: string
+  amountCents: number
+  seq: number
+  reason: string
 }
 
 export class GameWorld {
@@ -380,6 +391,70 @@ export class GameWorld {
     return { success: true, result: result.result }
   }
 
+  /**
+   * 追加项目预算（TASK-M1.1-G05-001-D / DESIGN-G05 §9、G05-R9）。
+   *
+   * - 前置守卫：金额必须为正整数美分（BGT_INVALID_AMOUNT）；终态项目拒绝（PRJ_TERMINAL）。
+   * - 幂等键 `budget:topup:{projectId}:{seq}`：同一 seq 重复调用返回既有结果，不重复加 totalCap。
+   * - 效果：totalCap += amount，记录 changeLog（金额/原因/执行日/新 totalCap）。
+   * - **不自动恢复**：isPaused / budgetExhausted / pausedDays 保持不变，
+   *   玩家须显式执行 resumeProject（经 toggleProjectPause）后恢复。
+   */
+  topUpBudget(cmd: TopUpBudgetCmd): CommandOutcome<Project> {
+    const project = this.world.projects.find((p) => p.id === cmd.projectId)
+    if (!project) return { success: false, errorCode: 'PRJ_NOT_FOUND', message: '项目未找到' }
+
+    if (
+      !Number.isFinite(cmd.amountCents) ||
+      !Number.isInteger(cmd.amountCents) ||
+      cmd.amountCents <= 0
+    ) {
+      return {
+        success: false,
+        errorCode: 'BGT_INVALID_AMOUNT',
+        message: '追加金额必须是大于 0 的整数（美分）。',
+      }
+    }
+
+    if (project.phase === 'LAUNCHED' || project.phase === 'CANCELLED') {
+      return { success: false, errorCode: 'PRJ_TERMINAL', message: '项目已结束，无法追加预算。' }
+    }
+
+    const idempotencyKey = topUpIdempotencyKey(cmd.projectId, cmd.seq)
+    if (project.changeLog.some((entry) => entry.details?.idempotencyKey === idempotencyKey)) {
+      return {
+        success: true,
+        result: project,
+        idempotent: true,
+        message: '该 seq 已追加过预算，返回既有结果。',
+      }
+    }
+
+    const newTotalCapCents = project.budgetTotalCapCents + cmd.amountCents
+    const next: Project = {
+      ...project,
+      budgetTotalCapCents: newTotalCapCents,
+      changeLog: [
+        ...project.changeLog,
+        createTopUpChangeLogEntry({
+          id: uuid(),
+          projectId: cmd.projectId,
+          seq: cmd.seq,
+          amountCents: cmd.amountCents,
+          reason: cmd.reason,
+          newTotalCapCents,
+          day: this.dayIndex,
+        }),
+      ],
+      version: project.version + 1,
+      updatedAt: this.dayIndex,
+      // 不清除 isPaused / budgetExhausted / pausedDays：必须玩家显式 resume
+    }
+    this.world.projects = this.world.projects.map((p) => (p.id === cmd.projectId ? next : p))
+    this.projects.reset(this.world.projects)
+    return { success: true, result: next, message: '预算已追加，需手动恢复项目。' }
+  }
+
   cancelProject(projectId: string): CommandOutcome<Project> {
     const result = this.withProjects(() => this.projects.cancel(projectId, 'player_decision'))
     if (!result.success || !result.result) {
@@ -522,6 +597,13 @@ export class GameWorld {
       currentDayIndex: this.calendar.currentDayIndex,
       // 财务流水以 FinanceService 为准（唯一现金记账处）
       transactions: this.finance.getAllTransactions(),
+      // DESIGN-G05 §7.3：写入预算权威公式快照，供读档一致性校验。
+      // 快照在此处按权威公式即时重算，避免领域对象中的旧快照被写入存档。
+      projects: this.world.projects.map((p) => ({
+        ...p,
+        remainingCapCents:
+          p.budgetTotalCapCents - p.budgetCommittedCents - p.budgetSpentCents,
+      })),
     }
   }
 

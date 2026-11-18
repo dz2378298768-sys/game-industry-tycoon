@@ -107,6 +107,15 @@ const projectSchema = z
     budgetCommittedCents: z.number().int().nonnegative().default(0),
     /** DESIGN-G05 §7.3：归属本项目的成本分摊记录；旧存档缺省 [] */
     costAllocations: z.array(costAllocationSchema).default([]),
+    /** DESIGN-G05 §6.2：预算耗尽态标记；旧存档缺省 false */
+    budgetExhausted: z.boolean().default(false),
+    /** DESIGN-G05 §7.1 GDR R2：耗尽事件幂等键恢复周期序号；旧存档缺省 0 */
+    resumeSeq: z.number().int().nonnegative().default(0),
+    /**
+     * DESIGN-G05 §7.3 读档一致性：预算公式快照。
+     * 旧存档缺省 undefined → 校验跳过（值由权威公式推导，无漂移风险）。
+     */
+    remainingCapCents: z.number().int().optional(),
     teamAssignments: z.array(teamAssignment),
     workRemainingByDiscipline: disciplineWork,
     workTotalByDiscipline: disciplineWork,
@@ -244,6 +253,20 @@ export function parseSave(raw: unknown): ParseSaveResult {
   for (const t of state.transactions) {
     if (!companyIds.has(t.companyId)) {
       return { ok: false, errorCode: 'SAVE_BROKEN_REF', errorMessage: `交易 ${t.id} 引用了不存在的公司` }
+    }
+  }
+
+  // 预算权威公式读档一致性校验（DESIGN-G05 §7.3 / 001-A 权威公式）：
+  // 存档若携带 remainingCapCents 快照，必须等于 totalCap - committed - spent。
+  // 不一致即拒绝加载并由调用方保持当前运行状态不变（不覆盖原存档）。
+  for (const p of data.projects) {
+    const expected = p.budgetTotalCapCents - p.budgetCommittedCents - p.budgetSpentCents
+    if (p.remainingCapCents !== undefined && p.remainingCapCents !== expected) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_BUDGET_FORMULA_MISMATCH',
+        errorMessage: `项目 ${p.id} 的 remainingCapCents（${p.remainingCapCents}）与权威公式结果（${expected}）不一致。`,
+      }
     }
   }
 

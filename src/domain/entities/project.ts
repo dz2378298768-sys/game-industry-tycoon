@@ -30,6 +30,12 @@ export interface Project {
   budgetTotalCapCents: number
   budgetSpentCents: number
   budgetCommittedCents: number
+  /**
+   * 存档中的预算公式快照 = totalCap - committed - spent（DESIGN-G05 §7.3）。
+   * 仅供读档一致性校验；领域计算始终使用 recomputeRemaining，不依赖此快照。
+   * 旧存档缺省 undefined（校验时跳过，按权威公式推导）。
+   */
+  remainingCapCents?: number
   /** 归属本项目的成本分摊记录（DESIGN-G05 §7.3）；旧存档缺省 [] */
   costAllocations?: ProjectCostAllocation[]
   teamAssignments: TeamAssignment[]

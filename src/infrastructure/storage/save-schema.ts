@@ -31,6 +31,27 @@ const teamAssignment = z
   })
   .passthrough()
 
+const costAllocationSchema = z
+  .object({
+    id: z.string().min(1),
+    companyId: z.string().min(1),
+    projectId: z.string().min(1),
+    sourceType: z.enum(['salary', 'contract', 'direct_expense']),
+    sourceRefId: z.string().min(1),
+    cashTransactionId: z.string().min(1).nullable(),
+    amountCents: z.number().int().positive(),
+    allocationRatio: z.number().gt(0).lte(1),
+    periodKey: z.string().min(1),
+    idempotencyKey: z.string().min(1),
+    day: z.number().int().nonnegative(),
+    description: z.string(),
+    status: z.enum(['committed', 'spent']),
+    version: z.number().int().nonnegative(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .passthrough()
+
 const companySchema = z
   .object({
     id: z.string().min(1),
@@ -81,6 +102,11 @@ const projectSchema = z
     pauseReason: z.enum(['manual', 'budget_exhausted']).nullish(),
     plannedLaunchDay: z.number().int().nonnegative(),
     budgetTotalCapCents: z.number().int().nonnegative(),
+    /** DESIGN-G05 §7.3：spent/committed 非负；旧存档缺省 0 */
+    budgetSpentCents: z.number().int().nonnegative().default(0),
+    budgetCommittedCents: z.number().int().nonnegative().default(0),
+    /** DESIGN-G05 §7.3：归属本项目的成本分摊记录；旧存档缺省 [] */
+    costAllocations: z.array(costAllocationSchema).default([]),
     teamAssignments: z.array(teamAssignment),
     workRemainingByDiscipline: disciplineWork,
     workTotalByDiscipline: disciplineWork,
@@ -218,6 +244,41 @@ export function parseSave(raw: unknown): ParseSaveResult {
   for (const t of state.transactions) {
     if (!companyIds.has(t.companyId)) {
       return { ok: false, errorCode: 'SAVE_BROKEN_REF', errorMessage: `交易 ${t.id} 引用了不存在的公司` }
+    }
+  }
+
+  // 成本分摊（DESIGN-G05 §7.1/§7.3）：幂等键全局唯一、现金交易引用完整
+  const transactionIds = new Set(state.transactions.map((t) => t.id))
+  const allocationIds = new Set<string>()
+  const allocationKeys = new Set<string>()
+  for (const p of state.projects) {
+    for (const a of p.costAllocations ?? []) {
+      if (allocationIds.has(a.id)) {
+        return { ok: false, errorCode: 'SAVE_DUPLICATE_ID', errorMessage: `成本分摊存在重复 ID：${a.id}` }
+      }
+      allocationIds.add(a.id)
+      if (allocationKeys.has(a.idempotencyKey)) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_DUPLICATE_ALLOCATION',
+          errorMessage: `成本分摊幂等键重复：${a.idempotencyKey}`,
+        }
+      }
+      allocationKeys.add(a.idempotencyKey)
+      if (a.cashTransactionId !== null && !transactionIds.has(a.cashTransactionId)) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_BROKEN_REF',
+          errorMessage: `成本分摊 ${a.id} 引用了不存在的现金交易 ${a.cashTransactionId}`,
+        }
+      }
+      if (a.companyId !== p.companyId || a.projectId !== p.id) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_BROKEN_REF',
+          errorMessage: `成本分摊 ${a.id} 的公司/项目归属与所在项目不一致`,
+        }
+      }
     }
   }
 

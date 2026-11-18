@@ -4,6 +4,7 @@ import type {
   Discipline,
   CancellationReason,
 } from '@domain/enums'
+import type { ProjectCostAllocation } from './project-cost-allocation'
 import type {
   RangeItem,
   TeamAssignment,
@@ -29,6 +30,8 @@ export interface Project {
   budgetTotalCapCents: number
   budgetSpentCents: number
   budgetCommittedCents: number
+  /** 归属本项目的成本分摊记录（DESIGN-G05 §7.3）；旧存档缺省 [] */
+  costAllocations?: ProjectCostAllocation[]
   teamAssignments: TeamAssignment[]
   workRemainingByDiscipline: Record<Discipline, number>
   workTotalByDiscipline: Record<Discipline, number>

@@ -8,6 +8,8 @@ import { uuid } from '@domain/types'
 import { createPauseTimeoutCancelledEvent } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
+import { computeSalaryAllocations } from '@domain/entities/project-cost-allocation'
+import { recomputeRemaining } from '@domain/value-objects/project-budget'
 import {
   advanceProjectWork,
   allowedDisciplinesForPhase,
@@ -249,15 +251,29 @@ export class DailyScheduler {
     const g = dayIndexToGregorian(dayIndex)
     if (g.day !== daysInMonth(g.year, g.month)) return state
 
+    // 与既有薪资流水幂等键保持同一格式，确保改造不改变现金结算行为
+    const periodKey = `m${g.year}-${g.month}`
+
+    // 分摊幂等键随存档生命周期保留（DESIGN-G05 §7.2）：先收集既有键
+    const existingKeys = new Set<string>()
+    for (const p of state.projects) {
+      for (const a of p.costAllocations ?? []) existingKeys.add(a.idempotencyKey)
+    }
+
+    // 仅在真正新增分摊时克隆项目，避免无谓的对象变更
+    const updatedProjects = new Map<string, Project>()
+
     for (const company of state.companies) {
       if (company.status !== 'active') continue
-      const monthKey = `m${g.year}-${g.month}`
 
       for (const emp of state.employees) {
+        // 离职员工不参与工资分摊（DESIGN-G05 §3.3 唯一例外）
         if (emp.companyId !== company.id || emp.status !== 'hired') continue
-        this.deps.finance.postTransaction(
+
+        // 每个员工月末仅一笔 salary 现金交易（allowNegativeBalance）
+        const posted = this.deps.finance.postTransaction(
           {
-            idempotencyKey: `salary:${emp.id}:${monthKey}`,
+            idempotencyKey: `salary:${emp.id}:${periodKey}`,
             companyId: company.id,
             day: dayIndex,
             category: 'salary',
@@ -267,6 +283,60 @@ export class DailyScheduler {
           },
           { allowNegativeBalance: true },
         )
+        const tx = posted.result
+        if (
+          !posted.success ||
+          !tx ||
+          !Number.isFinite(emp.salaryMonthlyCents) ||
+          !Number.isInteger(emp.salaryMonthlyCents) ||
+          emp.salaryMonthlyCents <= 0
+        ) {
+          continue
+        }
+
+        // 有效分配以 TeamAssignment 是否仍存在为准，暂停项目不归零（G05-R6）
+        const assignments: Array<{ projectId: string; allocationRatio: number }> = []
+        for (const p of state.projects) {
+          if (p.companyId !== company.id) continue
+          for (const a of p.teamAssignments) {
+            if (a.employeeId !== emp.id) continue
+            assignments.push({ projectId: p.id, allocationRatio: a.allocationRatio })
+          }
+        }
+
+        const { created } = computeSalaryAllocations({
+          companyId: company.id,
+          employeeId: emp.id,
+          salaryMonthlyCents: emp.salaryMonthlyCents,
+          periodKey,
+          cashTransactionId: tx.id,
+          day: dayIndex,
+          assignments,
+          existingIdempotencyKeys: existingKeys,
+          description: `工资分摊：${emp.name} ${g.year}/${g.month}`,
+        })
+
+        for (const alloc of created) {
+          const base =
+            updatedProjects.get(alloc.projectId) ?? state.projects.find((p) => p.id === alloc.projectId)
+          if (!base) continue
+
+          // spentCents 随分摊累加，复用 001-A 的权威预算计算
+          const budget = recomputeRemaining({
+            totalCapCents: base.budgetTotalCapCents,
+            committedCents: base.budgetCommittedCents,
+            spentCents: base.budgetSpentCents + alloc.amountCents,
+            remainingCapCents: 0,
+          })
+          updatedProjects.set(alloc.projectId, {
+            ...base,
+            budgetSpentCents: budget.spentCents,
+            costAllocations: [...(base.costAllocations ?? []), alloc],
+            version: base.version + 1,
+            updatedAt: dayIndex,
+          })
+          existingKeys.add(alloc.idempotencyKey)
+        }
       }
 
       const rentCents = Math.round(
@@ -276,7 +346,7 @@ export class DailyScheduler {
       )
       this.deps.finance.postTransaction(
         {
-          idempotencyKey: `rent:${company.id}:${monthKey}`,
+          idempotencyKey: `rent:${company.id}:${periodKey}`,
           companyId: company.id,
           day: dayIndex,
           category: 'office_rent',
@@ -287,7 +357,11 @@ export class DailyScheduler {
       )
     }
 
-    return state
+    if (updatedProjects.size === 0) return state
+    return {
+      ...state,
+      projects: state.projects.map((p) => updatedProjects.get(p.id) ?? p),
+    }
   }
 
   private syncCompanyCash(state: WorldState): WorldState {

@@ -84,6 +84,12 @@ export type EmployeeStatus = 'hired' | 'on_leave' | 'resigned' | 'fired'
 // ===== 交易状态 =====
 export type TransactionStatus = 'posted' | 'reversed'
 
+// ===== 成本分摊来源类型（DESIGN-G05 §2.2）=====
+export type CostSourceType = 'salary' | 'contract' | 'direct_expense'
+
+// ===== 成本分摊状态（DESIGN-G05 §2.2）=====
+export type CostAllocationStatus = 'committed' | 'spent'
+
 // ===== 技能来源 =====
 export type Source =
   | 'gen'

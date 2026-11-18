@@ -5,7 +5,7 @@ import { totalCompletion } from '@simulation/systems/project-progress'
 interface Props { onNavigate: (route: string, param?: string) => void }
 
 export const Projects: React.FC<Props> = ({ onNavigate }) => {
-  const { projects, toggleProjectPause, cancelProject, advanceProjectPhase } = useGameStore()
+  const { projects, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
 
   if (projects.length === 0) {
     return (
@@ -45,8 +45,17 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
                   <td>{p.name}</td>
                   <td>
                     <span className={`badge ${p.isPaused ? 'paused' : p.phase === 'CANCELLED' ? 'danger' : 'active'}`}>
-                      {t(`phase.${p.phase}`)}{p.isPaused ? ' · 暂停' : ''}
+                      {t(`phase.${p.phase}`)}{p.isPaused ? ` · ${t('project.status.paused')}` : ''}
                     </span>
+                    {p.budgetExhausted && (
+                      <span
+                        className="badge"
+                        style={{ marginLeft: 4, borderColor: '#e8912d', color: '#c46f13' }}
+                        title={t('project.banner.exhausted').replace('{day}', String(dayIndex - (p.pausedDays ?? 0)))}
+                      >
+                        ⚠ {t('project.status.exhausted')}
+                      </span>
+                    )}
                   </td>
                   <td style={{ width: 220 }}>
                     <div className="progress-bar">

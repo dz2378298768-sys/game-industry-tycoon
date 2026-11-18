@@ -1,5 +1,7 @@
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
+import { budgetUsageRatio, recomputeRemaining } from '@domain/value-objects'
+import type { ProjectCostAllocation } from '@domain/entities/project-cost-allocation'
 import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete, estimateDaysToFinish } from '@simulation/systems/project-progress'
 import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
 import { computeFinalQualityScore, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
@@ -15,6 +17,11 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
 
   const [selectedEmployeeId, setSelectedEmployeeId] = React.useState<string>('')
   const [allocation, setAllocation] = React.useState<number>(100)
+  const [topUpOpen, setTopUpOpen] = React.useState(false)
+  const [topUpAmount, setTopUpAmount] = React.useState('')
+  const [topUpReason, setTopUpReason] = React.useState('')
+  const [drilldownOpen, setDrilldownOpen] = React.useState(false)
+  const [cancelReasonOpen, setCancelReasonOpen] = React.useState(false)
 
   if (!project) {
     return (
@@ -24,6 +31,28 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       </div>
     )
   }
+
+  // ===== 预算面板数据：权威值走领域纯函数，UI 不直接写 budget 字段 =====
+  const budget = {
+    totalCapCents: project.budgetTotalCapCents,
+    committedCents: project.budgetCommittedCents,
+    spentCents: project.budgetSpentCents,
+    remainingCapCents: project.remainingCapCents ?? 0,
+  }
+  const remainingCapCents = recomputeRemaining(budget).remainingCapCents
+  const usageRatio = budgetUsageRatio(budget)
+  const usagePct = usageRatio * 100
+  const costAllocations: ProjectCostAllocation[] = project.costAllocations ?? []
+
+  // ===== 暂停/耗尽/取消状态区分（预算耗尽优先，见 DESIGN-M1-PAUSE-TIMEOUT-UI-001 D-UI-04）=====
+  const isExhausted = Boolean(project.budgetExhausted) && project.isPaused
+  const isManualPause = project.isPaused && !isExhausted && project.pauseReason === 'manual'
+  const pausedDays = project.pausedDays ?? 0
+  const nearTimeout = project.isPaused && pausedDays >= 50
+  const cancelledByTimeout = project.phase === 'CANCELLED' && project.cancellationReason === 'pause_timeout'
+  // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
+  const pausedSinceDay = store.dayIndex - pausedDays
+  const fmtSigned = (cents: number) => `${cents >= 0 ? '+' : ''}${formatMoney(cents)}`
 
   const genre = content.genres.find(g => g.id === project.genreId)
   const assignedEmployees = employees.filter(e => project.teamAssignments.some(a => a.employeeId === e.id))
@@ -155,6 +184,53 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         </div>
       </div>
 
+      {/* 状态横幅：预算耗尽 / 手动暂停 / 超时取消，图标 + 文案 + 颜色三重区分 */}
+      {isExhausted && (
+        <div className="panel" style={{ borderColor: '#e8912d', background: 'rgba(232,145,45,0.10)' }}>
+          <p style={{ color: '#c46f13', fontSize: 13, margin: 0 }}>
+            ⚠ [{t('project.status.exhausted')}] {t('project.banner.exhausted').replace('{day}', String(pausedSinceDay))}
+          </p>
+          {pausedDays > 0 && (
+            <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+              {t('project.banner.pausedDays').replace('{n}', String(pausedDays))}
+            </p>
+          )}
+          {!isTerminal && (
+            <div className="flex-gap" style={{ marginTop: 10 }}>
+              <button className="btn btn-secondary btn-small" onClick={() => setTopUpOpen(true)}>{t('project.budget.topUp.button')}</button>
+              <button className="btn btn-small" onClick={() => store.resumeProject(project.id)}>{t('project.budget.resume.button')}</button>
+            </div>
+          )}
+        </div>
+      )}
+      {isManualPause && (
+        <div className="panel" style={{ borderColor: 'var(--gold)', background: 'rgba(201,168,101,0.10)' }}>
+          <p style={{ color: 'var(--gold)', fontSize: 13, margin: 0 }}>
+            ⏸ [{t('project.status.paused')}] {t('project.banner.manual').replace('{day}', String(pausedSinceDay))}
+          </p>
+          {nearTimeout && (
+            <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+              {t('project.banner.pausedDays').replace('{n}', String(pausedDays))}
+            </p>
+          )}
+          {!isTerminal && (
+            <div className="flex-gap" style={{ marginTop: 10 }}>
+              <button className="btn btn-small" onClick={() => store.resumeProject(project.id)}>{t('project.budget.resume.button')}</button>
+            </div>
+          )}
+        </div>
+      )}
+      {cancelledByTimeout && (
+        <div className="panel" style={{ borderColor: '#b3423a', background: 'rgba(179,66,58,0.10)' }}>
+          <p className="negative" style={{ fontSize: 13, margin: 0 }}>
+            ⛔ {t('project.banner.cancelledTimeout').replace('{day}', String(project.updatedAt ?? store.dayIndex))}
+          </p>
+          <div className="flex-gap" style={{ marginTop: 10 }}>
+            <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>
+          </div>
+        </div>
+      )}
+
       {blockHint && !isTerminal && (
         <div className="panel" style={{ borderColor: 'var(--gold)', background: 'rgba(201,168,101,0.08)' }}>
           <p style={{ color: 'var(--gold)', fontSize: 13 }}>⚠️ {blockHint}</p>
@@ -183,32 +259,122 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       </div>
 
       <div className="panel">
-        <h2>{t('project.budget.title')}</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>{t('project.budget.title')}</h2>
+          {!isTerminal && (
+            <div className="flex-gap">
+              <button className="btn btn-secondary btn-small" onClick={() => setTopUpOpen(true)}>{t('project.budget.topUp.button')}</button>
+              {isExhausted && (
+                <button className="btn btn-small" onClick={() => store.resumeProject(project.id)}>{t('project.budget.resume.button')}</button>
+              )}
+            </div>
+          )}
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+          {t('project.budget.spentOfCap')
+            .replace('{spent}', fmtSigned(budget.spentCents))
+            .replace('{cap}', fmtSigned(budget.totalCapCents))}
+        </p>
         <div className="kpi-grid">
           <div className="kpi-card">
-            <div className="label">{t('project.fields.budgetSpent')}</div>
-            <div className="value">{formatMoney(project.budgetSpentCents)}</div>
+            <div className="label">{t('project.budget.cap')}</div>
+            <div className="value">{fmtSigned(budget.totalCapCents)}</div>
+          </div>
+          <div className="kpi-card" title={`${t('project.budget.committedHint')} ${fmtSigned(budget.committedCents)}`}>
+            <div className="label">{t('project.budget.committed')}</div>
+            <div className="value">{fmtSigned(budget.committedCents)}</div>
+          </div>
+          <div
+            className="kpi-card"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setDrilldownOpen(v => !v)}
+            title={t('project.budget.drilldown.title')}
+          >
+            <div className="label">{t('project.budget.spent')} ↗</div>
+            <div className="value">{fmtSigned(budget.spentCents)}</div>
           </div>
           <div className="kpi-card">
-            <div className="label">{t('project.fields.budgetRemaining')}</div>
-            <div className="value">{formatMoney(Math.max(0, project.budgetTotalCapCents - project.budgetSpentCents))}</div>
+            <div className="label">{t('project.budget.remaining')}</div>
+            <div className="value" style={{ color: remainingCapCents < 0 ? '#b3423a' : undefined }}>
+              {fmtSigned(remainingCapCents)}
+              {remainingCapCents <= 0 && <span className="badge danger" style={{ marginLeft: 6 }}>{t('project.budget.exhaustedBadge')}</span>}
+            </div>
           </div>
           <div className="kpi-card">
-            <div className="label">Cap</div>
-            <div className="value">{formatMoney(project.budgetTotalCapCents)}</div>
+            <div className="label">{t('project.budget.usageRatio')}</div>
+            <div className="value" style={{ color: usageRatio >= 1 ? '#b3423a' : undefined }}>{usagePct.toFixed(1)}%</div>
+            <div className="progress-bar" style={{ marginTop: 6 }}>
+              <div className="fill" style={{ width: `${Math.min(100, usagePct)}%`, background: usageRatio >= 1 ? '#b3423a' : undefined }} />
+            </div>
           </div>
           <div className="kpi-card">
-            <div className="label">Planned Launch</div>
+            <div className="label">
+              {t('project.budget.runwayDays')}{' '}
+              <span className="muted" style={{ fontSize: 10 }}>({t('project.budget.estimation')})</span>
+            </div>
+            <div className="value">{t('project.budget.runway.unavailable')}</div>
+            <div className="muted" style={{ fontSize: 10 }}>{t('project.budget.runway.hint').replace('{day}', String(store.dayIndex))}</div>
+          </div>
+        </div>
+
+        {drilldownOpen && (
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--border, #444)', paddingTop: 12 }}>
+            <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>{t('project.budget.drilldown.title')}</h3>
+            {costAllocations.length === 0 ? (
+              <p className="muted" style={{ fontSize: 12 }}>{t('project.budget.drilldown.empty')}</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>{t('project.budget.drilldown.sourceType')}</th>
+                    <th>{t('project.budget.drilldown.period')}</th>
+                    <th className="text-right">{t('project.budget.drilldown.amount')}</th>
+                    <th>{t('project.budget.drilldown.transaction')}</th>
+                    <th>{t('project.budget.drilldown.status')}</th>
+                    <th>{t('project.budget.drilldown.description')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {costAllocations.map(a => (
+                    <tr key={a.id}>
+                      <td>{t(`project.cost.source.${a.sourceType}`)}</td>
+                      <td>{a.periodKey}</td>
+                      <td className="text-right positive">{fmtSigned(a.amountCents)}</td>
+                      <td className="muted" style={{ fontSize: 11 }}>{a.cashTransactionId ?? '—'}</td>
+                      <td>{t(`project.cost.status.${a.status}`)}</td>
+                      <td className="muted" style={{ fontSize: 11 }}>{a.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+              {t('project.budget.drilldown.reconcile')}: {t('project.budget.drilldown.total')}{' '}
+              {fmtSigned(costAllocations.reduce((s, a) => s + a.amountCents, 0))}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>{t('project.schedule.delayRisk')}</h2>
+        <div className="kpi-grid">
+          <div className="kpi-card">
+            <div className="label">{t('project.schedule.plannedLaunch')}</div>
             <div className="value">{formatDay(project.plannedLaunchDay)}</div>
           </div>
           <div className="kpi-card">
-            <div className="label">预计完成</div>
+            <div className="label">{t('project.schedule.estimatedFinish')}</div>
             <div className="value">{estimateDay === null ? '—' : formatDay(estimateDay)}</div>
           </div>
           <div className="kpi-card">
-            <div className="label">延期风险</div>
+            <div className="label">{t('project.schedule.delayRisk')}</div>
             <div className="value" style={{ color: delayDays !== null && delayDays > 0 ? '#e05c5c' : undefined }}>
-              {delayDays === null ? '无法估算' : delayDays > 0 ? `晚 ${delayDays} 天` : '按计划'}
+              {delayDays === null
+                ? t('common.notEstimable')
+                : delayDays > 0
+                  ? t('project.schedule.lateDays').replace('{n}', String(delayDays))
+                  : t('project.schedule.onTrack')}
             </div>
           </div>
         </div>
@@ -368,6 +534,63 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           )
         )}
       </div>
+
+      {/* 追加预算弹窗（金额 + 原因），确认后走 TopUpBudgetCmd，不直接改 budget 字段 */}
+      {topUpOpen && (
+        <div className="panel" style={{ borderColor: 'var(--gold)' }}>
+          <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>{t('project.budget.topUp.title')}</h2>
+          <p className="muted" style={{ fontSize: 12, margin: '0 0 12px' }}>{t('project.budget.topUp.hint')}</p>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div className="form-row" style={{ marginBottom: 0, flex: '1 1 200px' }}>
+              <label>{t('project.budget.topUp.amount')}</label>
+              <input
+                type="number"
+                min={0.01}
+                step={0.01}
+                value={topUpAmount}
+                placeholder="0.00"
+                onChange={e => setTopUpAmount(e.target.value)}
+              />
+            </div>
+            <div className="form-row" style={{ marginBottom: 0, flex: '2 1 280px' }}>
+              <label>{t('project.budget.topUp.reason')}</label>
+              <input
+                type="text"
+                value={topUpReason}
+                placeholder={t('project.budget.topUp.reasonPlaceholder')}
+                onChange={e => setTopUpReason(e.target.value)}
+              />
+            </div>
+            <button
+              className="btn"
+              onClick={() => {
+                const dollars = Number(topUpAmount)
+                const cents = Math.round(dollars * 100)
+                if (!Number.isFinite(dollars) || cents <= 0) {
+                  store.toast(t('error.bgtInvalidAmount'), 'error')
+                  return
+                }
+                const result = store.topUpBudget(project.id, cents, topUpReason.trim() || '-')
+                if (result.success) {
+                  setTopUpOpen(false)
+                  setTopUpAmount('')
+                  setTopUpReason('')
+                }
+              }}
+            >{t('project.budget.topUp.confirm')}</button>
+            <button className="btn btn-secondary" onClick={() => setTopUpOpen(false)}>{t('common.cancel')}</button>
+          </div>
+        </div>
+      )}
+
+      {/* 取消原因弹窗（超时自动取消） */}
+      {cancelReasonOpen && (
+        <div className="panel" style={{ borderColor: '#b3423a' }}>
+          <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>{t('project.banner.viewReason')}</h2>
+          <p style={{ fontSize: 13 }}>{t('project.banner.cancel.reason.pause_timeout')}</p>
+          <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(false)}>{t('common.cancel')}</button>
+        </div>
+      )}
     </div>
   )
 }

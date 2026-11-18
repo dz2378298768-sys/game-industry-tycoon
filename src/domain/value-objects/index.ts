@@ -7,7 +7,7 @@ export {
   clampQuality,
 } from './quality-profile'
 export type { ProjectBudget } from './project-budget'
-export { createBudget, recomputeRemaining } from './project-budget'
+export { createBudget, recomputeRemaining, budgetUsageRatio } from './project-budget'
 export type { RangeItem } from './range-item'
 export type { TeamAssignment } from './team-assignment'
 export type { ChangeLogEntry, TopUpChangeLogInput } from './change-log'

@@ -1,0 +1,29 @@
+node_modules/
+dist/
+dist-ssr/
+
+# build / type info
+*.tsbuildinfo
+.vite/
+
+# local env & secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# user uploads (spec archive) — keep out of source repo
+.uploads/
+
+# test / coverage output
+coverage/
+.vitest/

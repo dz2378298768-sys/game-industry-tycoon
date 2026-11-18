@@ -1,0 +1,8 @@
+[
+  { "id": "north_america", "displayName": "North America", "displayNameZh": "北美", "primaryCurrency": "USD" },
+  { "id": "western_europe", "displayName": "Western Europe", "displayNameZh": "西欧", "primaryCurrency": "EUR" },
+  { "id": "japan", "displayName": "Japan", "displayNameZh": "日本", "primaryCurrency": "JPY" },
+  { "id": "east_asia", "displayName": "East Asia", "displayNameZh": "东亚", "primaryCurrency": "USD" },
+  { "id": "south_america", "displayName": "South America", "displayNameZh": "南美", "primaryCurrency": "BRL" },
+  { "id": "rest_of_world", "displayName": "Rest of World", "displayNameZh": "世界其他地区", "primaryCurrency": "USD" }
+]

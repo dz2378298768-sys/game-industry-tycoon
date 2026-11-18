@@ -295,7 +295,8 @@ export class ProjectService {
       this.updateInPlace({
         ...p,
         phase: 'CANCELLED',
-        isPaused: true,
+        isPaused: false,
+        pauseReason: null,
         cancellationReason: reason,
         version: p.version + 1,
       }),

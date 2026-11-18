@@ -59,9 +59,11 @@ function defaultWorkTotalByDiscipline(
   budgetCapCents: number,
 ): Record<Discipline, number> {
   const raw = budgetCapCents / 1_000_000
+  // 防御：非有限预算不得向上游渗漏成 NaN 工作量（上游已拒绝，此处兜底）
+  const safeRaw = Number.isFinite(raw) ? raw : TUNING.project.budgetFactorMin
   const factor = Math.max(
     TUNING.project.budgetFactorMin,
-    Math.min(TUNING.project.budgetFactorMax, raw),
+    Math.min(TUNING.project.budgetFactorMax, safeRaw),
   )
   const per = TUNING.project.workPerMillionBudget
   return {
@@ -116,11 +118,24 @@ export class ProjectService {
   // ============ 创建 ============
 
   create(cmd: CreateProjectCmd): CommandResult<Project> {
-    if (cmd.plannedStartDay < 0 || cmd.plannedLaunchDay < cmd.plannedStartDay) {
+    // 日期必须是有限整数，且计划上市日不得早于计划开始日
+    if (
+      !Number.isFinite(cmd.plannedStartDay) ||
+      !Number.isFinite(cmd.plannedLaunchDay) ||
+      !Number.isInteger(cmd.plannedStartDay) ||
+      !Number.isInteger(cmd.plannedLaunchDay) ||
+      cmd.plannedStartDay < 0 ||
+      cmd.plannedLaunchDay < cmd.plannedStartDay
+    ) {
       return fail('PRJ_INVALID_SCHEDULE', 'Invalid schedule')
     }
-    if (cmd.budgetTotalCapCents <= 0) {
-      return fail('PRJ_INVALID_BUDGET', 'budgetTotalCapCents must be positive')
+    // 预算必须是有限正整数（美分）：NaN / ±Infinity / 0 / 负数 / 小数一律拒绝
+    if (
+      !Number.isFinite(cmd.budgetTotalCapCents) ||
+      !Number.isInteger(cmd.budgetTotalCapCents) ||
+      cmd.budgetTotalCapCents <= 0
+    ) {
+      return fail('PRJ_INVALID_BUDGET', 'budgetTotalCapCents must be a positive integer of cents')
     }
 
     const qualityTargets = {
@@ -258,7 +273,14 @@ export class ProjectService {
       return fail('PRJ_CANNOT_PAUSE', 'Terminal phase cannot be paused')
     }
     if (p.isPaused) return { success: true, result: p, idempotent: true }
-    return ok(this.updateInPlace({ ...p, isPaused: true, version: p.version + 1 }))
+    return ok(
+      this.updateInPlace({
+        ...p,
+        isPaused: true,
+        consecutivePauseDays: 0,
+        version: p.version + 1,
+      }),
+    )
   }
 
   resume(projectId: string): CommandResult<Project> {
@@ -270,19 +292,19 @@ export class ProjectService {
     return ok(this.updateInPlace({ ...p, isPaused: false, consecutivePauseDays: 0, version: p.version + 1 }))
   }
 
-  cancel(projectId: string, reason: CancellationReason): CommandResult<Project> {
+  cancel(
+    projectId: string,
+    reason: CancellationReason,
+    dayIndex = 0,
+  ): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase === 'LAUNCHED') return fail('PRJ_ALREADY_LAUNCHED', 'Launched project cannot be cancelled')
     if (p.phase === 'CANCELLED') return fail('PRJ_ALREADY_TERMINAL', 'Already cancelled')
-    return ok(
-      this.updateInPlace({
-        ...p,
-        phase: 'CANCELLED',
-        isPaused: true,
-        cancellationReason: reason,
-        version: p.version + 1,
-      }),
-    )
+
+    // 统一走状态机转换：CANCELLED 时 isPaused 必须为 false，并写入取消原因
+    const next = transitionProject(p, 'CANCELLED', dayIndex, { cancellationReason: reason })
+    if (!next) return fail('PRJ_INVALID_TRANSITION', `Cannot cancel from ${p.phase}`)
+    return ok(this.updateInPlace(next))
   }
 
   // ============ 发布 ============

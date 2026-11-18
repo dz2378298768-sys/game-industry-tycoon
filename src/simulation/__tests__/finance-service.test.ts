@@ -127,6 +127,47 @@ describe('FinanceService', () => {
     expect(fin.getCashBalance('c1')).toBe(5_000_000)
   })
 
+  it('幂等键不因时间窗口过期而失效（TR-01）', () => {
+    const fin = new FinanceService()
+    fin.registerCompany('c1')
+    fin.postTransaction(baseCmd()) // 初始 5,000,000
+
+    const first = fin.postTransaction(
+      baseCmd({ idempotencyKey: 'salary:e1:m1970-1', day: 0, amountCents: -1000 }),
+    )
+    expect(first.success).toBe(true)
+
+    // 推进 1100 天后用同一结算键重放：必须仍被幂等拦截
+    const second = fin.postTransaction(
+      baseCmd({ idempotencyKey: 'salary:e1:m1970-1', day: 1100, amountCents: -1000 }),
+    )
+    expect(second.success).toBe(true)
+    expect(second.idempotent).toBe(true)
+    expect(fin.getAllTransactions()).toHaveLength(2)
+    expect(fin.getCashBalance('c1')).toBe(4_999_000)
+  })
+
+  it('读档重放后幂等键仍然有效（TR-01 跨存档）', () => {
+    const source = new FinanceService()
+    source.registerCompany('c1')
+    source.postTransaction(baseCmd())
+    const salary = source.postTransaction(
+      baseCmd({ idempotencyKey: 'salary:e1:m1970-2', day: 0, amountCents: -1000 }),
+    )
+    expect(salary.success).toBe(true)
+
+    const restored = new FinanceService()
+    restored.registerCompany('c1')
+    restored.replay(source.getAllTransactions(), ['c1'])
+
+    const replay = restored.postTransaction(
+      baseCmd({ idempotencyKey: 'salary:e1:m1970-2', day: 500, amountCents: -1000 }),
+    )
+    expect(replay.success).toBe(true)
+    expect(replay.idempotent).toBe(true)
+    expect(restored.getAllTransactions()).toHaveLength(2)
+  })
+
   it('未注册公司的交易被拒绝', () => {
     const fin = new FinanceService()
     const r = fin.postTransaction(baseCmd({ companyId: 'ghost' }))

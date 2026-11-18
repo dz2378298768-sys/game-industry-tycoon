@@ -291,6 +291,30 @@ export class GameWorld {
     if (this.isFinanciallyDistressed(company)) {
       return { success: false, errorCode: 'FIN_DISTRESS', message: '公司现金为负（财务困难），无法创建新项目。' }
     }
+    // 预算必须是有限正整数美分（拒绝 NaN / ±Infinity / 0 / 负数 / 小数）
+    if (
+      !Number.isFinite(params.budgetTotalCapCents) ||
+      !Number.isInteger(params.budgetTotalCapCents) ||
+      params.budgetTotalCapCents <= 0
+    ) {
+      return {
+        success: false,
+        errorCode: 'PRJ_INVALID_BUDGET',
+        message: '项目预算必须是大于 0 的整数（美分）。',
+      }
+    }
+    // 计划日期必须是有限整数
+    if (
+      !Number.isFinite(params.plannedLaunchDay) ||
+      !Number.isInteger(params.plannedLaunchDay) ||
+      params.plannedLaunchDay < this.dayIndex
+    ) {
+      return {
+        success: false,
+        errorCode: 'PRJ_INVALID_SCHEDULE',
+        message: '计划上市日期必须是有效日期，且不得早于今天。',
+      }
+    }
 
     const platformIds = params.targetPlatformIds ?? []
     for (const id of platformIds) {
@@ -386,7 +410,7 @@ export class GameWorld {
   }
 
   cancelProject(projectId: string): CommandOutcome<Project> {
-    const result = this.withProjects(() => this.projects.cancel(projectId, 'player_decision'))
+    const result = this.withProjects(() => this.projects.cancel(projectId, 'player_decision', this.dayIndex))
     if (!result.success || !result.result) {
       return { success: false, errorCode: result.errorCode, message: result.errorMessage ?? '取消失败' }
     }

@@ -131,6 +131,48 @@ describe('R-005 薪资非法输入与回滚', () => {
   })
 })
 
+describe('DEF-001 项目预算非法输入', () => {
+  const invalidBudgets = [NaN, Infinity, -Infinity, 0, -1, 1_500_000.5]
+
+  it.each(invalidBudgets)('拒绝非法预算 %s，且不创建项目', (budget) => {
+    const gw = new GameWorld(31)
+    gw.createCompany({ name: 'Budget Studios', cityId: 'san_francisco' })
+    const before = gw.world.projects.length
+
+    const result = gw.createProject({
+      name: 'Bad Budget Game',
+      genreId: 'action',
+      budgetTotalCapCents: budget,
+      plannedLaunchDay: 200,
+      targetPlatformIds: ['arcade_pre_1975'],
+      audienceSegmentIds: ['arcade_enthusiasts'],
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('PRJ_INVALID_BUDGET')
+    expect(gw.world.projects).toHaveLength(before)
+    expect(gw.projects.listAll()).toHaveLength(before)
+  })
+
+  it('ProjectService 直接调用时同样拒绝 NaN 预算，且工作量不会变成 NaN', () => {
+    const svc = new ProjectService()
+    const result = svc.create({
+      name: 'Direct NaN Budget',
+      companyId: 'company-1',
+      genreId: 'action',
+      audienceSegmentIds: [],
+      targetPlatformIds: [],
+      budgetTotalCapCents: NaN,
+      plannedLaunchDay: 200,
+      plannedStartDay: 0,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errorCode).toBe('PRJ_INVALID_BUDGET')
+    expect(svc.listAll()).toHaveLength(0)
+  })
+})
+
 describe('R-003 Day 0 同日幂等', () => {
   it('Day 0 重复执行不会扣工作量 / 更新士气疲劳 / 产生流水', () => {
     const world = makeWorld({

@@ -49,10 +49,57 @@ export class DailyScheduler {
     if (world.currentDayIndex === dayIndex) return world
 
     let state: WorldState = { ...world, currentDayIndex: dayIndex }
+    state = this.applyPauseTimers(state, dayIndex)
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)
     state = this.applyMonthlySettlement(state, dayIndex)
     return this.syncCompanyCash(state)
+  }
+
+  // ---------- 暂停计时与自动取消（D-01） ----------
+
+  /**
+   * 每推进一天，为「暂停中且未终态」的项目累加 consecutivePauseDays；
+   * 达到 TUNING.project.autoCancelAfterPausedDays（60）时，经统一状态机转为 CANCELLED。
+   * 恢复运行时由 ProjectService.resume() 将计数清零。
+   */
+  private applyPauseTimers(state: WorldState, dayIndex: number): WorldState {
+    const threshold = TUNING.project.autoCancelAfterPausedDays
+    const events: DomainEvent[] = []
+
+    const projects = state.projects.map((project) => {
+      if (project.phase === 'LAUNCHED' || project.phase === 'CANCELLED') return project
+      if (!project.isPaused) return project
+
+      const pausedDays = project.consecutivePauseDays + 1
+      if (pausedDays >= threshold) {
+        const cancelled = transitionProject(project, 'CANCELLED', dayIndex, {
+          cancellationReason: 'pause_timeout',
+        })
+        if (cancelled) {
+          events.push({
+            id: uuid(),
+            type: 'ProjectAutoCancelled',
+            day: dayIndex,
+            payload: { projectId: project.id, pausedDays, reason: 'pause_timeout' },
+          })
+          return { ...cancelled, consecutivePauseDays: pausedDays }
+        }
+      }
+
+      return {
+        ...project,
+        consecutivePauseDays: pausedDays,
+        version: project.version + 1,
+        updatedAt: dayIndex,
+      }
+    })
+
+    return {
+      ...state,
+      projects,
+      events: events.length > 0 ? [...state.events, ...events] : state.events,
+    }
   }
 
   // ---------- 项目研发 ----------

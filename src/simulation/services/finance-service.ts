@@ -35,12 +35,13 @@ export class FinanceService {
   private transactions: Transaction[] = []
   /** 公司最新余额快照 */
   private balanceByCompany = new Map<string, number>()
-  /** 幂等键 → transaction id */
+  /**
+   * 幂等键 → transaction id。
+   * 不做时间窗口清理（TR-01）：财务幂等必须覆盖整个存档生命周期，
+   * 否则过期后重放同一结算键会造成重复扣款/重复入账。
+   * 索引规模与交易流水同阶，不构成额外内存风险。
+   */
   private idempotencyIndex = new Map<string, string>()
-  /** 幂等键 → day，用于清理 */
-  private idempotencyDay = new Map<string, number>()
-
-  private readonly IDEMPOTENCY_RETENTION_DAYS = 30
 
   /** 注册公司，初始余额固定为 0；真实现金必须由交易入账 */
   registerCompany(companyId: string): void {
@@ -95,8 +96,6 @@ export class FinanceService {
     this.transactions.push(tx)
     this.balanceByCompany.set(cmd.companyId, newBalance)
     this.idempotencyIndex.set(cmd.idempotencyKey, tx.id)
-    this.idempotencyDay.set(cmd.idempotencyKey, cmd.day)
-    this.pruneIdempotency(cmd.day)
     return ok(tx)
   }
 
@@ -104,7 +103,6 @@ export class FinanceService {
     const prevTxs = [...this.transactions]
     const prevBal = new Map(this.balanceByCompany)
     const prevIdx = new Map(this.idempotencyIndex)
-    const prevDay = new Map(this.idempotencyDay)
     const results: Transaction[] = []
     for (const cmd of cmds) {
       const r = this.postTransaction(cmd)
@@ -112,7 +110,6 @@ export class FinanceService {
         this.transactions = prevTxs
         this.balanceByCompany = prevBal
         this.idempotencyIndex = prevIdx
-        this.idempotencyDay = prevDay
         return fail(
           r.errorCode ?? 'FIN_BULK_POST_FAILED',
           r.errorMessage ?? `Bulk transaction failed after ${results.length}`,
@@ -123,6 +120,13 @@ export class FinanceService {
     return ok(results)
   }
 
+  /**
+   * 冲正一笔已入账交易（用于退款、误操作回滚等场景）。
+   *
+   * TR-02 复核说明：M1.1 游戏流程内无调用方，属 **M2 预留能力**（M2 退款/平台抽成需要）。
+   * 本批次已补齐幂等保护，避免 M2 接入时重复冲正；不删除该接口，因为删除会造成
+   * 「M2 需要重新设计现金回滚语义」，反而扩大风险。若设计侧另有接口契约，按契约调整。
+   */
   reverseTransaction(
     transactionId: string,
     reason: string,
@@ -166,8 +170,6 @@ export class FinanceService {
     this.transactions.push(rev)
     this.balanceByCompany.set(target.companyId, rev.balanceAfterCents)
     this.idempotencyIndex.set(newKey, rev.id)
-    this.idempotencyDay.set(newKey, rev.day)
-    this.pruneIdempotency(rev.day)
     target.status = 'reversed'
     target.reversedBy = rev.id
     return ok(rev)
@@ -211,7 +213,6 @@ export class FinanceService {
     this.transactions = []
     this.balanceByCompany = new Map()
     this.idempotencyIndex = new Map()
-    this.idempotencyDay = new Map()
     for (const id of companyIds) this.balanceByCompany.set(id, 0)
     for (const tx of transactions) {
       const prev = this.getBalance(tx.companyId)
@@ -225,16 +226,5 @@ export class FinanceService {
 
   private getBalance(companyId: string): number {
     return this.balanceByCompany.get(companyId) ?? 0
-  }
-
-  private pruneIdempotency(currentDay: number): void {
-    if (this.idempotencyIndex.size < 1024) return
-    const cutoff = currentDay - this.IDEMPOTENCY_RETENTION_DAYS
-    for (const [key, day] of this.idempotencyDay) {
-      if (day < cutoff) {
-        this.idempotencyIndex.delete(key)
-        this.idempotencyDay.delete(key)
-      }
-    }
   }
 }

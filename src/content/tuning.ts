@@ -101,6 +101,11 @@ export const TUNING = {
     },
     /** 单位：工作点。QA 工作量的最小保底值，避免小预算项目 QA 瞬间完成。 */
     minQaWorkPoints: 40,
+    /**
+     * 单位：天。项目连续暂停（isPaused=true）达到该天数即由系统自动取消（D-01 设计裁定）。
+     * 计的是「实际暂停天数计数器」consecutivePauseDays，不是自然日；恢复后清零。
+     */
+    autoCancelAfterPausedDays: 60,
   },
 
   qa: {

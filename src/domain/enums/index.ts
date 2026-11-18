@@ -58,6 +58,9 @@ export type CancellationReason =
   | 'team_dissolved'
   | 'market_window_missed'
   | 'player_decision'
+  // D-01：连续暂停达到阈值（60 天）由系统自动取消。
+  // 规格未枚举该值，命名待设计确认；确认后按编号调整。
+  | 'pause_timeout'
 
 // ===== 项目内角色 =====
 export type ProjectRole = 'lead' | 'senior' | 'generalist' | 'junior'

@@ -36,3 +36,42 @@ export function createPauseTimeoutCancelledEvent(
   }
   return { id, type: PROJECT_CANCELLED_EVENT, day, payload }
 }
+
+/** 项目预算耗尽事件类型（DESIGN-G05 §6.2 / G05-R8） */
+export const PROJECT_BUDGET_EXHAUSTED_EVENT = 'ProjectBudgetExhausted'
+
+/** 预算耗尽事件载荷；remainingCapCents 为触发判定时点的剩余额度（≤0，可为负） */
+export type ProjectBudgetExhaustedPayload = {
+  projectId: string
+  day: number
+  remainingCapCents: number
+}
+
+/**
+ * 构造预算耗尽事件。
+ *
+ * id 即幂等键 `event:budget_exhausted:{projectId}:{resumeSeq}`，随存档生命周期保留，
+ * 保证同一恢复周期内至多一次；恢复使 resumeSeq+1 后可再次产生耗尽事件
+ * （DESIGN-G05 §7.1 GDR R2 D-G05-R2-01 修订）。
+ */
+export function createBudgetExhaustedEvent(
+  id: string,
+  projectId: string,
+  day: number,
+  remainingCapCents: number,
+): DomainEvent {
+  const payload: ProjectBudgetExhaustedPayload = {
+    projectId,
+    day,
+    remainingCapCents,
+  }
+  return { id, type: PROJECT_BUDGET_EXHAUSTED_EVENT, day, payload }
+}
+
+/**
+ * 预算耗尽事件幂等键：每个恢复周期内唯一。
+ * 事件 id 直接取该键，事件去重与审计共用同一标识。
+ */
+export function budgetExhaustedEventKey(projectId: string, resumeSeq: number): string {
+  return `event:budget_exhausted:${projectId}:${resumeSeq}`
+}

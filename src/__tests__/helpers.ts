@@ -79,6 +79,8 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     cancellationReason: null,
     pausedDays: 0,
     pauseReason: null,
+    budgetExhausted: false,
+    resumeSeq: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,

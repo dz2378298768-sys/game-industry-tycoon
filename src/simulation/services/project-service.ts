@@ -162,6 +162,8 @@ export class ProjectService {
       cancellationReason: null,
       pausedDays: 0,
       pauseReason: null,
+      budgetExhausted: false,
+      resumeSeq: 0,
       version: 1,
       createdAt: cmd.plannedStartDay,
       updatedAt: cmd.plannedStartDay,
@@ -282,6 +284,10 @@ export class ProjectService {
         isPaused: false,
         pausedDays: 0,
         pauseReason: null,
+        // 预算耗尽态是「当前状态」而非历史，恢复成功即清除（DESIGN-G05 §6.3）
+        budgetExhausted: false,
+        // 新一轮恢复周期：耗尽事件幂等键换轮，允许再次耗尽时产生新事件（GDR R2）
+        resumeSeq: (p.resumeSeq ?? 0) + 1,
         version: p.version + 1,
       }),
     )

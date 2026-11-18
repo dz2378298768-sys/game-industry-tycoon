@@ -52,6 +52,10 @@ export interface Project {
   pausedDays: number
   /** 本次暂停的原因；null 表示未暂停或原因未知 */
   pauseReason?: 'manual' | 'budget_exhausted' | null
+  /** 预算耗尽态标记（DESIGN-G05 §6.2）；旧存档缺省 false */
+  budgetExhausted?: boolean
+  /** 已成功恢复次数，耗尽事件幂等键的组成（DESIGN-G05 §7.1 GDR R2）；旧存档缺省 0 */
+  resumeSeq?: number
   version: number
   createdAt: number
   updatedAt: number

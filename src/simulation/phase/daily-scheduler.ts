@@ -5,7 +5,11 @@ import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
 import type { FinanceService } from '@simulation/services/finance-service'
 import { uuid } from '@domain/types'
-import { createPauseTimeoutCancelledEvent } from '@domain/events'
+import {
+  budgetExhaustedEventKey,
+  createBudgetExhaustedEvent,
+  createPauseTimeoutCancelledEvent,
+} from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { computeSalaryAllocations } from '@domain/entities/project-cost-allocation'
@@ -61,6 +65,8 @@ export class DailyScheduler {
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)
     state = this.applyMonthlySettlement(state, dayIndex)
+    // 预算耗尽在当日所有工资分摊/合同付款/直接支出入账后统一判定一次（DESIGN-G05 §6.1）
+    state = this.applyBudgetExhaustion(state, dayIndex)
     return this.syncCompanyCash(state)
   }
 
@@ -122,6 +128,7 @@ export class DailyScheduler {
     }
 
     const projects = state.projects.map((project) => {
+      // 暂停门控复用：手动暂停与预算耗尽暂停均在此停止研发产出（DESIGN-G05 §6.2，自下日起生效）
       if (project.isPaused) return project
       if (isTerminalProjectPhase(project.phase)) return project
 
@@ -361,6 +368,73 @@ export class DailyScheduler {
     return {
       ...state,
       projects: state.projects.map((p) => updatedProjects.get(p.id) ?? p),
+    }
+  }
+
+  // ---------- 预算耗尽判定（G-05 / G05-R8） ----------
+
+  /**
+   * 每日调度末尾统一判定一次预算耗尽（DESIGN-G05 §6.1）。
+   *
+   * - active = phase ∉ {LAUNCHED, CANCELLED}，含暂停项目；终态项目排除。
+   * - 判据 remainingCapCents <= 0（含等号）；按当日已入账的预算三元组重算。
+   * - 触发效果（§6.2 原子效果）：isPaused=true、budgetExhausted=true、phase 保持原值、
+   *   加入 'budget_exhausted' 风险标记、追加 ProjectBudgetExhausted 事件与 changeLog；
+   *   研发产出由 applyProjectWork 的 isPaused 门控自下日起停止，既有工资/合同义务继续；
+   *   不自动取消（自动取消是 D-01 的 60 天逻辑）；暂停天数由 applyPauseTimeout 自然累计。
+   * - 幂等：事件 id = event:budget_exhausted:{projectId}:{resumeSeq}，同一恢复周期内至多一次；
+   *   恢复使 resumeSeq+1 后可再次触发（DESIGN-G05 §7.1 GDR R2 D-G05-R2-01）。
+   */
+  private applyBudgetExhaustion(state: WorldState, dayIndex: number): WorldState {
+    const events: DomainEvent[] = []
+    let triggered = false
+
+    const projects = state.projects.map((project) => {
+      // 终态项目不再产生成本，排除判定；暂停项目仍参与（§6.1）
+      if (isTerminalProjectPhase(project.phase)) return project
+
+      const remainingCapCents =
+        project.budgetTotalCapCents - project.budgetCommittedCents - project.budgetSpentCents
+      if (remainingCapCents > 0) return project // 判据为 <=0（含等号）
+
+      const resumeSeq = project.resumeSeq ?? 0
+      const idempotencyKey = budgetExhaustedEventKey(project.id, resumeSeq)
+
+      // 同周期内已标记耗尽，或该幂等键事件已存在，均不再触发（幂等）
+      if (project.budgetExhausted || state.events.some((e) => e.id === idempotencyKey)) {
+        return project
+      }
+
+      triggered = true
+      events.push(createBudgetExhaustedEvent(idempotencyKey, project.id, dayIndex, remainingCapCents))
+
+      return {
+        ...project,
+        isPaused: true,
+        budgetExhausted: true,
+        pauseReason: 'budget_exhausted' as const,
+        riskFlags: project.riskFlags.includes('budget_exhausted')
+          ? project.riskFlags
+          : [...project.riskFlags, 'budget_exhausted'],
+        changeLog: [
+          ...project.changeLog,
+          {
+            id: uuid(),
+            type: 'update' as const,
+            timestampDay: dayIndex,
+            details: { event: 'ProjectBudgetExhausted', remainingCapCents, resumeSeq },
+          },
+        ],
+        version: project.version + 1,
+        updatedAt: dayIndex,
+      }
+    })
+
+    if (!triggered) return state
+    return {
+      ...state,
+      projects,
+      events: [...state.events, ...events],
     }
   }
 

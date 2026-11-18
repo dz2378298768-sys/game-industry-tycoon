@@ -1,5 +1,5 @@
 import React from 'react'
-import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney, formatDay, getI18nLocale } from '@ui/state/game-store'
 import { budgetUsageRatio, recomputeRemaining } from '@domain/value-objects'
 import type { ProjectCostAllocation } from '@domain/entities/project-cost-allocation'
 import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete, estimateDaysToFinish } from '@simulation/systems/project-progress'
@@ -53,6 +53,30 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
   const pausedSinceDay = store.dayIndex - pausedDays
   const fmtSigned = (cents: number) => `${cents >= 0 ? '+' : ''}${formatMoney(cents)}`
+  // 预算面板金额：不带正号（DESIGN-G05 v1.5 §10.1a-1），|值|<100 分时补两位小数（§10.1a-2）
+  const fmtMoneyPlain = (cents: number, withCents = false) => {
+    const digits = withCents ? 2 : 0
+    const amount = (Math.abs(cents) / 100).toLocaleString(
+      getI18nLocale() === 'zh-CN' ? 'zh-CN' : 'en-US',
+      { minimumFractionDigits: digits, maximumFractionDigits: digits },
+    )
+    return `${cents < 0 ? '-' : ''}$${amount}`
+  }
+  const fmtRemaining = (cents: number) => fmtMoneyPlain(cents, Math.abs(cents) < 100)
+
+  // ===== 预计可用天数 runwayDays（DESIGN-G05 v1.5 §10.1a-3，纯展示层推导，不写回 budget）=====
+  const BURN_WINDOW_DAYS = 30
+  const projectStartDay = project.actualStartDay ?? project.plannedStartDay ?? 0
+  const spanDays = Math.max(1, Math.min(BURN_WINDOW_DAYS, store.dayIndex - projectStartDay + 1))
+  const burnCents = costAllocations
+    .filter(a => a.day >= store.dayIndex - (BURN_WINDOW_DAYS - 1) && a.day <= store.dayIndex)
+    .reduce((sum, a) => sum + a.amountCents, 0)
+  const dailyBurnCents = burnCents / spanDays
+  const runwayDays = remainingCapCents <= 0
+    ? 0
+    : dailyBurnCents > 0
+      ? Math.floor(remainingCapCents / dailyBurnCents)
+      : null
 
   const genre = content.genres.find(g => g.id === project.genreId)
   const assignedEmployees = employees.filter(e => project.teamAssignments.some(a => a.employeeId === e.id))
@@ -272,17 +296,17 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
           {t('project.budget.spentOfCap')
-            .replace('{spent}', fmtSigned(budget.spentCents))
-            .replace('{cap}', fmtSigned(budget.totalCapCents))}
+            .replace('{spent}', fmtMoneyPlain(budget.spentCents))
+            .replace('{cap}', fmtMoneyPlain(budget.totalCapCents))}
         </p>
         <div className="kpi-grid">
           <div className="kpi-card">
             <div className="label">{t('project.budget.cap')}</div>
-            <div className="value">{fmtSigned(budget.totalCapCents)}</div>
+            <div className="value">{fmtMoneyPlain(budget.totalCapCents)}</div>
           </div>
-          <div className="kpi-card" title={`${t('project.budget.committedHint')} ${fmtSigned(budget.committedCents)}`}>
+          <div className="kpi-card" title={`${t('project.budget.committedHint')} ${fmtMoneyPlain(budget.committedCents)}`}>
             <div className="label">{t('project.budget.committed')}</div>
-            <div className="value">{fmtSigned(budget.committedCents)}</div>
+            <div className="value">{fmtMoneyPlain(budget.committedCents)}</div>
           </div>
           <div
             className="kpi-card"
@@ -291,12 +315,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             title={t('project.budget.drilldown.title')}
           >
             <div className="label">{t('project.budget.spent')} ↗</div>
-            <div className="value">{fmtSigned(budget.spentCents)}</div>
+            <div className="value">{fmtMoneyPlain(budget.spentCents)}</div>
           </div>
           <div className="kpi-card">
             <div className="label">{t('project.budget.remaining')}</div>
             <div className="value" style={{ color: remainingCapCents < 0 ? '#b3423a' : undefined }}>
-              {fmtSigned(remainingCapCents)}
+              {fmtRemaining(remainingCapCents)}
               {remainingCapCents <= 0 && <span className="badge danger" style={{ marginLeft: 6 }}>{t('project.budget.exhaustedBadge')}</span>}
             </div>
           </div>
@@ -312,8 +336,16 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               {t('project.budget.runwayDays')}{' '}
               <span className="muted" style={{ fontSize: 10 }}>({t('project.budget.estimation')})</span>
             </div>
-            <div className="value">{t('project.budget.runway.unavailable')}</div>
-            <div className="muted" style={{ fontSize: 10 }}>{t('project.budget.runway.hint').replace('{day}', String(store.dayIndex))}</div>
+            <div className="value">
+              {runwayDays === null
+                ? t('project.budget.runway.unavailable')
+                : t('project.budget.runway.value').replace('{n}', String(runwayDays))}
+            </div>
+            {runwayDays !== null && (
+              <div className="muted" style={{ fontSize: 10 }}>
+                {t('project.budget.runway.hint').replace('{day}', String(store.dayIndex))}
+              </div>
+            )}
           </div>
         </div>
 

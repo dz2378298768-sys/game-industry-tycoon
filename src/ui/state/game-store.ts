@@ -7,7 +7,7 @@ import type { Project } from '@domain/entities/project'
 import type { Product } from '@domain/entities/product'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
-import { BUDGET_TOP_UP_EVENT } from '@domain/value-objects'
+import { BUDGET_TOP_UP_EVENT, recomputeRemaining } from '@domain/value-objects'
 import { t, formatMoney, formatDay, setLocale as setI18nLocale, getLocale as getI18nLocale } from '@i18n'
 
 interface Message { id: string; text: string; type: 'info' | 'error' | 'success' }
@@ -166,7 +166,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { success: false, errorCode: 'PRJ_NOT_FOUND', message: t('error.projectNotFound') }
     }
     // 为每次追加分配唯一递增 seq，满足幂等键 budget:topup:{projectId}:{seq}（UI 不改领域逻辑）
-    let seq = 0
+    // 无历史记录时首个 seq 取 1（DESIGN-G05 v1.4 §7.1 / v1.5）；旧存档若存在 seq=0，新 seq 从 1 起且键不冲突
+    let seq = 1
     for (const entry of project.changeLog) {
       const used = entry.details?.seq
       if (entry.details?.event === BUDGET_TOP_UP_EVENT && typeof used === 'number' && Number.isInteger(used)) {
@@ -193,6 +194,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const project = gw.world.projects.find(p => p.id === projectId)
     if (!project) return { success: false, message: t('error.projectNotFound') }
     if (!project.isPaused) return { success: false, message: t('project.budget.resume.notPaused') }
+    // 恢复前按权威公式取剩余额度，用于恢复后的“预算仍为负”提示（DESIGN-G05 v1.5 §10.1a-6）
+    const remainingCapCents = recomputeRemaining({
+      totalCapCents: project.budgetTotalCapCents,
+      committedCents: project.budgetCommittedCents,
+      spentCents: project.budgetSpentCents,
+      remainingCapCents: 0,
+    }).remainingCapCents
     // 已暂停 → toggleProjectPause 走领域 resume：清除 budgetExhausted、resumeSeq+1、pausedDays 清零
     const result = gw.toggleProjectPause(projectId)
     get().refresh()
@@ -201,6 +209,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return { success: false, message: result.message }
     }
     get().toast(t('project.budget.resume.success'), 'success')
+    if (remainingCapCents <= 0) {
+      get().toast(t('project.budget.resume.negativeWarning'), 'info')
+    }
     return { success: true }
   },
 

@@ -102,7 +102,7 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
     mockStore.company = null
   })
 
-  it('预算面板六字段齐全，金额用正符号，使用率按领域公式计算', () => {
+  it('预算面板六字段齐全，金额不带正号，使用率按领域公式计算', () => {
     const { container } = renderDetail()
     const text = container.textContent ?? ''
     for (const label of ['预算上限', '已承诺', '已花', '剩余额度', '预算使用率', '预计可用天数']) {
@@ -110,11 +110,12 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
     }
     // (committed + spent) / totalCap = 500000 / 1000000 = 50%
     expect(text).toContain('50.0%')
-    // 正符号：已花 +$3,000 / 上限 +$10,000
-    expect(text).toMatch(/\+\$[\d,]+/)
+    // 预算面板金额不带正号（DESIGN-G05 v1.5 §10.1a-1）：已花 $3,000 / 上限 $10,000
+    expect(text).toContain('已花 $3,000 / 上限 $10,000')
+    expect(text).not.toMatch(/\+\$/)
     // runwayDays 标注为估计值
     expect(text).toContain('估计值')
-    expect(text).toContain('无法估算')
+    expect(text).toContain('暂无法估算')
   })
 
   it('权威公式得负值 remainingCap 时标红并显示预算耗尽徽标', () => {

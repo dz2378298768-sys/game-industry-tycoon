@@ -145,14 +145,12 @@ describe('TASK-M1.1-G05-001-E-FIX 预算面板显示口径', () => {
     expect(text).not.toContain('暂无法估算')
   })
 
-  // T6b runway 无值分支：无分摊 → dailyBurn=0 → null → 明确"尚无支出记录"，且不得出现天数
-  it('runway 无支出记录时显示暂无法估算（尚无支出记录）', () => {
+  // T6b runway 无值分支：无分摊 → dailyBurn=0 → null → 明确"近 30 天无支出记录"（DESIGN-G05 v1.6 §10.1a-3）
+  it('runway 近 30 天无支出记录时显示暂无法估算', () => {
     const { container } = renderDetail()
     const text = container.textContent ?? ''
-    expect(text).toContain('暂无法估算（尚无支出记录）')
+    expect(text).toContain('暂无法估算（近 30 天无支出记录）')
     expect(text).not.toContain('计算于第')
-    // 不得在无计算时出现"30 天"字样
-    expect(text).not.toContain('30 天')
   })
 
   // T7 金额口径：cap 不带正号；|remaining|<100 分时保留分精度

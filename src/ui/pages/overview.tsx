@@ -117,16 +117,16 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
       </div>
 
       <div className="panel">
-        <h2>Products</h2>
+        <h2>{t('overview.products')}</h2>
         {products.length === 0 ? (
           <p className="muted">—</p>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Genre</th>
-                <th>Quality</th>
+                <th>{t('overview.product.name')}</th>
+                <th>{t('overview.product.genre')}</th>
+                <th>{t('overview.product.quality')}</th>
               </tr>
             </thead>
             <tbody>

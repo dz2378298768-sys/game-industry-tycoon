@@ -7,6 +7,8 @@ import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
 import { computeFinalQualityScore, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
 import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
+import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
+import { normalizeCancellationReason, projectCancelledDay, resolveProjectStatus } from '@ui/components/project-status'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
 
@@ -50,6 +52,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const pausedDays = project.pausedDays ?? 0
   const nearTimeout = project.isPaused && pausedDays >= 50
   const cancelledByTimeout = project.phase === 'CANCELLED' && project.cancellationReason === 'pause_timeout'
+  // 主动取消 / 历史存档缺原因：与超时自动取消分开呈现（图标 ✕ 灰）
+  const cancelledStatusKind = project.phase === 'CANCELLED' ? resolveProjectStatus(project) : null
+  const cancelledByUser = cancelledStatusKind === 'cancelled_user'
+  const cancelledWithoutReason = cancelledStatusKind === 'cancelled_generic'
+  const cancelReasonKind = normalizeCancellationReason(project.cancellationReason)
+  const cancelledDay = projectCancelledDay(project, store.dayIndex)
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
   const pausedSinceDay = store.dayIndex - pausedDays
   const fmtSigned = (cents: number) => `${cents >= 0 ? '+' : ''}${formatMoney(cents)}`
@@ -247,7 +255,20 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       {cancelledByTimeout && (
         <div className="panel" style={{ borderColor: '#b3423a', background: 'rgba(179,66,58,0.10)' }}>
           <p className="negative" style={{ fontSize: 13, margin: 0 }}>
-            ⛔ {t('project.banner.cancelledTimeout').replace('{day}', String(project.updatedAt ?? store.dayIndex))}
+            ⛔ {t('project.banner.cancelledTimeout').replace('{day}', String(cancelledDay))}
+          </p>
+          <div className="flex-gap" style={{ marginTop: 10 }}>
+            <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>
+          </div>
+        </div>
+      )}
+      {(cancelledByUser || cancelledWithoutReason) && (
+        <div className="panel" style={{ borderColor: '#8b93a1', background: 'rgba(139,147,161,0.10)' }}>
+          <p style={{ color: '#8b93a1', fontSize: 13, margin: 0 }}>
+            ✕ {cancelledByUser
+              ? t(cancelReasonKind === 'scope_became_unviable' ? 'project.banner.cancelledScope' : 'project.banner.cancelledUser')
+                  .replace('{day}', String(cancelledDay))
+              : t('project.banner.cancelledGeneric')}
           </p>
           <div className="flex-gap" style={{ marginTop: 10 }}>
             <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>
@@ -417,10 +438,10 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Dimension</th>
-              <th>Target</th>
-              <th>Estimate</th>
-              <th style={{ width: 200 }}>Visual</th>
+              <th>{t('project.quality.headers.dimension')}</th>
+              <th>{t('project.quality.headers.target')}</th>
+              <th>{t('project.quality.headers.estimate')}</th>
+              <th style={{ width: 200 }}>{t('project.quality.headers.visual')}</th>
             </tr>
           </thead>
           <tbody>
@@ -615,13 +636,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         </div>
       )}
 
-      {/* 取消原因弹窗（超时自动取消） */}
+      {/* 取消原因弹窗（DIALOG-CANCEL-REASON）：超时自动取消 / 主动取消 / 历史存档通用 */}
       {cancelReasonOpen && (
-        <div className="panel" style={{ borderColor: '#b3423a' }}>
-          <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>{t('project.banner.viewReason')}</h2>
-          <p style={{ fontSize: 13 }}>{t('project.banner.cancel.reason.pause_timeout')}</p>
-          <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(false)}>{t('common.cancel')}</button>
-        </div>
+        <CancelReasonDialog
+          project={project}
+          cancelledDay={cancelledDay}
+          onClose={() => setCancelReasonOpen(false)}
+        />
       )}
     </div>
   )

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useGameStore, t } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
 
 export const CreateCompany: React.FC = () => {
@@ -40,7 +40,9 @@ export const CreateCompany: React.FC = () => {
           </button>
 
           <p className="muted mt-16" style={{ fontSize: 12, textAlign: 'center' }}>
-            Starting with $50,000.00 · Year 1970 · From the first home consoles to the mobile era, build your gaming empire.
+            {t('company.create.intro')
+              .replace('{cash}', formatMoney(5_000_000))
+              .replace('{year}', '1970')}
           </p>
         </form>
       </div>

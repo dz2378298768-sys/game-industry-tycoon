@@ -11,7 +11,7 @@
 |---|---|
 | 仓库 | https://github.com/dz2378298768-sys/game-industry-tycoon |
 | 分支 | `main` |
-| 最近 commit | `b2e51ef95160de8f8faef8c1d7e0c36049572969`（HEAD；功能整改 `990927c`） |
+| 最近功能提交 | `990927c30f9e9da0af2da5f51a4f408fd6f45b8f`（第二轮审核整改；HEAD 以 main 最新为准） |
 | 阶段 | M1.1（稳定性修复 + A1–G21 设计裁定落地 + 自动化测试） |
 | 在线版本 | https://37kgz944p77zx8h56sg.traesite.cn （所有人可见） |
 | 技术栈 | React 18.3 / TypeScript 5.6 / Vite 5.4 / Zustand / Zod / Vitest 2.1 |

@@ -29,11 +29,15 @@ const REASON_TEXT_KEY: Record<CancelReasonKind, string> = {
 export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onClose }) => {
   const cardRef = React.useRef<HTMLDivElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
-  const previousFocusRef = React.useRef<HTMLElement | null>(null)
+  const triggerRef = React.useRef<HTMLElement | null>(null)
+  const onCloseRef = React.useRef(onClose)
+  // 每次渲染同步最新回调，使 effect 无需依赖 onClose（父组件每日 tick 重渲染不会重跑 effect，N-8）
+  onCloseRef.current = onClose
   const titleId = React.useId()
 
   React.useEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // 仅挂载执行一次：记录触发元素、移动焦点、锁滚动；依赖 [] 保证任意重渲染下焦点管理不被打断
+    triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
 
     // 打开期间锁背景滚动（F7）
@@ -43,7 +47,7 @@ export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onC
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (e.key !== 'Tab' || !cardRef.current) return
@@ -65,10 +69,10 @@ export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onC
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
       document.body.style.overflow = previousOverflow
-      // 关闭后焦点归还触发按钮（F7）
-      previousFocusRef.current?.focus()
+      // 关闭后焦点归还触发按钮（F7）；触发元素在挂载时已固化，不受重渲染影响
+      triggerRef.current?.focus()
     }
-  }, [onClose])
+  }, [])
 
   const reasonKind = normalizeCancellationReason(project.cancellationReason)
 

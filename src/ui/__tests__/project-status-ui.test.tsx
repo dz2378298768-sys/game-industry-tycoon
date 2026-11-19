@@ -220,7 +220,7 @@ describe('TASK-M1.1-UI-001 取消原因弹窗', () => {
 
     const noReason = makeProject({ id: 'p-null', name: 'Unknown', phase: 'CANCELLED', cancellationReason: null })
     const { container } = renderDetail(noReason)
-    expect(container.textContent).toContain('项目已取消（历史存档未记录原因）')
+    expect(container.textContent).toContain('已取消（历史数据未记录原因）')
     fireEvent.click(screen.getByText('查看取消原因'))
     expect(within(screen.getByRole('dialog')).getByText('历史存档未记录取消原因。')).toBeTruthy()
   })
@@ -313,6 +313,55 @@ describe('TASK-M1.1-UI-001-FIX 整改回归', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByText('关闭'))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(document.activeElement).toBe(trigger)
+  })
+})
+
+describe('TASK-M1.1-UI-001-FIX2 收尾微调', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('F1：team_dissolved 详情横幅按原因显示，不再说成「由你主动取消」，详情留在弹窗', () => {
+    const team = makeProject({
+      id: 'p-team-detail',
+      name: 'Dissolved',
+      phase: 'CANCELLED',
+      cancellationReason: 'team_dissolved',
+      updatedAt: 44,
+    })
+    const { container } = renderDetail(team)
+    const text = container.textContent ?? ''
+
+    expect(text).toContain('团队解散，项目终止')
+    expect(text).not.toContain('由你主动取消')
+    // 横幅只放标题，弹窗说明不重复出现
+    expect(text).not.toContain('核心团队解散，项目无法继续。')
+
+    fireEvent.click(screen.getByText('查看取消原因'))
+    expect(within(screen.getByRole('dialog')).getByText('核心团队解散，项目无法继续。')).toBeTruthy()
+  })
+
+  it('F2（N-8）：父组件模拟每日 tick 重渲染后关闭弹窗，焦点仍回到触发按钮', () => {
+    mockStore.dayIndex = 100
+    const view = renderDetail(userCancel)
+    const trigger = screen.getByText('查看取消原因')
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+    trigger.focus()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    const focusCallsAfterOpen = focusSpy.mock.calls.length
+
+    // 模拟 daily tick：推进一天 → 父组件重渲染 → 弹窗收到新的内联 onClose 引用
+    mockStore.dayIndex = 101
+    view.rerender(<ProjectDetail projectId={userCancel.id} onNavigate={vi.fn()} />)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    // 重渲染不得重跑挂载 effect（否则会再次抢焦点/覆写触发元素记录）
+    expect(focusSpy.mock.calls.length).toBe(focusCallsAfterOpen)
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('关闭'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    focusSpy.mockRestore()
   })
 })
 

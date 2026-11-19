@@ -38,8 +38,11 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
     { key: 'cancelled', label: t('project.filter.cancelled'), count: cancelledCount },
   ]
 
-  /** 预计完成日：制作/测试按当前团队产能推算；未开工/待上市用计划上市日；无可估数据返回 null */
-  const estimateProjectDay = (p: Project): number | null => {
+  /**
+   * 预计完成：制作/测试按当前团队产能推算（estimated）；未开工/待上市用计划上市日（planned）；
+   * 已上市/已取消无可估数据返回 null（N-9：估算值与计划值文案必须区分，不把计划日伪装成估算）
+   */
+  const estimateProjectEta = (p: Project): { day: number; source: 'estimated' | 'planned' } | null => {
     if (p.phase === 'PRODUCTION' || p.phase === 'QA') {
       const daily: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
       for (const a of p.teamAssignments) {
@@ -56,10 +59,10 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
         daily,
         p.phase === 'PRODUCTION' ? ['design', 'programming', 'art'] : ['qa'],
       )
-      return days === null ? null : dayIndex + days
+      return days === null ? null : { day: dayIndex + days, source: 'estimated' }
     }
     if (p.phase === 'CONCEPT' || p.phase === 'PRE_PRODUCTION' || p.phase === 'READY_TO_LAUNCH') {
-      return p.plannedLaunchDay
+      return { day: p.plannedLaunchDay, source: 'planned' }
     }
     return null
   }
@@ -108,8 +111,8 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
                 const canLaunch = p.phase === 'READY_TO_LAUNCH'
                 const cancelled = isCancelledStatus(resolveProjectStatus(p))
                 const paused = p.isPaused && p.phase !== 'CANCELLED'
-                const etaDay = estimateProjectDay(p)
-                const lateDays = etaDay === null ? null : etaDay - p.plannedLaunchDay
+                const eta = estimateProjectEta(p)
+                const lateDays = eta !== null && eta.source === 'estimated' ? eta.day - p.plannedLaunchDay : null
                 return (
                   <React.Fragment key={p.id}>
                     <tr style={{ cursor: 'pointer' }} onClick={() => onNavigate('projectDetail', p.id)}>
@@ -132,11 +135,12 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
                             ))}
                       </td>
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        {etaDay === null ? (
-                          <span className="muted">{t('common.notEstimable')}</span>
+                        {eta === null ? (
+                          <span className="muted">{t('project.list.eta.unavailable')}</span>
                         ) : (
                           <>
-                            {t('project.eta.estimated').replace('{day}', String(etaDay))}
+                            {t(eta.source === 'estimated' ? 'project.list.eta.estimated' : 'project.list.eta.planned')
+                              .replace('{day}', String(eta.day))}
                             {lateDays !== null && lateDays > 0 && (
                               <span className="negative" style={{ marginLeft: 4 }}>
                                 {t('project.eta.late').replace('{n}', String(lateDays))}

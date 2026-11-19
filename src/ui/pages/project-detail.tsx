@@ -9,9 +9,20 @@ import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
-import { normalizeCancellationReason, projectCancelledDay, resolveProjectStatus } from '@ui/components/project-status'
+import { normalizeCancellationReason, projectCancelledDay, resolveProjectStatus, type CancelReasonKind } from '@ui/components/project-status'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
+
+/** 详情取消横幅标题（唯一权威：TASK-M1.1-UI-001-FIX2 §10，与 §3.4 弹窗口径一致），详情留给弹窗 */
+const CANCEL_BANNER_TITLE_KEY: Record<CancelReasonKind, string> = {
+  pause_timeout: 'project.banner.cancel.title.pause_timeout',
+  player_decision: 'project.banner.cancel.title.player_decision',
+  scope_became_unviable: 'project.banner.cancel.title.scope_became_unviable',
+  team_dissolved: 'project.banner.cancel.title.team_dissolved',
+  market_window_missed: 'project.banner.cancel.title.market_window_missed',
+  legacy: 'project.banner.cancel.title.unknown',
+  unknown: 'project.banner.cancel.title.unknown',
+}
 
 export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const store = useGameStore()
@@ -52,11 +63,9 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const isManualPause = project.isPaused && !isExhausted && project.pauseReason === 'manual'
   const pausedDays = project.pausedDays ?? 0
   const nearTimeout = project.isPaused && pausedDays >= 50
-  const cancelledByTimeout = project.phase === 'CANCELLED' && project.cancellationReason === 'pause_timeout'
-  // 主动取消 / 历史存档缺原因：与超时自动取消分开呈现（图标 ✕ 灰）
+  // 取消态：超时自动取消（⛔ 红）与其它原因（✕ 灰）分色呈现；标题按 cancellationReason 分流（N-7）
   const cancelledStatusKind = project.phase === 'CANCELLED' ? resolveProjectStatus(project) : null
-  const cancelledByUser = cancelledStatusKind === 'cancelled_user'
-  const cancelledWithoutReason = cancelledStatusKind === 'cancelled_generic'
+  const cancelledByTimeout = cancelledStatusKind === 'cancelled_timeout'
   const cancelReasonKind = normalizeCancellationReason(project.cancellationReason)
   const cancelledDay = projectCancelledDay(project)
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
@@ -259,23 +268,18 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           )}
         </div>
       )}
-      {cancelledByTimeout && (
-        <div className="panel" style={{ borderColor: '#b3423a', background: 'rgba(179,66,58,0.10)' }}>
-          <p className="negative" style={{ fontSize: 13, margin: 0 }}>
-            ⛔ {t('project.banner.cancelledTimeout').replace('{day}', String(cancelledDay))}
-          </p>
-          <div className="flex-gap" style={{ marginTop: 10 }}>
-            <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>
-          </div>
-        </div>
-      )}
-      {(cancelledByUser || cancelledWithoutReason) && (
-        <div className="panel" style={{ borderColor: '#8b93a1', background: 'rgba(139,147,161,0.10)' }}>
-          <p style={{ color: '#8b93a1', fontSize: 13, margin: 0 }}>
-            ✕ {cancelledByUser
-              ? t(cancelReasonKind === 'scope_became_unviable' ? 'project.banner.cancelledScope' : 'project.banner.cancelledUser')
-                  .replace('{day}', String(cancelledDay))
-              : t('project.banner.cancelledGeneric')}
+      {cancelledStatusKind !== null && (
+        <div
+          className="panel"
+          style={cancelledByTimeout
+            ? { borderColor: '#b3423a', background: 'rgba(179,66,58,0.10)' }
+            : { borderColor: '#8b93a1', background: 'rgba(139,147,161,0.10)' }}
+        >
+          <p
+            className={cancelledByTimeout ? 'negative' : undefined}
+            style={{ color: cancelledByTimeout ? undefined : '#8b93a1', fontSize: 13, margin: 0 }}
+          >
+            {cancelledByTimeout ? '⛔' : '✕'} {t(CANCEL_BANNER_TITLE_KEY[cancelReasonKind])}
           </p>
           <div className="flex-gap" style={{ marginTop: 10 }}>
             <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>

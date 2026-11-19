@@ -7,10 +7,12 @@ import { Projects } from '@ui/pages/projects'
 import { ProjectDetail } from '@ui/pages/project-detail'
 import { NewProject } from '@ui/pages/new-project'
 import { Finance } from '@ui/pages/finance'
+import { Products } from '@ui/pages/products'
+import { ProductDetail } from '@ui/pages/product-detail'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
 
-type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance'
+type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail'
 
 interface NavItem { key: Route; label: string }
 
@@ -21,6 +23,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'projects', label: t('nav.projects') },
   { key: 'newProject', label: t('nav.newProject') },
   { key: 'finance', label: t('nav.finance') },
+  { key: 'products', label: t('nav.products') },
 ]
 
 const SPEEDS: { value: CalendarSpeed; label: string }[] = [
@@ -41,8 +44,14 @@ export const GameShell: React.FC = () => {
 
   const [route, setRoute] = React.useState<Route>('overview')
   const [projectDetailId, setProjectDetailId] = React.useState<string | null>(null)
+  const [productDetailId, setProductDetailId] = React.useState<string | null>(null)
 
   const handleNavigate = (r: string, param?: string) => {
+    if (r === 'productDetail' && param) {
+      setProductDetailId(param)
+      setRoute('productDetail')
+      return
+    }
     if (r === 'projectDetail' && param) {
       setProjectDetailId(param)
       setRoute('projectDetail')
@@ -70,6 +79,8 @@ export const GameShell: React.FC = () => {
       case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
       case 'newProject': return <NewProject onNavigate={handleNavigate} />
       case 'finance': return <Finance />
+      case 'products': return <Products onNavigate={handleNavigate} />
+      case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />
       default: return <Overview onNavigate={handleNavigate} />
     }
   }

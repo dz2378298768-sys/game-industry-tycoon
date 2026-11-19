@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 `main` HEAD **`d27dd5c53e946937616c1e62384506a19342d444`**（与 `origin/main` **0/0** 对齐；`git rev-list --left-right --count origin/main...HEAD` = `0 0`）。工作区含 M2 第一批**未 commit**改动（M2-A / M2-B / M2-C / **M2-D** 均 CLOSED）。最新全量核验（真实退出码，2026-11-19）：**51 文件 / 491 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → **M2-F 51/491**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A **CLOSED**、M2-B **CLOSED**、**M2-C CLOSED**、M2-D CLOSED、M2-E CLOSED、**M2-F CLOSED**（营销与发行合同） |
+| 当前基线 | 本地 `main` HEAD **`3ceab05`**（M2-F 已推送，`origin/main` 0/0）。最新全量核验（真实退出码，2026-11-20）：**52 文件 / 508 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → M2-F 51/491 → **M2-G 52/508**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A/B/C/D/E/F **CLOSED**、**M2-G CLOSED**（UI + i18n） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -81,7 +81,9 @@
 | DESIGN-M2-001-E | M2-E 存档 v1→v2 迁移规格（canMigrate / migrateSave / 1→2 步骤 / 备份 / parseSave 接入 / 26 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | PLAN D-07 + DESIGN-M2-001-D v1.2 三字段 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）→ v1.2（偏差回写）** | P1：返回类型未定义 / 备份单槽丢档 / 迁移档白送冷却；D-N1~D-N3 已回写 | 已实现并交付 |
 | TASK-M2-001-E | M2-E 存档迁移编码任务（26 例 + 反证 4 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-E v1.2（CLOSED） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0；D-N1~D-N3 偏差登记） | 26 例全绿；反证 4/4 变红（不补价/覆盖备份/重算历史/断迁移接线）；四命令全 0（50/458，build 2.94s） | 待 Owner 决定 commit/push |
 | DESIGN-M2-001-F | M2-F 营销渠道与发行合同规格（3 渠道 / 2 类合同 / 跨日退款冲减 / 7 事件 / 8 错误码 / 33 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | PLAN D-08 + B v1.2 销售公式 + E v1.2 存档 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）→ v1.2（偏差回写）** | P1：衰减与投放顺序冲突 / 跨日退款多付 / 里程碑口径歧义；D-N1~D-N3 已回写 | 已实现并交付 |
-| TASK-M2-001-F | M2-F 营销与合同编码任务（33 例 + 反证 4 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-F v1.2（CLOSED） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0） | 33 例全绿；反证 4/4 变红（幂等重复计费/缺冲减/无边际递减/里程碑未完成）；四命令全 0（51/491） | 待 Owner 决定 commit/push |
+| TASK-M2-001-F | M2-F 营销与合同编码任务（33 例 + 反证 4 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-F v1.2（CLOSED） | `3ceab05` | **编码审核 PASS**（P1=0/P2=0） | 33 例全绿；反证 4/4 变红（幂等重复计费/缺冲减/无边际递减/里程碑未完成）；四命令全 0（51/491） | 已推送 |
+| DESIGN-M2-001-G | M2-G 销售/退款/定价/营销 UI 与 i18n 规格（净收入口径 / join 规则 / 14 错误码 / 17 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | PLAN D-09 + A~F 字段语义 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）** | P1：净收入口径未写死 / join 规则缺失 / 14 错误码未入映射；P2：按钮禁用态、预算单位 | 已实现并交付 |
+| TASK-M2-001-G | M2-G UI + i18n 编码任务（17 例 + 反证 3 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-G v1.1（READY） | working tree（待 commit） | **编码审核 PASS**（P1=0/P2=0；G-N1~G-N4 偏差登记） | 17 例全绿；反证 3/3 变红（pending 计入/按件数×单价/删错误码映射）；四命令全 0（52/508，build 2.99s） | 待 Owner 决定 commit/push |
 | PLAN-M2-REMAINING-001 | M2 后续批次进度规划与设计裁定（D→E→F→G、12 项裁定、D 的具体细节、止损规则） | M2 | 设计负责人（主 AI 代行） | **CLOSED** | P1 | M2-A/B/C CLOSED | — | 设计自裁定（D-01~D-12，无需 Owner 追认；commit/push 仍归 Owner） | D 的具体细节已锁：阶段阈值 21/90/180/365、双价格字段、折扣冷静期 14 天 + 5%~50%、6 错误码、36 例密度 | 已生效；下一步产出 `DESIGN-M2-001-D-PRICING.md` v1.0 并过 R1 |
 
 ---

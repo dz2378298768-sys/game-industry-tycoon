@@ -5,6 +5,9 @@ import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
 import type { Project } from '@domain/entities/project'
 import type { Product } from '@domain/entities/product'
+import type { RefundBatch } from '@domain/entities/refund-batch'
+import type { MarketingCampaign } from '@domain/entities/marketing-campaign'
+import type { PublishingContract } from '@domain/entities/publishing-contract'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
 import { BUDGET_TOP_UP_EVENT, recomputeRemaining } from '@domain/value-objects'
@@ -17,7 +20,7 @@ interface ActionResult { success: boolean; message?: string | undefined }
 interface BudgetActionResult extends ActionResult { errorCode?: string | undefined; idempotent?: boolean | undefined }
 
 /** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2 / §9.1，按领域实际字符串逐字匹配） */
-const ERROR_I18N: Record<string, string> = {
+export const ERROR_I18N: Record<string, string> = {
   NO_COMPANY: 'error.noCompany',
   FIN_COMPANY_BANKRUPT: 'error.finCompanyBankrupt',
   PRJ_COMPANY_INACTIVE: 'error.prjCompanyInactive',
@@ -46,6 +49,21 @@ const ERROR_I18N: Record<string, string> = {
   PRJ_QA_INCOMPLETE: 'error.prjQaIncomplete',
   PRJ_PRODUCT_EXISTS: 'error.prjProductExists',
   PRJ_INVALID_TRANSITION: 'error.prjInvalidTransition',
+  // M2-C/D/F：定价 / 营销 / 合同（DESIGN-M2-001-G P1-3，共 14 码）
+  PRICE_COOLDOWN: 'error.priceCooldown',
+  PRICE_RANGE: 'error.priceRange',
+  PRICE_DISCOUNT_RANGE: 'error.priceDiscountRange',
+  PRICE_LIFECYCLE_LOCKED: 'error.priceLifecycleLocked',
+  LIFECYCLE_NOT_ELAPSED: 'error.lifecycleNotElapsed',
+  PRD_NOT_FOUND: 'error.prdNotFound',
+  MARKETING_PRODUCT_NOT_FOUND: 'error.marketingProductNotFound',
+  MARKETING_PRODUCT_NOT_ACTIVE: 'error.marketingProductNotActive',
+  MARKETING_BUDGET_OUT_OF_RANGE: 'error.marketingBudgetOutOfRange',
+  CONTRACT_PRODUCT_NOT_LAUNCHED: 'error.contractProductNotLaunched',
+  CONTRACT_RATE_OUT_OF_RANGE: 'error.contractRateOutOfRange',
+  CONTRACT_THRESHOLD_OUT_OF_RANGE: 'error.contractThresholdOutOfRange',
+  CONTRACT_ALREADY_ACTIVE: 'error.contractAlreadyActive',
+  CONTRACT_NOT_FOUND: 'error.contractNotFound',
 }
 
 /** 错误码优先映射 i18n；无错误码时回退领域文案，再回退通用文案 */
@@ -61,6 +79,9 @@ interface GameStore {
   employees: Employee[]
   projects: Project[]
   products: Product[]
+  refundBatches: RefundBatch[]
+  marketingCampaigns: MarketingCampaign[]
+  publishingContracts: PublishingContract[]
   transactions: Transaction[]
   dayIndex: number
   speed: CalendarSpeed
@@ -88,6 +109,12 @@ interface GameStore {
   delayLaunch(projectId: string, extraDays: number): BudgetActionResult
   assignEmployeeToProject(employeeId: string, projectId: string, allocationRatio: number, roleOnProject: ProjectRole): ActionResult
   unassignEmployeeFromProject(employeeId: string, projectId: string): ActionResult
+  setProductPrice(productId: string, priceCents: number): BudgetActionResult
+  applyProductDiscount(productId: string, ratePercent: number): BudgetActionResult
+  retireProduct(productId: string): BudgetActionResult
+  setMarketingBudget(productId: string, channel: 'social' | 'expo' | 'ads', dailyBudgetCents: number): BudgetActionResult
+  signRevenueShare(productId: string, ratePercent: number, durationDays: number | null): BudgetActionResult
+  signMilestone(productId: string, thresholdNetRevenueCents: number, payoutCents: number, durationDays: number | null): BudgetActionResult
   advanceDays(days: number): void
   setSpeed(speed: CalendarSpeed): void
   refresh(): void
@@ -105,6 +132,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   employees: [],
   projects: [],
   products: [],
+  refundBatches: [],
+  marketingCampaigns: [],
+  publishingContracts: [],
   transactions: [],
   dayIndex: 0,
   speed: 'paused',
@@ -331,6 +361,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
+  setProductPrice(productId, priceCents) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.setProductPrice({ productId, priceCents })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.priceSaved') : localizeError(r.errorCode, r.message) }
+  },
+
+  applyProductDiscount(productId, ratePercent) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.applyProductDiscount({ productId, ratePercent })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.discountSaved') : localizeError(r.errorCode, r.message) }
+  },
+
+  retireProduct(productId) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.retireProduct({ productId })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.retired') : localizeError(r.errorCode, r.message) }
+  },
+
+  setMarketingBudget(productId, channel, dailyBudgetCents) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.setMarketingBudget({ productId, channel, dailyBudgetCents })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('marketing.saved') : localizeError(r.errorCode, r.message) }
+  },
+
+  signRevenueShare(productId, ratePercent, durationDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signRevenueShareContract({ productId, ratePercent, durationDays })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  signMilestone(productId, thresholdNetRevenueCents, payoutCents, durationDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signMilestoneContract({ productId, thresholdNetRevenueCents, payoutCents, durationDays })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
   unassignEmployeeFromProject(employeeId, projectId) {
     const gw = get().game
     if (!gw) return { success: false, message: t('error.noCompany') }
@@ -365,6 +443,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       employees: gw.world.employees,
       projects: gw.world.projects,
       products: gw.world.products,
+      refundBatches: gw.world.refundBatches,
+      marketingCampaigns: gw.world.marketingCampaigns,
+      publishingContracts: gw.world.publishingContracts,
       transactions: company ? gw.finance.getTransactionsByCompany(company.id) : [],
       dayIndex: gw.calendar.currentDayIndex,
     })

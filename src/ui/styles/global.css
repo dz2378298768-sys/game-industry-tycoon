@@ -361,3 +361,34 @@ table.data-table tr:hover td {
 .mb-16 { margin-bottom: 16px; }
 .mb-24 { margin-bottom: 24px; }
 .mt-16 { margin-top: 16px; }
+
+/* Company-level alert banner (slot A, DESIGN-UI-LAYER §2.1) */
+.company-alerts {
+  padding: 10px 16px 0;
+}
+.alert-banner {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.alert-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.alert-title-strong {
+  font-size: 14px;
+}
+.alert-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+.alert-actions {
+  margin-top: 8px;
+}
+.badge.risk {
+  background: rgba(201, 168, 101, 0.14);
+  color: var(--gold);
+  border-color: rgba(201, 168, 101, 0.55);
+}

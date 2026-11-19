@@ -6,17 +6,12 @@ import type { Discipline } from '@domain/enums'
 import type { Project } from '@domain/entities/project'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
+import { selectRiskBadges } from '@ui/components/project-actions'
 import { isCancelledStatus, projectCancelledDay, resolveProjectStatus } from '@ui/components/project-status'
 
 interface Props { onNavigate: (route: string, param?: string) => void }
 
 type ProjectFilter = 'all' | 'paused' | 'cancelled'
-
-/** 风险标记 → i18n 键；未登记标记原样显示，不编造文案 */
-const RISK_LABEL_KEY: Record<string, string> = {
-  budget_exhausted: 'project.risk.budget_exhausted',
-  quality_risk: 'project.risk.quality_risk',
-}
 
 export const Projects: React.FC<Props> = ({ onNavigate }) => {
   const { projects, employees, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
@@ -126,13 +121,17 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
                         <ProjectStatusBadge project={p} showPausedDays currentDay={dayIndex} />
                       </td>
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        {p.riskFlags.length === 0
-                          ? '—'
-                          : p.riskFlags.map(flag => (
-                              <span key={flag} className="badge" style={{ marginRight: 4 }}>
-                                {RISK_LABEL_KEY[flag] ? t(RISK_LABEL_KEY[flag]!) : flag}
-                              </span>
-                            ))}
+                        {(() => {
+                          const badges = selectRiskBadges(p)
+                          if (badges.length === 0) return '—'
+                          return badges.map(badge => (
+                            <span key={badge.flag} className="badge risk" style={{ marginRight: 4 }} data-risk={badge.flag}>
+                              {badge.value === undefined
+                                ? t(badge.key)
+                                : t(badge.key).replace(badge.placeholder!, String(badge.value))}
+                            </span>
+                          ))
+                        })()}
                       </td>
                       <td style={{ whiteSpace: 'nowrap' }}>
                         {eta === null ? (

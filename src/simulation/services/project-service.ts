@@ -333,7 +333,8 @@ export class ProjectService {
 
     if (this.deps.getCompanyStatus) {
       const status = this.deps.getCompanyStatus(p.companyId)
-      if (status !== 'active') return fail('PRJ_COMPANY_INACTIVE', 'Company is not active')
+      // 仅终止态（dissolved）拦截；bankrupt 仍可上市（DESIGN-OI-21 §2.2 / T-FIX-2）
+      if (status === 'dissolved') return fail('PRJ_COMPANY_INACTIVE', 'Company is dissolved')
     }
     if (this.deps.hasProductForProject?.(p.id)) {
       return fail('PRJ_PRODUCT_EXISTS', 'Product already exists for this project')
@@ -458,5 +459,174 @@ export class ProjectService {
 
   computeWorkRemaining(project: Project): Record<Discipline, number> {
     return { ...project.workRemainingByDiscipline }
+  }
+
+  // ============ 砍范围 descope（DESIGN-C-01） ============
+
+  /** 固定档位（DESIGN-C-01 §2.3） */
+  private static readonly VALID_CUT_RATIOS: readonly number[] = [0.1, 0.2, 0.3]
+
+  private static readonly MAX_TOTAL_CUT = 0.5
+  private static readonly MIN_WORK_PER_DISCIPLINE = 10
+
+  descope(cmd: {
+    projectId: string
+    cutRatio: number
+    dayIndex: number
+  }): CommandResult<Project> {
+    const p = this.assertProject(cmd.projectId)
+
+    // 1. cutRatio 合法性（固定档位）
+    if (!ProjectService.VALID_CUT_RATIOS.includes(cmd.cutRatio)) {
+      return fail('PRJ_INVALID_CUT_RATIO', `cutRatio must be one of ${ProjectService.VALID_CUT_RATIOS.join(', ')}`)
+    }
+
+    // 2. 阶段守卫（DESIGN-C-01 §2.3 / §4.1）
+    const allowedPhases = new Set<ProjectPhase>(['CONCEPT', 'PRE_PRODUCTION', 'PRODUCTION', 'QA'])
+    if (!allowedPhases.has(p.phase)) {
+      return fail('PRJ_SCOPE_TERMINAL', `Cannot descope in phase ${p.phase}`)
+    }
+
+    // 3. 累计上限守卫（DESIGN-C-01 §2.3）
+    const currentCut = p.scopeCutRatio ?? 0
+    const totalCut = currentCut + cmd.cutRatio
+    if (totalCut > ProjectService.MAX_TOTAL_CUT) {
+      return fail('PRJ_MAX_DESCIPE_REACHED', `Total cut ${totalCut.toFixed(2)} would exceed max ${ProjectService.MAX_TOTAL_CUT}`)
+    }
+
+    // 4. 工作量重算（DESIGN-C-01 §2.2）
+    const workTotal = { ...p.workTotalByDiscipline }
+    const workRemaining = { ...p.workRemainingByDiscipline }
+
+    // design / programming / art
+    for (const d of ['design', 'programming', 'art'] as const) {
+      const newTotal = Math.max(ProjectService.MIN_WORK_PER_DISCIPLINE, Math.round(workTotal[d] * (1 - cmd.cutRatio)))
+      const newRemaining = Math.round(workRemaining[d] * (1 - cmd.cutRatio))
+      workTotal[d] = newTotal
+      workRemaining[d] = newRemaining
+    }
+
+    // QA 工作量重算：未进入 QA 阶段时，QA 按新 PRODUCTION 总量派生；已进入 QA 时，QA total 重算但 remaining 重置为 total
+    const totalProd = workTotal.design + workTotal.programming + workTotal.art
+    const qaNewTotal = Math.max(TUNING.project.minQaWorkPoints, Math.round(totalProd * TUNING.project.qaWorkRatio))
+    if (p.phase === 'QA') {
+      // 已进入 QA：重算 total 并重置 remaining（DESIGN-C-01 §2.3 / §4.3）
+      workTotal.qa = qaNewTotal
+      workRemaining.qa = qaNewTotal // 进度清 0
+    } else {
+      // 未进入 QA：直接按 PRODUCTION 总量派生；QA total 和 remaining 保持同步
+      workTotal.qa = qaNewTotal
+      workRemaining.qa = qaNewTotal
+    }
+
+    // 5. 质量目标更新（DESIGN-C-01 §2.2）：半系数、不低于 30
+    const newQualityTargets = { ...p.qualityTargets }
+    for (const key of Object.keys(newQualityTargets) as (keyof typeof newQualityTargets)[]) {
+      const cur = newQualityTargets[key]
+      newQualityTargets[key] = Math.max(30, Math.round(cur * (1 - cmd.cutRatio * 0.5)))
+    }
+
+    // 6. riskFlags 去重（DESIGN-C-01 §3.2 includes 去重模式）
+    const riskFlags = p.riskFlags.includes('scope_descoped')
+      ? p.riskFlags
+      : [...p.riskFlags, 'scope_descoped']
+
+    const next: Project = {
+      ...p,
+      workTotalByDiscipline: workTotal,
+      workRemainingByDiscipline: workRemaining,
+      qualityTargets: newQualityTargets,
+      riskFlags,
+      scopeCutRatio: totalCut,
+      changeLog: [
+        ...p.changeLog,
+        {
+          id: uuid(),
+          type: 'update' as const,
+          timestampDay: cmd.dayIndex,
+          details: {
+            event: 'scope_descoped',
+            cutRatio: cmd.cutRatio,
+            totalCutRatio: totalCut,
+          },
+        },
+      ],
+      version: p.version + 1,
+      updatedAt: cmd.dayIndex,
+    }
+
+    return ok(this.updateInPlace(next))
+  }
+
+  // ============ 延期上市 delayLaunch（DESIGN-C-02） ============
+
+  /** 固定档位（DESIGN-C-02 §2.3） */
+  private static readonly VALID_DELAY_DAYS: readonly number[] = [30, 60, 90]
+  /** 延期上限比例（DESIGN-C-02 §2.3）：originalPlannedLaunchDay × 1.5 */
+  private static readonly MAX_DELAY_RATIO = 0.5
+
+  delayLaunch(cmd: {
+    projectId: string
+    extraDays: number
+    dayIndex: number
+  }): CommandResult<{ project: Project; brandPenalty: number }> {
+    const p = this.assertProject(cmd.projectId)
+
+    // 1. extraDays 合法性（固定档位）
+    if (!ProjectService.VALID_DELAY_DAYS.includes(cmd.extraDays)) {
+      return fail('PRJ_INVALID_DELAY_DAYS', `extraDays must be one of ${ProjectService.VALID_DELAY_DAYS.join(', ')}`)
+    }
+
+    // 2. 阶段守卫（DESIGN-C-02 §2.3 / §4.1）——与 descope 共用相同的允许阶段集合
+    const allowedPhases = new Set<ProjectPhase>(['CONCEPT', 'PRE_PRODUCTION', 'PRODUCTION', 'QA'])
+    if (!allowedPhases.has(p.phase)) {
+      return fail('PRJ_LAUNCH_DELAY_TERMINAL', `Cannot delay launch in phase ${p.phase}`)
+    }
+
+    // 3. 延期上限守卫（DESIGN-C-02 §2.3 / §4.3）
+    const original = p.originalPlannedLaunchDay ?? p.plannedLaunchDay
+    const maxLaunchDay = Math.round(original * (1 + ProjectService.MAX_DELAY_RATIO))
+    const newLaunchDay = p.plannedLaunchDay + cmd.extraDays
+    if (newLaunchDay > maxLaunchDay) {
+      return fail(
+        'PRJ_LAUNCH_DELAY_EXCEEDS_MAX',
+        `Delayed launch day ${newLaunchDay} would exceed max ${maxLaunchDay}`,
+      )
+    }
+
+    // 4. 品牌惩罚（DESIGN-C-02 §2.2）：每 30 天 −1 点，最少 −1
+    const brandPenalty = Math.max(1, Math.round(cmd.extraDays / 30))
+
+    // 5. riskFlags 去重（DESIGN-C-02 §2.2 同 DESIGN-C-01 includes 去重模式）
+    const riskFlags = p.riskFlags.includes('launch_delayed')
+      ? p.riskFlags
+      : [...p.riskFlags, 'launch_delayed']
+
+    const next: Project = {
+      ...p,
+      plannedLaunchDay: newLaunchDay,
+      // 首次延期时从当前 plannedLaunchDay 复制（DESIGN-C-02 §2.2）
+      originalPlannedLaunchDay: p.originalPlannedLaunchDay ?? p.plannedLaunchDay,
+      launchDelayDays: (p.launchDelayDays ?? 0) + cmd.extraDays,
+      riskFlags,
+      changeLog: [
+        ...p.changeLog,
+        {
+          id: uuid(),
+          type: 'update' as const,
+          timestampDay: cmd.dayIndex,
+          details: {
+            event: 'launch_delayed',
+            extraDays: cmd.extraDays,
+            brandPenalty,
+          },
+        },
+      ],
+      version: p.version + 1,
+      updatedAt: cmd.dayIndex,
+    }
+
+    this.updateInPlace(next)
+    return ok({ project: next, brandPenalty })
   }
 }

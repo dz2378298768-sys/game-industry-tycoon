@@ -12,13 +12,16 @@
 
 ## 0. 项目基线（接手必读，勿重复询问）
 
-- 仓库：`dz2378298768-sys/game-industry-tycoon`，分支 `main`；代码基线提交 **`405f4c4`**（`9e474de` 之后仅文档与元数据提交）。已 push，本地与远程同步（`git rev-list --count origin/main..HEAD` = 0 为判据；**不要硬编码 HEAD SHA**，文档提交会让它变）。
-- 设计冻结版本：`2.1.7-final-freeze`；当前阶段 M1.1 收尾；M1.2 与 M2 冻结。
-- 工程基线（实测 2026-11-19，代码同 `9e474de`，其后无代码改动）：**22 测试文件 / 173 用例通过、0 skip**，typecheck / `lint:check` / build 全绿（注意：本项目**没有** `npm run lint`，实际脚本是 `lint:check`）。
-- 已闭环编码任务（全部经独立审核 PASS 或 PASS_WITH_NOTES 并 CLOSED）：001-A（预算公式）、D01-001（暂停超时）、CANCEL-FIX（手动取消缺陷）、001-B（成本分摊+工资归属）、001-C（预算耗尽）、001-D（追加预算+存档校验）、TERMINAL-CLEANUP（终态清理）、001-E（预算 UI）、E-FIX、UI-001（四态状态 UI+取消原因弹窗）、UI-001-FIX、UI-001-FIX2（横幅分流/焦点/ETA）、UI-001-FIX3（徽标分流+映射单源）、TERMINAL-RELEASE-001（终态解绑，S-1 整改）、META-VERSION-TAG。共 14 项 `TASK-` 编码任务 + 1 项元数据任务（原写"共 15 项"未含 TERMINAL-RELEASE，计数口径以台账 §2 主表为准）。
+- 仓库：`dz2378298768-sys/game-industry-tycoon`，分支 `main`；代码基线 working tree（M1.2 首批 4 任务 + 第二批 UI 层改动均在工作区未 commit）。已 push，本地与远程同步（`git rev-list --count origin/main..HEAD` = 0 为判据；**不要硬编码 HEAD SHA**，文档提交会让它变）。
+- 设计冻结版本：`2.1.7-final-freeze`；M1.1 已关闭、M1.2 首批 + 第二批 CLOSED、M2 冻结。
+- 工程基线（实测 2026-11-19，**真实退出码核验、无管道假象**：`cmd > /tmp/x.log 2>&1; echo EXIT:$?`，不依赖 `cmd | tail` 的退出码）：**32 测试文件 / 230 用例通过、0 skip、0 failed**，typecheck / `lint:check` / build 全绿（注意：本项目**没有** `npm run lint`，实际脚本是 `lint:check`）。
+- 已闭环编码任务（全部经独立审核 PASS 或 PASS_WITH_NOTES 并 CLOSED）：**M1.1 14 项**（001-A、D01-001、CANCEL-FIX、001-B、001-C、001-D、TERMINAL-CLEANUP、001-E、E-FIX、UI-001、UI-001-FIX、UI-001-FIX2、UI-001-FIX3、TERMINAL-RELEASE-001）+ **M1.2 首批 4 项**（OI-20 TUNING、OI-21 BANKRUPTCY、C-01 DESCOPE、C-02 DELAY-LAUNCH）+ **M1.2 第二批 1 项**（UI-LAYER：破产现金横幅 / descope & delay 弹窗 / game-store 守卫 / 错误码→toast 映射）= **19 项** `TASK-` 编码任务 + 1 项元数据任务。
+- **M1.2 首批已 CLOSED**：设计闸门 PASS_WITH_NOTES（阻塞条件已补）→ READY 闸门 → 编码（首轮 0 新测试 → REVISE_REQUIRED → 补 3 测试文件）→ 编码审核第二轮 **PASS**（5/5 反证锁住、14 条精准变红、存档兼容 11/11）。实现：tuning.ts 6 项调参 + 新增 finance 2 阈值、daily-scheduler 破产检查 + 12 命令守卫、descope 3 档位 + 50% 上限 + QA 重置、delayLaunch 3 档位 + brand penalty。UI 层（overview 横幅、project-detail 弹窗、game-store、错误码→toast 映射）由 M1.2 第二批实现并全绿（见下条）。
 - **端到端走查已执行**（`docs/UI-WALKTHROUGH-M1.1.md` v1.2，`b98c9af` + `9e474de` 各自隔离 worktree）：A~E 44 项 + F 终态 10 项 = **54 项断言全通过**、25 张引用截图；脚本归档 `docs/evidence/scripts/`（可复跑）。
 - **阶段审核已出**（`docs/REVIEW-STAGE-M1.1.md`）：技术面 **PASS_WITH_NOTES**（六维度 A~E 通过，5/5 集成场景）、体验面 **NOT_VERIFIED**——不构成阶段关闭依据。审核发现 S-1（**P1**：终态项目仍分摊工资且员工被永久占用，第二款游戏无法组队）已由 `TASK-M1.1-TERMINAL-RELEASE-001`（`9e474de`）整改并经独立复审 PASS_WITH_NOTES、**S-1 已关闭**。
-- **M1.1 当前唯一硬缺口**：真人试玩（3-5 名，需 Owner 组织，见 `docs/PLAYTEST-KICKOFF-M1.1.md`）。
+- **M1.1 已关闭**（2026-11-19，Owner 授权跳过真人试玩）：14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（终态解绑）由 `TERMINAL-RELEASE-001`（`9e474de`）修复并复审 PASS_WITH_NOTES；九项核查 **9/9 满足**（`STAGE-CHECK-M1.1.md` v1.0）。**书面决策**：Owner 原话"真人体验方面暂时不做，待后续内容较完整后体验，我授权当前阶段可关闭"，留档 `docs/DECISION-M1.1-CLOSE.md`。体验验证推迟到 M1.2 首批交付后（OI-20/OI-21 落地，玩家默认配置能走到上市）。
+- **M1.2 首批已 CLOSED**（2026-11-19，设计闸门 PASS_WITH_NOTES + 编码审核第二轮 PASS）：4 编码任务 + 5 设计规格全 CLOSED。
+- **M1.2 第二批（UI 层）已 CLOSED**（2026-11-19）：设计规格 `DESIGN-M1.2-UI-LAYER-v1.md` v1.1（设计审核 R-01..R-13 已裁定）+ 编码任务 `TASK-M1.2-UI-LAYER` 实现：破产现金横幅、descope/delay 弹窗与预览纯函数、game-store 破产态 `refresh` 兜底、错误码→toast 映射、hire/new-project/project-detail 破产 `aria-disabled`。本轮按 §13 补强补测：新增 `project-actions.test.ts`（7）、`i18n-parity.test.ts`（2），修正 `company-alert-banner.test.tsx` 边界（spec §2.1：`cash === 400_000` 为 SAFE，实现 `<` 正确、测例原边界值错误）。V11/V12/V13 UI 级覆盖待补（`TASK-M1.2-UI-COVERAGE-FOLLOWUP`，PLANNED / P2）。
 - **走查发现的产品/数值问题**（不阻断 M1.1，已登记 `docs/OPEN-ISSUES-M1.1.md` OI-19~OI-24）：概念阶段不产出但提示误导、默认 $30,000 预算 Day 130 耗尽（上市共需 $48,000）、现金可为负且无阻断、M1.1 无收入系统（属 M2）。
 - **五个角色（2026-11-19 起）**：主 AI（统筹与最终内部决策）+ 设计代理 + 设计审核代理（旧称 GDR）+ 编码代理 + 编码审核代理（旧称独立审核 AI）。子代理由主 AI 调度，无项目管理权，不能自行关闭任务或宣布阶段完成。
 - **主 AI 独占**：任务置 READY / CLOSED、设计是否送审、审核结论是否采纳、是否派发编码、阶段完成判断（最终仍须 Owner 确认）。
@@ -143,11 +146,11 @@
 
 ## 11. 阶段冻结（当前有效）
 
-- M1.1：收尾中，完成 G-05 + D-01 + pause_timeout UI + 元数据一致性 + 体验验收 + 独立审核 + Owner 确认后方可关闭。
-- M1.2：未启动，M1.1 关闭前不得发布开发任务。
+- **M1.1：已关闭**（2026-11-19，Owner 授权跳过真人试玩）。九项核查 9/9 满足（`STAGE-CHECK-M1.1.md` v1.0），书面决策 `docs/DECISION-M1.1-CLOSE.md`。14 项编码任务 + 1 项元数据任务全 CLOSED，S-1 已闭环，工程面交付完成。体验验证推迟到 M1.2 首批交付后。
+- **M1.2：首批 + 第二批（UI 层）已关闭**。首批 4 任务（OI-20 TUNING + OI-21 BANKRUPTCY + C-01 DESCOPE + C-02 DELAY-LAUNCH）设计闸门 PASS_WITH_NOTES + 编码审核第二轮 **PASS**（5/5 反证锁住、14 条精准变红）。第二批 UI 层（破产横幅 / descope & delay 弹窗 / game-store 守卫 / 错误码→toast）已实现并全绿。**32 文件 / 230 用例 / 0 skip / 0 failed / 四命令真实退出码全 0**。剩余未决 OI/C 问题及 V11/V12/V13 UI 覆盖补测（`TASK-M1.2-UI-COVERAGE-FOLLOWUP`，P2）可在 M1.2 第三批或并入 M2 启动前处理，仍须过设计闸门 + READY 闸门。
 - M2：冻结，七项阻塞（`docs/` 中 M2_BLOCKERS.md）未裁定前不启动销售/退款/营销/合同/抽成。
 - `spec/` 只读（版本元数据例外：D-05 已由 Owner 授权统一 README 版本标记，见 CHANGE-META-VERSION-TAG，规格正文零改动）。
-- SEC-01：一把具备仓库写权限的 GitHub Token 曾以明文出现在对话中，存在泄露风险。由 Owner 到 GitHub Settings → Developer settings → Personal access tokens **吊销并重签**；设计负责人不代签、不宣称已处置。此项不阻塞编码循环。
+- SEC-01：一把具备仓库写权限的 GitHub Token 曾以明文出现在对话中，存在泄露风险。由 Owner 到 GitHub Settings → Developer settings → Personal access tokens **吊销并重签**；主 AI 不代签、不宣称已处置。此项不阻塞编码循环或阶段关闭。
 
 ## 12. 设计审核代理（旧称"游戏设计审查者 / GDR"，Owner 2026-11-19 确认设立）
 
@@ -163,3 +166,33 @@
 ---
 
 **原则**：任何角色的局部任务完成，都不能代替整个开发流程的阶段判断。所有重要决定、任务和结论必须留有可追溯记录。
+
+---
+
+## 13. 证据链与反证强化（2026-11-19 流程改进，起因：M1.2 首批漏审 D1/D2）
+
+> **背景**：M1.2 首批 4 任务编码审核判 PASS，但 UI 设计审核时发现两个真实缺陷：① `cashWarningThresholdCents` 写成 `4_000_000` 美分 = $40,000（应为 $4,000 = 400,000），是主 AI 任务书单位笔误 + 编码代理未做量级自检 + 编码审核未核；② 破产后 `fireEmployee`/`launchProject` 走只返回 active 的 `getPlayerCompany()`，返回 `NO_COMPANY`，与规格"保留"承诺冲突，编码审核反证只测了"该拒绝的被拒绝"、没测"该保留的被保留"。本节为流程补强，**所有角色强制遵守**。
+
+### 13.1 主 AI 任务书：单位双写
+凡涉及金额/天数/比例的数值，任务书必须**同时写出业务值和代码单位值**，例：`L1 现金警告线 $4,000 = 400_000 cents`。不允许只写一侧。编码代理交付说明必须回填"已核对单位"。
+
+### 13.2 编码代理：规格承诺逐项核对表（强制交付物）
+编码代理交付时，除四命令，必须附一张**规格承诺核对表**：规格 §8 每条验收口径 → 对应测试文件:用例名 → 状态（已测/不适用-需说明）。**零测试覆盖的常量/行为 = 漏实现**，不得交付。
+
+### 13.3 编码审核：规格承诺完整性核对（强制步骤）
+反证测试之外，编码审核必须新增一步——**逐条读规格 §8，确认每条承诺在代码里有对应实现 + 有测试覆盖**：
+- 零覆盖的常量（如 tuning 新字段）→ 列 P1，要求补断言
+- "保留命令"类承诺（如"破产后 X 仍可用"）→ 必须有正向测试构造该态后调用 X 并断言成功，否则判 REVISE
+- 反证点的**选择**必须覆盖两个方向：既测"该拒绝的被拒绝"，也测"该保留的被保留"
+
+### 13.4 编码审核：单位量级自检（强制步骤）
+凡 `tuning.ts` 或任何数值常量改动，编码审核必须**对照同文件既有同单位常量做量级心算**（如 `startingCashCents: 6_500_000 = $65,000` → 任何新 cents 值先换算成美元读一遍）。发现量级异常直接判 P0/P1。
+
+### 13.5 设计审核：可验收性必须可落到测试
+设计审核的"可验收性"维度，每条验收口径必须写明"**用哪个测试能验证**"。写不出的 → 退回规格补充，不得放行。
+
+### 13.6 主 AI：声称"已修复/已完成"必须附证据
+主 AI 向 Owner 汇报任何"已完成/已修复"结论，必须同步给出：① 可点击文件引用（精确到行范围 `file:///...#Lx-Ly`）；② 关键改动 before/after 片段；③ 单一结论（改了什么、影响什么）。不得用"累计 commit 数"或"四命令全绿"替代可审计证据。
+
+### 13.7 四命令全绿 ≠ 正确
+`vitest` 全绿只证明"现有测试没被破坏"，**不证明新功能被测试覆盖、更不证明规格承诺被实现**。任何角色不得单凭四命令全绿就宣称任务完成。

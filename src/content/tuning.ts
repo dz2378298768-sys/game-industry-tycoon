@@ -21,11 +21,11 @@ export interface FatigueThresholdMultiplier {
 
 export const TUNING = {
   dataStatus: 'TUNING' as const,
-  version: 1,
+  version: 2,
 
   company: {
     /** 单位：美分。公司初始现金，只能由 FinanceService 的初始化交易入账一次。 */
-    startingCashCents: 5_000_000,
+    startingCashCents: 6_500_000,
     /** 单位：0-100 分。 */
     startingBrand: 10,
     /** 单位：0-100 分。 */
@@ -46,7 +46,7 @@ export const TUNING = {
     /** 单位：月薪倍数。解雇补偿 = 月薪 × 本值。 */
     severanceMonths: 1,
     /** 单位：美分/月。招聘界面默认建议月薪（应用城市系数前）。 */
-    defaultStartingSalaryCents: 200_000,
+    defaultStartingSalaryCents: 130_000,
     /** 单位：0-100。士气回归基准。 */
     moraleBaseline: 70,
     /** 单位：比例/天。士气向基准回归的速率：morale += (基准 - morale) × 本值。 */
@@ -88,16 +88,16 @@ export const TUNING = {
     /** 单位：完成度比例。制作 → 测试的门槛（设计/程序/美术三项都需达到）。 */
     productionCompletionThreshold: 0.9,
     /** 单位：比例。QA 工作量 = 制作三学科总量 × 本值。 */
-    qaWorkRatio: 0.2,
+    qaWorkRatio: 0.15,
     /** 单位：倍率。预算换算工作量的下限系数。 */
     budgetFactorMin: 0.5,
     /** 单位：倍率。预算换算工作量的上限系数。 */
     budgetFactorMax: 4,
     /** 单位：工作点/百万美分预算。各学科基准工作量。 */
     workPerMillionBudget: {
-      design: 100,
-      programming: 150,
-      art: 120,
+      design: 65,
+      programming: 98,
+      art: 78,
     },
     /** 单位：工作点。QA 工作量的最小保底值，避免小预算项目 QA 瞬间完成。 */
     minQaWorkPoints: 40,
@@ -113,6 +113,10 @@ export const TUNING = {
   finance: {
     /** 单位：比例。预算使用超过该比例时产生警告（不强制取消）。 */
     budgetOverrunWarnAt: 1.0,
+    /** 单位：美分。L1 现金警告线：现金低于此值（≥0）触发顶部警告横幅（DESIGN-OI-21 §2.1）。400_000 = $4,000。 */
+    cashWarningThresholdCents: 400_000,
+    /** 单位：美分。L2 破产线：现金低于此值触发公司 status='bankrupt'（DESIGN-OI-21 §2.1）。 */
+    cashBankruptThresholdCents: 0,
   },
 } as const
 

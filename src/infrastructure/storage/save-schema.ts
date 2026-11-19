@@ -112,6 +112,12 @@ const projectSchema = z
     budgetExhausted: z.boolean().default(false),
     /** DESIGN-G05 §7.1 GDR R2：耗尽事件幂等键恢复周期序号；旧存档缺省 0 */
     resumeSeq: z.number().int().nonnegative().default(0),
+    /** DESIGN-C-01 §3.1：累计砍范围比例；旧存档缺省 0 */
+    scopeCutRatio: z.number().min(0).max(0.5).default(0),
+    /** DESIGN-C-02 §3.1：原始 plannedLaunchDay；旧存档缺省 null */
+    originalPlannedLaunchDay: z.number().int().nonnegative().nullable().default(null),
+    /** DESIGN-C-02 §3.1：累计延期天数；旧存档缺省 0 */
+    launchDelayDays: z.number().int().nonnegative().default(0),
     /**
      * DESIGN-G05 §7.3 读档一致性：预算公式快照。
      * 旧存档缺省 undefined → 校验跳过（值由权威公式推导，无漂移风险）。

@@ -9,6 +9,7 @@ import {
   budgetExhaustedEventKey,
   createBudgetExhaustedEvent,
   createPauseTimeoutCancelledEvent,
+  createCompanyBankruptedEvent,
 } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
@@ -67,7 +68,10 @@ export class DailyScheduler {
     state = this.applyMonthlySettlement(state, dayIndex)
     // 预算耗尽在当日所有工资分摊/合同付款/直接支出入账后统一判定一次（DESIGN-G05 §6.1）
     state = this.applyBudgetExhaustion(state, dayIndex)
-    return this.syncCompanyCash(state)
+    state = this.syncCompanyCash(state)
+    // 破产检查：公司现金为负时触发 status='bankrupt'（DESIGN-OI-21 §2.3）
+    state = this.applyBankruptcyCheck(state, dayIndex)
+    return state
   }
 
   // ---------- 暂停计时与超时自动取消（D-01） ----------
@@ -276,7 +280,7 @@ export class DailyScheduler {
     const updatedProjects = new Map<string, Project>()
 
     for (const company of state.companies) {
-      if (company.status !== 'active') continue
+      // 破产公司仍需继续支付工资和租金（DESIGN-OI-21 §6.3：固定结算不受破产状态影响）
 
       for (const emp of state.employees) {
         // 离职员工不参与工资分摊（DESIGN-G05 §3.3 唯一例外）
@@ -452,6 +456,48 @@ export class DailyScheduler {
       return balance === c.cashBalanceCents ? c : { ...c, cashBalanceCents: balance }
     })
     return { ...state, companies }
+  }
+
+  /**
+   * 破产检查（DESIGN-OI-21 §2.3）：
+   *
+   * - 唯一检查时点：每日调度末尾、syncCompanyCash 之后执行一次。
+   * - 判据：balance < TUNING.finance.cashBankruptThresholdCents（默认 0）。
+   * - 效果：company.status 从 'active' → 'bankrupt'，记录领域事件 CompanyBankrupted。
+   * - 幂等：仅对 status==='active' 的公司执行，已 bankrupt/dissolved 的跳过。
+   */
+  private applyBankruptcyCheck(state: WorldState, dayIndex: number): WorldState {
+    const threshold = TUNING.finance.cashBankruptThresholdCents
+    const events: DomainEvent[] = []
+    let changed = false
+
+    const companies = state.companies.map((c) => {
+      if (c.status !== 'active') return c
+      const balance = this.deps.finance.getCashBalance(c.id)
+      if (balance >= threshold) return c
+      changed = true
+      events.push(
+        createCompanyBankruptedEvent(
+          uuid(),
+          c.id,
+          dayIndex,
+          balance,
+        ),
+      )
+      return {
+        ...c,
+        status: 'bankrupt' as const,
+        version: c.version + 1,
+        updatedAt: dayIndex,
+      }
+    })
+
+    if (!changed) return state
+    return {
+      ...state,
+      companies,
+      events: [...state.events, ...events],
+    }
   }
 }
 

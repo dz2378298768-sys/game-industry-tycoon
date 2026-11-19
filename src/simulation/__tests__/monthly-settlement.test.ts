@@ -83,6 +83,7 @@ describe('财务月度结算 (D12-D15)', () => {
       audienceSegmentIds: ['arcade_enthusiasts'],
     })
     expect(out.success).toBe(false)
-    expect(out.errorCode).toBe('FIN_DISTRESS')
+    // 推进 800 天后公司早已破产（DESIGN-OI-21），破产守卫优先于 FIN_DISTRESS
+    expect(['FIN_COMPANY_BANKRUPT', 'FIN_DISTRESS']).toContain(out.errorCode)
   })
 })

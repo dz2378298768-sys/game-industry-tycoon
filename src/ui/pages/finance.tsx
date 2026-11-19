@@ -63,12 +63,6 @@ export const Finance: React.FC = () => {
         </div>
       </div>
 
-      {company && company.cashBalanceCents < 0 && (
-        <div className="panel" style={{ borderColor: 'var(--danger, #b3423a)', background: 'rgba(179,66,58,0.08)' }}>
-          <p className="negative" style={{ fontSize: 13 }}>⚠️ {t('finance.distress')}</p>
-        </div>
-      )}
-
       <div className="panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
           <h2>{t('finance.transactions')}</h2>

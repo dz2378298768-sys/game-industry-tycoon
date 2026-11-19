@@ -24,12 +24,14 @@ export const Hire: React.FC<Props> = ({ onNavigate }) => {
 
   const hiredCount = employees.filter(e => e.status === 'hired').length
   const capacity = company?.managementCapacity ?? 0
+  const isBankrupt = company?.status === 'bankrupt'
   const multiplier = company ? citySalaryMultiplier(company.cityId) : 1
   const effectiveSalaryCents = Math.round(salary * 100 * multiplier)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!company) { setError(t('error.noCompany')); return }
+    if (isBankrupt) { setError(t('finance.bankrupt.blocked.hire')); return }
     if (!name.trim()) { setError(t('error.requiredField')); return }
     if (hiredCount >= capacity) { setError(t('employee.capacity.full')); return }
     const result = hireEmployee(name.trim(), role, skillLevel, salary * 100)
@@ -48,6 +50,11 @@ export const Hire: React.FC<Props> = ({ onNavigate }) => {
           {t('employee.capacity')}: {hiredCount} / {capacity}
         </span>
       </div>
+      {isBankrupt && (
+        <p className="negative" style={{ fontSize: 12, marginBottom: 12 }} role="alert">
+          ⛔ {t('finance.bankrupt.blocked.hire')}
+        </p>
+      )}
       <form onSubmit={handleSubmit} style={{ maxWidth: 480 }}>
         <div className="form-row">
           <label>{t('hire.form.name')}</label>
@@ -74,7 +81,13 @@ export const Hire: React.FC<Props> = ({ onNavigate }) => {
         {error && <p className="negative mb-16">{error}</p>}
 
         <div className="flex-gap">
-          <button className="btn" type="submit" disabled={hiredCount >= capacity}>{t('hire.form.submit')}</button>
+          <button
+            className="btn"
+            type="submit"
+            disabled={hiredCount >= capacity || isBankrupt}
+            aria-disabled={isBankrupt}
+            title={isBankrupt ? t('finance.bankrupt.blocked.hire') : undefined}
+          >{t('hire.form.submit')}</button>
           <button className="btn btn-secondary" type="button" onClick={() => onNavigate('employees')}>{t('common.cancel')}</button>
         </div>
       </form>

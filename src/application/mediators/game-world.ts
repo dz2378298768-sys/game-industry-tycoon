@@ -130,6 +130,25 @@ export class GameWorld {
     return this.world.companies.find((c) => c.isPlayer && c.status === 'active')
   }
 
+  /** 返回玩家公司不考虑 status（用于破产命令守卫） */
+  private getRawPlayerCompany(): Company | undefined {
+    return this.world.companies.find((c) => c.isPlayer)
+  }
+
+  /** 破产守卫：公司 status!=='active' 时返回 FIN_COMPANY_BANKRUPT 错误（DESIGN-OI-21 §2.2） */
+  private assertCompanyActive(): Company | CommandOutcome<never> {
+    const company = this.getRawPlayerCompany()
+    if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
+    if (company.status !== 'active') {
+      return {
+        success: false,
+        errorCode: 'FIN_COMPANY_BANKRUPT',
+        message: '公司已破产，无法执行此操作。',
+      }
+    }
+    return company
+  }
+
   isFinanciallyDistressed(company = this.getPlayerCompany()): boolean {
     return company !== undefined && this.finance.getCashBalance(company.id) < 0
   }
@@ -143,8 +162,9 @@ export class GameWorld {
     salaryMonthlyCents: number
     primarySkill?: string
   }): CommandOutcome<Employee> {
-    const company = this.getPlayerCompany()
-    if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
 
     const activeCount = this.world.employees.filter(
       (e) => e.companyId === company.id && e.status === 'hired',
@@ -229,7 +249,8 @@ export class GameWorld {
   }
 
   fireEmployee(employeeId: string): CommandOutcome<Employee> {
-    const company = this.getPlayerCompany()
+    // 破产后仍可解雇（DESIGN-OI-21 §2.2 / T-FIX-1）：不考虑 status 取玩家公司
+    const company = this.getRawPlayerCompany()
     if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
     const emp = this.world.employees.find((e) => e.id === employeeId)
     if (!emp) return { success: false, errorCode: 'EMP_NOT_FOUND', message: '员工未找到' }
@@ -292,8 +313,10 @@ export class GameWorld {
     audienceSegmentIds?: string[]
     targetPlatformIds?: string[]
   }): CommandOutcome<Project> {
-    const company = this.getPlayerCompany()
-    if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
+
     if (this.isFinanciallyDistressed(company)) {
       return { success: false, errorCode: 'FIN_DISTRESS', message: '公司现金为负（财务困难），无法创建新项目。' }
     }
@@ -355,8 +378,9 @@ export class GameWorld {
   }
 
   launchProject(projectId: string): CommandOutcome<Product> {
-    const company = this.getPlayerCompany()
-    if (!company) return { success: false, message: '公司未找到' }
+    // 破产后仍可上市（DESIGN-OI-21 §2.2 / T-FIX-2）：不考虑 status 取玩家公司
+    const company = this.getRawPlayerCompany()
+    if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
 
     const before = this.world.projects.find((p) => p.id === projectId)
     const result = this.withProjects(() => this.projects.launch(projectId, this.dayIndex))
@@ -401,6 +425,9 @@ export class GameWorld {
    *   玩家须显式执行 resumeProject（经 toggleProjectPause）后恢复。
    */
   topUpBudget(cmd: TopUpBudgetCmd): CommandOutcome<Project> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+
     const project = this.world.projects.find((p) => p.id === cmd.projectId)
     if (!project) return { success: false, errorCode: 'PRJ_NOT_FOUND', message: '项目未找到' }
 
@@ -463,6 +490,50 @@ export class GameWorld {
       return { success: false, errorCode: result.errorCode, message: result.errorMessage ?? '取消失败' }
     }
     return { success: true, result: result.result }
+  }
+
+  /**
+   * 砍范围 descope（DESIGN-C-01 §3.3）。
+   * 破产守卫（DESIGN-OI-21 §2.2）：破产公司仍允许 descope（自救手段）。
+   */
+  descopeProject(projectId: string, cutRatio: number): CommandOutcome<Project> {
+    const result = this.withProjects(() =>
+      this.projects.descope({ projectId, cutRatio, dayIndex: this.dayIndex }),
+    )
+    if (!result.success || !result.result) {
+      return {
+        success: false,
+        errorCode: result.errorCode,
+        message: result.errorMessage ?? '砍范围失败',
+      }
+    }
+    return { success: true, result: result.result }
+  }
+
+  /**
+   * 延期上市 delayLaunch（DESIGN-C-02 §3.3）。
+   * 破产守卫（DESIGN-OI-21 §2.2）：破产公司仍允许延期（绝望操作）。
+   */
+  delayLaunch(projectId: string, extraDays: number): CommandOutcome<Project> {
+    const company = this.getRawPlayerCompany()
+    if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
+
+    const result = this.withProjects(() =>
+      this.projects.delayLaunch({ projectId, extraDays, dayIndex: this.dayIndex }),
+    )
+    if (!result.success || !result.result) {
+      return {
+        success: false,
+        errorCode: result.errorCode,
+        message: result.errorMessage ?? '延期上市失败',
+      }
+    }
+
+    // 品牌惩罚（DESIGN-C-02 §2.2）——只在公司 active 时执行
+    if (company.status === 'active') {
+      company.brand = Math.max(0, company.brand - result.result.brandPenalty)
+    }
+    return { success: true, result: result.result.project }
   }
 
   assignEmployeeToProject(

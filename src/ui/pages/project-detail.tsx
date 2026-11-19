@@ -9,6 +9,9 @@ import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
+import { DescopeDialog } from '@ui/components/descope-dialog'
+import { DelayLaunchDialog } from '@ui/components/delay-launch-dialog'
+import { selectProjectActionState, selectRiskBadges } from '@ui/components/project-actions'
 import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolveProjectStatus } from '@ui/components/project-status'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
@@ -25,6 +28,10 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const [topUpReason, setTopUpReason] = React.useState('')
   const [drilldownOpen, setDrilldownOpen] = React.useState(false)
   const [cancelReasonOpen, setCancelReasonOpen] = React.useState(false)
+  const [descopeOpen, setDescopeOpen] = React.useState(false)
+  const [delayOpen, setDelayOpen] = React.useState(false)
+  const [descopeError, setDescopeError] = React.useState<string | null>(null)
+  const [delayError, setDelayError] = React.useState<string | null>(null)
 
   if (!project) {
     return (
@@ -93,6 +100,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
     e => e.status === 'hired' && !project.teamAssignments.some(a => a.employeeId === e.id),
   )
   const isTerminal = project.phase === 'LAUNCHED' || project.phase === 'CANCELLED'
+  // 破产三维矩阵 + 阶段守卫（DESIGN-UI-LAYER §3.2）；hint 只做展示，命令层为权威
+  const actions = selectProjectActionState(project, store.company, store.dayIndex)
+  const riskBadges = selectRiskBadges(project)
+  const reasonTitle = (keys: string[]) => (keys.length === 0 ? undefined : keys.map(k => t(k)).join('；'))
+  const riskText = (badge: { key: string; placeholder?: string; value?: number }) =>
+    badge.value === undefined ? t(badge.key) : t(badge.key).replace(badge.placeholder!, String(badge.value))
 
   // 预估每日产出（按学科拆分，供预计完成时间使用）
   const dailyByDiscipline = { design: 0, programming: 0, art: 0, qa: 0 }
@@ -201,21 +214,55 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             {/* 与列表一致的状态徽标（F5），暂停态由阶段后缀「（暂停）」+ 徽标双通道标识 */}
             <div>
               <ProjectStatusBadge project={project} currentDay={store.dayIndex} />
+              {riskBadges.length > 0 && (
+                <div className="flex-gap" style={{ marginTop: 6, flexWrap: 'wrap' }}>
+                  {riskBadges.map(badge => (
+                    <span key={badge.flag} className="badge risk" data-risk={badge.flag}>
+                      {riskText(badge)}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           {!isTerminal && (
-            <div className="flex-gap">
+            <div className="flex-gap" style={{ flexWrap: 'wrap' }}>
               <button className="btn btn-secondary" onClick={() => toggleProjectPause(project.id)}>
                 {project.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
               </button>
               {project.phase === 'READY_TO_LAUNCH' ? (
+                // 正式上市：不带 aria-disabled（V3），破产后仍可上市，仅按 QA/计划日守卫
                 <button
                   className="btn"
                   onClick={() => launchProject(project.id)}
-                  disabled={!isQaComplete(project) || store.dayIndex < project.plannedLaunchDay}
+                  disabled={!actions.launch.enabled}
+                  title={reasonTitle(actions.launch.reasonKeys)}
                 >{t('project.actions.launch')}</button>
               ) : (
-                <button className="btn" onClick={() => advanceProjectPhase(project.id)}>{t('project.actions.advancePhase')}</button>
+                <button
+                  className="btn"
+                  onClick={() => advanceProjectPhase(project.id)}
+                  disabled={!actions.advance.enabled}
+                  title={reasonTitle(actions.advance.reasonKeys)}
+                >{t('project.actions.advancePhase')}</button>
+              )}
+              {actions.descope.visible && (
+                <button
+                  className="btn btn-secondary"
+                  disabled={!actions.descope.enabled}
+                  aria-disabled={!actions.descope.enabled}
+                  title={reasonTitle(actions.descope.reasonKeys)}
+                  onClick={() => { setDescopeError(null); setDescopeOpen(true) }}
+                >{t('project.actions.descope')}</button>
+              )}
+              {actions.delay.visible && (
+                <button
+                  className="btn btn-secondary"
+                  disabled={!actions.delay.enabled}
+                  aria-disabled={!actions.delay.enabled}
+                  title={reasonTitle(actions.delay.reasonKeys)}
+                  onClick={() => { setDelayError(null); setDelayOpen(true) }}
+                >{t('project.actions.delayLaunch')}</button>
               )}
               <button className="btn btn-danger" onClick={() => cancelProject(project.id)}>{t('project.actions.cancel')}</button>
             </div>
@@ -236,7 +283,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           )}
           {!isTerminal && (
             <div className="flex-gap" style={{ marginTop: 10 }}>
-              <button className="btn btn-secondary btn-small" onClick={() => setTopUpOpen(true)}>{t('project.budget.topUp.button')}</button>
+              <button
+                className="btn btn-secondary btn-small"
+                disabled={!actions.topUp.enabled}
+                aria-disabled={!actions.topUp.enabled}
+                title={reasonTitle(actions.topUp.reasonKeys)}
+                onClick={() => setTopUpOpen(true)}
+              >{t('project.budget.topUp.button')}</button>
               <button className="btn btn-small" onClick={() => store.resumeProject(project.id)}>{t('project.budget.resume.button')}</button>
             </div>
           )}
@@ -285,6 +338,32 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       )}
 
       <div className="panel">
+        <h2>{t('project.plan.title')}</h2>
+        <div className="kpi-grid">
+          <div className="kpi-card">
+            <div className="label">{t('project.plan.scope')}</div>
+            <div className="value">{Math.round((project.scopeCutRatio ?? 0) * 100)}%</div>
+          </div>
+          <div className="kpi-card">
+            <div className="label">{t('project.plan.launchDay')}</div>
+            <div className="value">{formatDay(project.plannedLaunchDay)}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="label">{t('project.plan.delayDays')}</div>
+            <div className="value">{project.launchDelayDays ?? 0}</div>
+          </div>
+          <div className="kpi-card">
+            <div className="label">{t('project.plan.original')}</div>
+            <div className="value">
+              {project.originalPlannedLaunchDay === null || project.originalPlannedLaunchDay === undefined
+                ? '—'
+                : formatDay(project.originalPlannedLaunchDay)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
         <h2>{t('project.fields.progress')}</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 16 }}>
           {disciplines.map(d => {
@@ -310,7 +389,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           <h2 style={{ margin: 0 }}>{t('project.budget.title')}</h2>
           {!isTerminal && (
             <div className="flex-gap">
-              <button className="btn btn-secondary btn-small" onClick={() => setTopUpOpen(true)}>{t('project.budget.topUp.button')}</button>
+              <button
+                className="btn btn-secondary btn-small"
+                disabled={!actions.topUp.enabled}
+                aria-disabled={!actions.topUp.enabled}
+                title={reasonTitle(actions.topUp.reasonKeys)}
+                onClick={() => setTopUpOpen(true)}
+              >{t('project.budget.topUp.button')}</button>
               {isExhausted && (
                 <button className="btn btn-small" onClick={() => store.resumeProject(project.id)}>{t('project.budget.resume.button')}</button>
               )}
@@ -322,6 +407,11 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             .replace('{spent}', fmtMoneyPlain(budget.spentCents))
             .replace('{cap}', fmtMoneyPlain(budget.totalCapCents))}
         </p>
+        {!actions.topUp.enabled && actions.topUp.reasonKeys.length > 0 && (
+          <p className="negative" style={{ fontSize: 12, margin: '0 0 8px' }} data-testid="topup-blocked-hint">
+            {reasonTitle(actions.topUp.reasonKeys)}
+          </p>
+        )}
         <div className="kpi-grid">
           <div className="kpi-card">
             <div className="label">{t('project.budget.cap')}</div>
@@ -635,6 +725,45 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             <button className="btn btn-secondary" onClick={() => setTopUpOpen(false)}>{t('common.cancel')}</button>
           </div>
         </div>
+      )}
+
+      {/* 砍范围 / 延期上市弹窗（DIALOG-DESCOPE / DIALOG-DELAY），领域命令为权威 */}
+      {descopeOpen && (
+        <DescopeDialog
+          project={project}
+          company={store.company}
+          daily={dailyByDiscipline}
+          dailyBurnCents={dailyBurnCents}
+          errorMessage={descopeError}
+          onClose={() => setDescopeOpen(false)}
+          onConfirm={(ratio) => {
+            const result = store.descopeProject(project.id, ratio)
+            if (result.success) {
+              setDescopeOpen(false)
+              setDescopeError(null)
+            } else {
+              setDescopeError(result.message ?? t('error.unknown'))
+            }
+          }}
+        />
+      )}
+      {delayOpen && store.company && (
+        <DelayLaunchDialog
+          project={project}
+          company={store.company}
+          employees={employees}
+          errorMessage={delayError}
+          onClose={() => setDelayOpen(false)}
+          onConfirm={(days) => {
+            const result = store.delayLaunch(project.id, days)
+            if (result.success) {
+              setDelayOpen(false)
+              setDelayError(null)
+            } else {
+              setDelayError(result.message ?? t('error.unknown'))
+            }
+          }}
+        />
       )}
 
       {/* 取消原因弹窗（DIALOG-CANCEL-REASON）：超时自动取消 / 主动取消 / 历史存档通用 */}

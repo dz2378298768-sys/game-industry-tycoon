@@ -34,7 +34,7 @@ describe('M1.1 完整集成闭环', () => {
     // 1. 1970 年创建公司
     expect(company.foundingDay).toBe(0)
     expect(gregorianToDayIndex(1970, 1, 1)).toBe(0)
-    expect(initialCash).toBe(5_000_000)
+    expect(initialCash).toBe(6_500_000)
     expect(company.brand).toBe(10)
 
     // 2. 招聘四人

@@ -7,6 +7,7 @@ import { Projects } from '@ui/pages/projects'
 import { ProjectDetail } from '@ui/pages/project-detail'
 import { NewProject } from '@ui/pages/new-project'
 import { Finance } from '@ui/pages/finance'
+import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
 
 type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance'
@@ -79,6 +80,7 @@ export const GameShell: React.FC = () => {
         <h1>{t('app.title')}</h1>
         <div className="day-label">{formatDay(dayIndex)}</div>
         <div className="day-label" style={{ color: '#c9a865' }}>💰 {formatMoney(company?.cashBalanceCents ?? 0)}</div>
+        <div className="day-label" style={{ color: '#9ab7d3' }}>🏷️ {Math.round(company?.brand ?? 0)}</div>
         <div className="controls">
           {SPEEDS.map(s => (
             <button
@@ -104,6 +106,9 @@ export const GameShell: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {/* 槽位 A：公司级横幅（全局唯一，不随页面切换消失，DESIGN-UI-LAYER §2.1） */}
+      <CompanyAlertBanner company={company} onNavigate={() => handleNavigate('finance')} />
 
       <div className="main-layout">
         <nav className="sidebar">

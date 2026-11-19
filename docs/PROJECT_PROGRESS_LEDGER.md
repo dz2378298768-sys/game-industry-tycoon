@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 main HEAD **`405f4c4`**（审核与设计侧各实测一次：**22 文件 / 173 用例 / 0 skip**，typecheck / lint:check / build 通过；`git rev-list --count origin/main..HEAD` = **14** 提交，**未 push**）；**UI 线已收尾**，阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED），**S-1 已关闭**（`TERMINAL-RELEASE-001` CLOSED） |
+| 当前基线 | 本地 main HEAD **`114b443`**（已 push，`git rev-list --count origin/main..HEAD` = **0**，与远程同步）；工作区含 **M1.2 首批 + 第二批（UI 层）未 commit 改动**（55 修改 + 27 新增）。四命令**真实退出码**核验（无管道假象）：**32 文件 / 230 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全绿。M1.1 阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED）、**S-1 已关闭**；**M1.2 首批 + 第二批已 CLOSED** |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -18,8 +18,8 @@
 | 阶段编号 | 阶段目标 | 状态 | 完成情况 |
 |---|---|---|---|
 | M1（已交付） | 游戏公司经营垂直切片 | CLOSED | 100% |
-| M1.1（当前） | 稳定性修复 + A1-G21 设计裁定落地 + 自动化测试 + G-05 成本口径补齐 | 收尾中（**14 项编码任务 + 1 项元数据任务全 CLOSED**；UI 线收尾；阶段审核已出且 **S-1 已关闭**；唯一硬缺口＝真人试玩） | **22/25 任务 CLOSED**（计数口径，见 §4；不用加权百分比下结论） |
-| M1.2 | 下一阶段规划 | 未启动（冻结，M1.1 关闭前不得启动） | 0% |
+| M1.1（**已关闭**） | 稳定性修复 + A1-G21 设计裁定落地 + 自动化测试 + G-05 成本口径补齐 | **CLOSED**（Owner 2026-11-19 授权跳过真人试玩、当前阶段可关闭，书面决策 `DECISION-M1.1-CLOSE.md`） | **25/25 任务主表已清点**；14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（P1）已闭环；九项核查 9/9 满足（见 `STAGE-CHECK-M1.1.md` v1.0）；体验验证推迟到 M1.2 首批交付后 | **24/26 CLOSED**（含 1 项 Owner 决策留档 + 2 项 Owner 待办挂起） |
+| M1.2 | M1.2 首批：默认配置调参 + 现金下限/破产 + 砍范围 descope + 延期上市 delay launch；**第二批：UI 层落地**（破产/现金警告横幅、descope/延期弹窗、状态徽标、命令入口） | **首批 4 任务 CLOSED + 第二批 UI 层 CLOSED**（UI 层设计审核 REVISE_REQUIRED → v1.1 修订 → 实现全绿） | 5 设计规格 + 4 编码任务 + **1 UI 设计规格 + 1 UI 编码任务** 全 CLOSED；**32 文件 / 230 用例 / 0 skip / 全绿**；反证 5/5 锁住；本会话补 V3/V4/V5/V10/V14 覆盖测试 9 条并修 1 条边界用例；V11/V12/V13 UI 级覆盖待补（PLANNED） | 12/13 CLOSED（1 项覆盖补测 PLANNED） |
 | M2 | 商业化与销售系统 | 设计前置通过（七项已裁定，GDR R2 PASS_WITH_NOTES）；编码仍冻结，待 §3.2 收尾 + M1.1 关闭 | 0% |
 
 **阶段目标（M1.1 收尾）**：完成 G-05 预算成本核算、D-01 暂停超时、pause_timeout UI、版本元数据一致性，形成可玩的研发经营闭环，通过体验验收与独立审核，由 Owner 确认关闭。
@@ -53,21 +53,34 @@
 | DESIGN-ROLE-GDR-001 | 第四角色（游戏设计审查者）规格 | 全阶段 | 设计负责人 | CLOSED | P1 | Owner 确认新增 | — | 设计自裁定（Owner 已确认） | 无 | 自下一轮起在编码前执行 GDR gate |
 | GDR-REVIEW-M1.1 | 对 M1.1 已产设计稿补做 GDR 审查 | M1.1 | 游戏设计审查者(已审) | **CLOSED** | P1 | DESIGN-ROLE-GDR-001 | — | **R2 PASS_WITH_NOTES**（GDR-REVIEW-M1.1-R2） | R1 两 FAIL 已整改；新缺陷 R2-01 已修 | 三稿整体放行编码；N/60 数值待 P4 |
 | TASK-M1.1-CANCEL-FIX-001 | 手动取消残留 isPaused 缺陷整改 | M1.1 | 设计负责人(已关闭) | **CLOSED** | P1 | D01-001 | 153b0ebf | **PASS**（REVIEW-TASK-CANCEL-FIX-001，RE_REVIEW） | 无 | 原缺陷已关闭 |
-| PLAYTEST-M1.1-EXEC | M1.1 实际试玩执行（好玩验证） | M1.1 | 设计负责人(主持) | PLANNED | P1 | 001-B~E, UI-001 | — | — | 真实试玩尚未开展 | 编码主体闭环后执行；依据 DESIGN-PLAYTEST-EXEC-001 |
+| PLAYTEST-M1.1-EXEC | M1.1 实际试玩执行（好玩验证） | M1.1 | Owner | **DESIGN_BLOCKED** | P1 | M1.1 关闭前（原计划） | — | — | Owner 2026-11-19 授权跳过 M1.1 试玩、"待后续内容较完整后体验" | M1.2 首批交付后重新启动（OI-20/OI-21 落地、玩家默认配置能走到上市） |
+| DECISION-M1.1-CLOSE | M1.1 阶段关闭（Owner 授权跳过真人试玩） | M1.1 | 主 AI（代 Owner 授权） | **CLOSED** | P0（阶段门槛） | 全部任务闭环 + S-1 关闭 + Owner 授权 | — | Owner 原话"授权当前阶段可关闭"，书面决策 `DECISION-M1.1-CLOSE.md` | 无 | 已执行；STAGE-CHECK v1.0 九项核查 9/9 满足 |
 | DESIGN-M2-UNBLOCK | M2 七项阻塞裁定与解冻 | M2 | 设计负责人(代行) | **CLOSED** | P1 | Owner 授权代行 | — | **R2 PASS_WITH_NOTES**（GDR-REVIEW-M2-UNBLOCK-R2：D-01~D-06 全闭环，D-01 阻断解除，设计前置通过） | N1 笔误已修(§1.1 Phase4.7→4.6)；N2/N3 转实现稿 gate | 可进 M2 任务包拆分；编码仍冻结，须 §3.2 收尾+M1.1 关闭 |
+| DESIGN-M1.2-SUMMARY | M1.2 四任务关系汇总 + 实现顺序 + 存档兼容 | M1.2 | 设计代理 | **CLOSED** | P1 | M1.1 关闭 | — | **设计审核 PASS_WITH_NOTES**（八维清单全过；阻塞条件已补：OI-21 L1 $4K、命令守卫表补齐、riskFlags 去重） | 6 个待确认项主 AI 已裁定；BUG-1/P0 数值不一致 + BUG-2/P1 守卫表缺 + BUG-3/P1 去重缺失 → 已补 | 设计闸门已过 |
+| DESIGN-M1.2-OI-20-TUNING | 默认预算/资金调参（让玩家默认配置能走到上市） | M1.2 | 设计代理 | **CLOSED** | P2 | SUMMARY v1 | — | 设计审核 PASS_WITH_NOTES | tuning 参数 6 项 + 新增 finance 2 阈值 | 已发布编码任务 TASK-M1.2-OI-20-TUNING |
+| DESIGN-M1.2-OI-21-BANKRUPTCY | 现金下限 $4K 警告 + 现金 $0 破产 + 命令守卫 | M1.2 | 设计代理 | **CLOSED** | P2 | SUMMARY v1 | — | 设计审核 PASS_WITH_NOTES | Company.status='bankrupt' 已在 schema 枚举中；M2 收入恢复接口预留 | 已发布编码任务 TASK-M1.2-OI-21-BANKRUPTCY |
+| DESIGN-M1.2-C-01-DESCOPE | 砍范围 descope：等比例降低工作量目标换取按期上市 | M1.2 | 设计代理 | **CLOSED** | P3 | SUMMARY v1 | — | 设计审核 PASS_WITH_NOTES | riskFlags 去重 includes 模式（daily-scheduler.ts:424） | 已发布编码任务 TASK-M1.2-C-01-DESCOPE |
+| DESIGN-M1.2-C-02-DELAY-LAUNCH | 延期上市：plannedLaunchDay 后移 + brand penalty | M1.2 | 设计代理 | **CLOSED** | P3 | SUMMARY v1 | — | 设计审核 PASS_WITH_NOTES | 延期上限 originalPlannedLaunchDay × 0.5；riskFlags 去重 | 已发布编码任务 TASK-M1.2-C-02-DELAY-LAUNCH |
+| TASK-M1.2-OI-20-TUNING | 默认预算/资金走不到上市 → tuning.ts 6 项调参 + 新增 finance 2 阈值 | M1.2 | 编码代理 | **CLOSED** | P2 | DESIGN-M1.2-OI-20-TUNING + OI-21 | working tree（未 commit） | **编码审核 PASS**（第二轮补测试后） | 首轮 0 新测试 → REVISE_REQUIRED → 补 3 测试文件 → PASS | 无（可立即 commit） |
+| TASK-M1.2-OI-21-BANKRUPTCY | 现金负数阻断：三层阈值 + 破产检查 + 12 命令守卫 | M1.2 | 编码代理 | **CLOSED** | P2 | OI-20 tuning 落地 | working tree | **编码审核 PASS**（第二轮） | 反证 8 红（破产检查注释掉） | 无 |
+| TASK-M1.2-C-01-DESCOPE | descope：3 固定档位 + 50% 上限 + riskFlags 去重 + QA 重置 | M1.2 | 编码代理 | **CLOSED** | P3 | OI-20 tuning 落地 | working tree | **编码审核 PASS**（第二轮） | 反证 2+1 红（重算 + 去重） | 无 |
+| TASK-M1.2-C-02-DELAY-LAUNCH | delayLaunch：3 固定档位 + brand penalty + riskFlags 去重 | M1.2 | 编码代理 | **CLOSED** | P3 | OI-20 tuning 落地 | working tree | **编码审核 PASS**（第二轮） | 反证 2+1 红（brand + 去重） | 无 |
+| DESIGN-M1.2-UI-LAYER | M1.2 第二批 UI 层规格：破产/现金警告横幅、descope/延期弹窗、状态徽标、命令入口、i18n | M1.2 | 设计代理 | **CLOSED** | P1 | M1.2 首批 CLOSED | — | 设计审核 REVISE_REQUIRED → 主 AI 裁定 R-01~R-13 → **v1.1 REVISED** | 补 §10 T-FIX-1/2/3 应用层修复清单；错误码映射改超集；onNavigate/reasonKeys 等契约补齐 | 设计闸门已过；已发布编码 TASK-M1.2-UI-LAYER |
+| TASK-M1.2-UI-LAYER | UI 层落地：CompanyAlertBanner + game-shell 横幅、DescopeDialog/DelayLaunchDialog + project-detail、project-actions 矩阵、风险徽标、game-store action/错误映射、i18n 89 键；含 T-FIX-1/2/3 应用层修复（破产后 fire/launch 走 raw 查找、tuning 阈值 400_000、refresh 破产回退） | M1.2 | 编码代理 + 主 AI 补测 | **CLOSED** | P1 | DESIGN-M1.2-UI-LAYER v1.1 | working tree（未 commit） | 主 AI 独立核验：四命令真实全绿；§13.3 覆盖核对 | 修复 1 条边界用例（L1 阈值 400_000→399_999，规格 §2.1 为准）；补 V3/V4/V5/V10/V14 测试 9 条；**V11（game-store 破产 refresh）、V12（错误码→toast 映射）、V13（预览 vs ProjectService parity）尚无 UI 级专属测试**（见 TASK-M1.2-UI-COVERAGE-FOLLOWUP） | 覆盖补测完成后可 commit |
+| TASK-M1.2-UI-COVERAGE-FOLLOWUP | 补 V11/V12/V13 UI 级测试：game-store 破产态 refresh 回退、错误码→toast 映射、descope/delay 预览与 ProjectService 实际结果 parity | M1.2 | 编码代理 | **PLANNED** | P2 | TASK-M1.2-UI-LAYER CLOSED | — | — | 底层领域/服务逻辑已在 test-bankruptcy-guard/test-descope/test-delay-launch 覆盖；此处仅补 UI/集成层断言 | 编码代理可用后派发 |
 
 ---
 
 ## 3. 状态分布统计（规范 §3 合法状态）
 
-> **口径**：以下为 §2 主表逐行清点结果（2026-11-19 09:20，共 25 行），非估算。
+> **口径**：以下为 §2 主表逐行清点结果（2026-11-19，M1.2 第二批 UI 层 CLOSED 后，共 **38 行**），非估算。
 
 | 状态 | 数量 | 任务 |
 |---|---|---|
-| CLOSED | **22** | 设计/角色规格 6（G05、EXPERIENCE、PAUSE-UI、GDR-001、GDR-REVIEW-M1.1、M2-UNBLOCK）+ 编码任务 14（001-A、D01-001、001-B、001-C、001-D、001-E、E-FIX、TERMINAL-CLEANUP、CANCEL-FIX、UI-001、UI-001-FIX、UI-001-FIX2、UI-001-FIX3、**TERMINAL-RELEASE**）+ 阶段审核 1 + 元数据 1 |
+| CLOSED | **34** | 设计/角色规格 12（G05、EXPERIENCE、PAUSE-UI、GDR-001、GDR-REVIEW-M1.1、M2-UNBLOCK、M1.2-SUMMARY、OI-20-TUNING、OI-21-BANKRUPTCY、C-01-DESCOPE、C-02-DELAY-LAUNCH、**M1.2-UI-LAYER**）+ 编码任务 19（M1.1 14 + M1.2 首批 4 + **M1.2-UI-LAYER**）+ 阶段审核 1 + 元数据 1 + 阶段关闭决策 1 |
 | IN_PROGRESS | **0** | 无 |
-| PLANNED | 2 | AUDIT-DELTA-CLARIFY（Δ-01/Δ-04 口径澄清）、PLAYTEST-M1.1-EXEC（真人试玩） |
-| DESIGN_BLOCKED | 1 | SEC-01（Owner 安全操作） |
+| PLANNED | 2 | AUDIT-DELTA-CLARIFY（Δ-01/Δ-04 口径澄清）、**TASK-M1.2-UI-COVERAGE-FOLLOWUP**（V11/V12/V13 UI 级补测） |
+| DESIGN_BLOCKED | 2 | SEC-01（Owner 安全操作）、**PLAYTEST-M1.1-EXEC**（Owner 授权延后到 M1.2 首批交付后） |
 
 ---
 
@@ -77,11 +90,11 @@
 
 | 口径 | 值 | 说明 |
 |---|---|---|
-| 任务计数 | **22 / 25 = 88%** | CLOSED 22 项 / 主表 25 项；未闭环 3 项＝PLAYTEST（真人试玩）、AUDIT（口径澄清）、SEC-01（Owner） |
-| 编码任务计数 | **14 / 14 = 100%** | 全部 `TASK-` 编码任务已 CLOSED |
-| 阶段完成判断 | **未完成** | 以 `STAGE-CHECK-M1.1.md` v0.7 九项核查为准（6 满足 / 2 部分 / 1 未满足） |
+| 任务计数 | **34 / 38 = 89%** | CLOSED 34 项 / 主表 38 项（与 §3 逐行清点一致）；未闭环 4 项＝SEC-01（Owner 安全操作，DESIGN_BLOCKED）、PLAYTEST-M1.1-EXEC（Owner 授权延后，DESIGN_BLOCKED）、AUDIT-DELTA-CLARIFY（口径澄清，PLANNED/P2 不阻塞）、TASK-M1.2-UI-COVERAGE-FOLLOWUP（V11/V12/V13 UI 级补测，PLANNED/P2） |
+| 编码任务计数 | **19 / 20 = 95%** | 19 项 `TASK-` 编码任务已 CLOSED（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1）；1 项 PLANNED＝TASK-M1.2-UI-COVERAGE-FOLLOWUP（P2，不阻塞） |
+| **阶段完成判断** | **M1.1 CLOSED；M1.2 首批 + 第二批 CLOSED** | M1.1：Owner 2026-11-19 授权跳过真人试玩，`STAGE-CHECK-M1.1.md` v1.0 九项核查 9/9 满足。M1.2：首批编码审核第二轮 PASS（5/5 反证锁住、14 条精准变红）+ 第二批 UI 层设计审核 v1.1 + 实现全绿；剩余 UI 覆盖补测（P2）不阻塞阶段推进 |
 
-> **为什么放弃加权百分比**：v2.0~v2.5 期间该数字多次与 §1、§3 不一致（最后一次为 §1 写 92%、§4 写 84.7%，同期 §3 仍把已关闭的 FIX2 标为 IN_PROGRESS）。根因是权重账本随任务拆分手工维护、每次扩任务都要重算，且**无法用命令核对**。按本项目已确立的硬措施（可机器核对的数字必须先取真值），改为"清点主表行数"——任何人可用一次 `grep` 复现。加权进度本就不是验收依据（规范 §6），弃用不损失判断力。
+> **M1.2 启动前置**：M1.1 已关闭，按交接文件 §5.4 建议首批派发 OI-20（默认预算调参）+ OI-21（现金负数阻断）+ C-01（砍范围）+ C-02（延期上市）设计任务，须过设计闸门 + READY 闸门才能发布编码。
 
 ## 5. 优先级分布（规范 §6.1）
 
@@ -94,6 +107,20 @@
 ---
 
 ## 6. 每轮进度更新记录（规范 §6.2）
+
+### 2026-11-19（第十五轮，**M1.1 阶段关闭**）
+
+- **Owner 决策**："真人体验方面暂时不做，待后续内容较完整后体验，我授权当前阶段可关闭"。正式书面留档 `DECISION-M1.1-CLOSE.md`。
+- **基线验证**（主 AI 亲跑）：22 文件 / 173 用例 / 0 skip；typecheck 0；lint:check 0；build 0；工作区干净，与远程同步。基线可信。
+- **阶段关闭执行**：STAGE-CHECK-M1.1 九项核查从 **6/2/1** 更新为 **9/9 满足**，版本升 1.0。第 6 项（体验目标）由 Owner 授权跳过真人试玩，第 4/8 项同步升满足。
+- **台账状态更新**：M1.1 阶段状态改 CLOSED；PLAYTEST-M1.1-EXEC 从 PLANNED 改 **DESIGN_BLOCKED**（Owner 授权延后到 M1.2 首批交付后）；新增 **DECISION-M1.1-CLOSE**（CLOSED）；主表 25→26 行；CLOSED 23 项 / DESIGN_BLOCKED 2 项 / PLANNED 1 项 / IN_PROGRESS 0 项。
+- **变更记录**：新增 `DECISION-M1.1-CLOSE.md`；更新 `STAGE-CHECK-M1.1.md` v1.0；更新本台账 v3.1。
+- **工程前置复核**（主 AI 执行，全部通过）：① 四命令全绿 ② 54 端到端断言 0 FAIL ③ S-1 已由 TERMINAL-RELEASE-001 修复并复审 PASS_WITH_NOTES（P1=0） ④ 无未关闭 P0/P1 阻塞 ⑤ spec/ 零改动。
+- **SEC-01 仍 DESIGN_BLOCKED**：不阻塞阶段关闭；Owner 到 GitHub Settings → Developer settings → Personal access tokens 吊销并重签。主 AI 不代签、不宣称已处置。
+- **当前风险**：无（Owner 跳过真人试玩的决策已书面留档）。
+- **下一轮计划**：M1.1 已关闭 → 启动 M1.2 设计。首批派发设计任务 **OI-20（默认预算调参）+ OI-21（现金负数阻断）+ C-01（砍范围）+ C-02（延期上市）**，须过设计闸门（GDR 八维清单）+ READY 闸门（16 项齐备）才能发布编码。体验验证推迟到 M1.2 首批交付后（玩家默认配置能走到上市）。
+
+---
 
 ### 2026-11-18（本轮，设计负责人在岗首轮）
 
@@ -294,3 +321,5 @@
 | 2.8 | 2026-11-19 | **架构整改**：新建 `AI-TEAM-ARCHITECTURE.md` / `AI-DEVELOPMENT-WORKFLOW.md` / `AI-AGENT-PROMPTS.md`；`CODEBUDDY.md` 首次入库并改为"主 AI + 四子代理"；`HANDOFF` 升 v1.1（§1.4 架构、§5 接手顺序、§6 红线、§9 Owner 边界）；`DOCS-INDEX` v1.1。**未改变任何任务状态、审核结论与阶段判定** | 主 AI |
 | 2.9 | 2026-11-19 | 交接交付标准化：`HANDOFF` 增 §0.2（必给/按需/不要给 清单）、`AI-AGENT-PROMPTS` 增 §6.1（启动消息模板），明确"只给文件不给对话记录"。未改变任何任务状态与阶段判定 | 主 AI |
 | 3.0 | 2026-11-19 | 新增 `AI-HANDOFF.md`：把交接说明 + 架构 + 流程 + 五套提示词合并为**单文件自包含**交接包，使"仓库地址 + 一份文件"构成完整交接；`HANDOFF` v1.3 必给项收敛为 1 项、修正记录顺序；`DOCS-INDEX` v1.2 增加 §0 入口。未改变任何任务状态与阶段判定 | 主 AI |
+| 3.1 | 2026-11-19 | **M1.1 阶段关闭**：Owner 授权跳过真人试玩、关闭 M1.1（"真人体验方面暂时不做，待后续内容较完整后体验，我授权当前阶段可关闭"）。STAGE-CHECK 九项核查 9/9 满足、v1.0；台账 M1.1 阶段状态改 CLOSED；PLAYTEST-M1.1-EXEC PLANNED→DESIGN_BLOCKED（延后到 M1.2 首批交付后）；新增 DECISION-M1.1-CLOSE（CLOSED）；主表 25→26 行；新增 `DECISION-M1.1-CLOSE.md` 书面留档 | 主 AI（代 Owner 授权） |
+| 3.2 | 2026-11-19 | **M1.2 首批 + 第二批 UI 层完成**：首批 4 任务（OI-20 调参/OI-21 破产/C-01 descope/C-02 延期）经"设计审核→编码 REVISE_REQUIRED→补测→复审 PASS"闭环；第二批 UI 层（横幅/弹窗/徽标/命令入口/i18n）设计审核 REVISE_REQUIRED → v1.1 修订 → 实现。**缺陷复盘与流程改进**：发现 D1（L1 阈值曾写成 $40,000）、D2（破产后 fire/launch 被 NO_COMPANY 阻断）漏审，根因是主 AI 任务书单位未双写 + 编码代理零自检 + 编码审核反证只测"该拒绝的被拒绝"不测"该保留的被保留"；在 `CODEBUDDY.md` 新增 §13 六条强制规则（单位双写/规格承诺核对表/承诺完整性核对/单位量级自检/可验收性落测试/证据链）。本会话修 1 条边界用例（L1 阈值 400_000→399_999，规格为准）+ 补 V3/V4/V5/V10/V14 测试 9 条；**四命令真实全绿：32 文件 / 230 用例 / 0 skip**。主表 35→38 行；新增 TASK-M1.2-UI-COVERAGE-FOLLOWUP（PLANNED，V11/V12/V13 UI 级补测） | 主 AI |

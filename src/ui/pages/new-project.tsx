@@ -6,7 +6,8 @@ import { availablePlatforms, availableSegments, yearOfDay } from '@content/queri
 interface Props { onNavigate: (route: string) => void }
 
 export const NewProject: React.FC<Props> = ({ onNavigate }) => {
-  const { createProject, dayIndex } = useGameStore()
+  const { createProject, dayIndex, company } = useGameStore()
+  const isBankrupt = company?.status === 'bankrupt'
   const [name, setName] = useState('')
   const [genreId, setGenreId] = useState(content.genres[0]?.id ?? 'action')
   const [budget, setBudget] = useState(30000) // USD
@@ -22,6 +23,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (isBankrupt) { setError(t('finance.bankrupt.blocked.create')); return }
     if (!name.trim()) { setError(t('error.requiredField')); return }
     if (!platformId) { setError(t('newProject.form.noPlatform')); return }
     const result = createProject({
@@ -39,6 +41,11 @@ export const NewProject: React.FC<Props> = ({ onNavigate }) => {
   return (
     <div className="panel">
       <h2>{t('newProject.title')}</h2>
+      {isBankrupt && (
+        <p className="negative" style={{ fontSize: 12, marginBottom: 12 }} role="alert">
+          ⛔ {t('finance.bankrupt.blocked.create')}
+        </p>
+      )}
       <p className="muted" style={{ fontSize: 12, marginBottom: 16 }}>
         {t('newProject.form.platformHint').replace('{year}', String(year))}
       </p>
@@ -92,7 +99,13 @@ export const NewProject: React.FC<Props> = ({ onNavigate }) => {
         {error && <p className="negative mb-16">{error}</p>}
 
         <div className="flex-gap">
-          <button className="btn" type="submit" disabled={platforms.length === 0}>{t('common.confirm')}</button>
+          <button
+            className="btn"
+            type="submit"
+            disabled={platforms.length === 0 || isBankrupt}
+            aria-disabled={isBankrupt}
+            title={isBankrupt ? t('finance.bankrupt.blocked.create') : undefined}
+          >{t('common.confirm')}</button>
           <button className="btn btn-secondary" type="button" onClick={() => onNavigate('projects')}>{t('common.cancel')}</button>
         </div>
       </form>

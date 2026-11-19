@@ -62,6 +62,12 @@ export interface Project {
   budgetExhausted?: boolean
   /** 已成功恢复次数，耗尽事件幂等键的组成（DESIGN-G05 §7.1 GDR R2）；旧存档缺省 0 */
   resumeSeq?: number
+  /** 累计砍范围比例（DESIGN-C-01 §3.1）；旧存档缺省 0；取值范围 [0, 0.5] */
+  scopeCutRatio?: number
+  /** 原始 plannedLaunchDay（DESIGN-C-02 §3.1）；首次延期时从当前 plannedLaunchDay 复制，之后不变；旧存档缺省 null */
+  originalPlannedLaunchDay?: number | null
+  /** 累计延期天数（DESIGN-C-02 §3.1）；旧存档缺省 0 */
+  launchDelayDays?: number
   version: number
   createdAt: number
   updatedAt: number

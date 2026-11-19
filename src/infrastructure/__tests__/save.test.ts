@@ -200,4 +200,22 @@ describe('存档安全 (G10/G21)', () => {
       expect(saved.costAllocations).toEqual([])
     }
   })
+
+  it('M1.2 新字段兼容：旧存档缺 scopeCutRatio / originalPlannedLaunchDay / launchDelayDays 时填充 zod default', () => {
+    const world = sampleWorld()
+    const legacy = structuredClone(world)
+    const p = legacy.projects[0]!
+    delete p.scopeCutRatio
+    delete p.originalPlannedLaunchDay
+    delete p.launchDelayDays
+
+    const r = parseSave(legacy)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      const saved = r.state.projects[0]!
+      expect(saved.scopeCutRatio).toBe(0)
+      expect(saved.originalPlannedLaunchDay).toBeNull()
+      expect(saved.launchDelayDays).toBe(0)
+    }
+  })
 })

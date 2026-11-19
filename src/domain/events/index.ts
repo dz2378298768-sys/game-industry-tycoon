@@ -75,3 +75,28 @@ export function createBudgetExhaustedEvent(
 export function budgetExhaustedEventKey(projectId: string, resumeSeq: number): string {
   return `event:budget_exhausted:${projectId}:${resumeSeq}`
 }
+
+/** 公司破产事件类型（DESIGN-OI-21 §3.3） */
+export const COMPANY_BANKRUPTED_EVENT = 'CompanyBankrupted'
+
+/** 破产事件载荷；balanceAtBankruptcy 为破产时现金余额（负数值） */
+export type CompanyBankruptedPayload = {
+  companyId: string
+  day: number
+  balanceAtBankruptcy: number
+}
+
+/** 构造公司破产事件。 */
+export function createCompanyBankruptedEvent(
+  id: string,
+  companyId: string,
+  day: number,
+  balanceAtBankruptcy: number,
+): DomainEvent {
+  const payload: CompanyBankruptedPayload = {
+    companyId,
+    day,
+    balanceAtBankruptcy,
+  }
+  return { id, type: COMPANY_BANKRUPTED_EVENT, day, payload }
+}

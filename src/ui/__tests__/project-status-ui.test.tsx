@@ -8,12 +8,14 @@ const { mockStore } = vi.hoisted(() => ({
     employees: [] as any[],
     transactions: [] as any[],
     products: [] as any[],
-    company: null as any,
+    company: { id: 'c1', status: 'active', brand: 50, cityId: 'san_francisco', officeLevel: 1, monthlyFixedExpenseCents: 0, cashBalanceCents: 1_000_000 } as any,
     dayIndex: 100,
     toggleProjectPause: vi.fn(),
     cancelProject: vi.fn(),
     advanceProjectPhase: vi.fn(),
     launchProject: vi.fn(),
+    descopeProject: vi.fn(() => ({ success: true })),
+    delayLaunch: vi.fn(() => ({ success: true })),
     assignEmployeeToProject: vi.fn(),
     unassignEmployeeFromProject: vi.fn(),
     topUpBudget: vi.fn(() => ({ success: true })),
@@ -43,7 +45,10 @@ vi.mock('@simulation/systems/qa-quality', () => ({
   computeInitialDefectLevel: () => 30,
 }))
 vi.mock('@content/tuning', () => ({
-  TUNING: { project: { productionCompletionThreshold: 0.9 } },
+  TUNING: {
+    project: { productionCompletionThreshold: 0.9, minQaWorkPoints: 10 },
+    finance: { cashWarningThresholdCents: 400_000, cashBankruptThresholdCents: 0 },
+  },
 }))
 vi.mock('@infrastructure/loading/content-loader', () => ({ content: { genres: [] } }))
 

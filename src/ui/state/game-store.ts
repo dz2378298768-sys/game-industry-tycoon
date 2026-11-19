@@ -8,6 +8,7 @@ import type { Product } from '@domain/entities/product'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
 import { BUDGET_TOP_UP_EVENT, recomputeRemaining } from '@domain/value-objects'
+import { EntityNotFoundError } from '@domain/errors'
 import { t, formatMoney, formatDay, setLocale as setI18nLocale, getLocale as getI18nLocale } from '@i18n'
 
 interface Message { id: string; text: string; type: 'info' | 'error' | 'success' }
@@ -15,11 +16,27 @@ interface Message { id: string; text: string; type: 'info' | 'error' | 'success'
 interface ActionResult { success: boolean; message?: string | undefined }
 interface BudgetActionResult extends ActionResult { errorCode?: string | undefined; idempotent?: boolean | undefined }
 
-/** 追加预算领域错误码 → i18n 文案键（避免把领域层硬编码中文直接暴露给 UI） */
-const TOP_UP_ERROR_I18N: Record<string, string> = {
-  BGT_INVALID_AMOUNT: 'error.bgtInvalidAmount',
+/** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2） */
+const ERROR_I18N: Record<string, string> = {
+  FIN_COMPANY_BANKRUPT: 'error.finCompanyBankrupt',
+  NO_COMPANY: 'error.noCompany',
   PRJ_TERMINAL: 'error.projectTerminal',
+  PRJ_COMPANY_INACTIVE: 'error.prjCompanyInactive',
   PRJ_NOT_FOUND: 'error.projectNotFound',
+  PRJ_WRONG_PHASE: 'error.prjWrongPhase',
+  PRJ_DESCOPE_CAP_EXCEEDED: 'error.descopeCapExceeded',
+  PRJ_DESCOPE_TERMINAL: 'error.projectTerminal',
+  PRJ_LAUNCH_DELAY_TERMINAL: 'error.projectTerminal',
+  PRJ_DELAY_CAP_EXCEEDED: 'error.delayCapExceeded',
+  PRJ_INVALID_DELAY_DAYS: 'error.invalidDelayDays',
+  BGT_INVALID_AMOUNT: 'error.bgtInvalidAmount',
+}
+
+/** 错误码优先映射 i18n；无错误码时回退领域文案，再回退通用文案 */
+function localizeError(errorCode: string | undefined, message: string | undefined, fallback = 'error.unknown'): string {
+  const key = errorCode ? ERROR_I18N[errorCode] : undefined
+  if (key) return t(key)
+  return message ?? t(fallback)
 }
 
 interface GameStore {
@@ -51,6 +68,8 @@ interface GameStore {
   topUpBudget(projectId: string, amountCents: number, reason: string): BudgetActionResult
   resumeProject(projectId: string): ActionResult
   cancelProject(projectId: string): ActionResult
+  descopeProject(projectId: string, cutRatio: number): BudgetActionResult
+  delayLaunch(projectId: string, extraDays: number): BudgetActionResult
   assignEmployeeToProject(employeeId: string, projectId: string, allocationRatio: number, roleOnProject: ProjectRole): ActionResult
   unassignEmployeeFromProject(employeeId: string, projectId: string): ActionResult
   advanceDays(days: number): void
@@ -95,8 +114,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!gw) return { error: t('error.noCompany') }
     const outcome = gw.hireEmployee({ name, role, skillLevel, salaryMonthlyCents })
     if (!outcome.success) {
-      get().toast(outcome.message ?? t('error.insufficientCash'), 'error')
-      return { error: outcome.message ?? t('error.insufficientCash') }
+      const message = localizeError(outcome.errorCode, outcome.message, 'error.insufficientCash')
+      get().toast(message, 'error')
+      return { error: message }
     }
     get().refresh()
     return {}
@@ -108,8 +128,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const outcome = gw.fireEmployee(employeeId)
     get().refresh()
     if (!outcome.success) {
-      get().toast(outcome.message ?? t('error.unknown'), 'error')
-      return { success: false, message: outcome.message }
+      const message = localizeError(outcome.errorCode, outcome.message)
+      get().toast(message, 'error')
+      return { success: false, message }
     }
     get().toast(t('employee.fire.success'), 'info')
     return { success: true }
@@ -120,8 +141,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!gw) return { error: t('error.noCompany') }
     const outcome = gw.createProject(params)
     if (!outcome.success) {
-      get().toast(outcome.message ?? t('error.unknown'), 'error')
-      return { error: outcome.message ?? t('error.unknown') }
+      const message = localizeError(outcome.errorCode, outcome.message)
+      get().toast(message, 'error')
+      return { error: message }
     }
     get().refresh()
     return {}
@@ -142,8 +164,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const result = gw.launchProject(projectId)
     get().refresh()
     if (!result.success) {
-      get().toast(result.message ?? t('error.unknown'), 'error')
-      return { success: false, message: result.message }
+      const message = localizeError(result.errorCode, result.message)
+      get().toast(message, 'error')
+      return { success: false, message }
     }
     get().toast(t('project.launch.success'), 'success')
     return { success: true }
@@ -177,7 +200,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const result = gw.topUpBudget({ projectId, amountCents, seq, reason })
     get().refresh()
     if (!result.success) {
-      const message = t(TOP_UP_ERROR_I18N[result.errorCode ?? ''] ?? 'error.unknown')
+      const message = t(ERROR_I18N[result.errorCode ?? ''] ?? 'error.unknown')
       get().toast(message, 'error')
       return { success: false, errorCode: result.errorCode, message }
     }
@@ -224,6 +247,52 @@ export const useGameStore = create<GameStore>((set, get) => ({
     return { success: result.success, ...(result.message ? { message: result.message } : {}) }
   },
 
+  descopeProject(projectId, cutRatio) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    try {
+      const result = gw.descopeProject(projectId, cutRatio)
+      get().refresh()
+      if (!result.success) {
+        const message = localizeError(result.errorCode, result.message)
+        get().toast(message, 'error')
+        return { success: false, errorCode: result.errorCode, message }
+      }
+      get().toast(t('project.descope.success'), 'success')
+      return { success: true, message: t('project.descope.success') }
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) {
+        const message = t('error.projectNotFound')
+        get().toast(message, 'error')
+        return { success: false, errorCode: 'PRJ_NOT_FOUND', message }
+      }
+      throw error
+    }
+  },
+
+  delayLaunch(projectId, extraDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    try {
+      const result = gw.delayLaunch(projectId, extraDays)
+      get().refresh()
+      if (!result.success) {
+        const message = localizeError(result.errorCode, result.message)
+        get().toast(message, 'error')
+        return { success: false, errorCode: result.errorCode, message }
+      }
+      get().toast(t('project.delay.success'), 'success')
+      return { success: true, message: t('project.delay.success') }
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) {
+        const message = t('error.projectNotFound')
+        get().toast(message, 'error')
+        return { success: false, errorCode: 'PRJ_NOT_FOUND', message }
+      }
+      throw error
+    }
+  },
+
   assignEmployeeToProject(employeeId, projectId, allocationRatio, roleOnProject) {
     const gw = get().game
     if (!gw) return { success: false, message: t('error.noCompany') }
@@ -259,7 +328,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   refresh() {
     const gw = get().game
     if (!gw) return
-    const company = gw.getPlayerCompany() ?? null
+    // 破产后 getPlayerCompany() 返回 undefined → 回退到 isPlayer（否则横幅/顶栏失效，DESIGN-UI-LAYER §3.3）
+    const company =
+      gw.getPlayerCompany() ?? gw.world.companies.find((c) => c.isPlayer) ?? null
     set({
       company,
       employees: gw.world.employees,

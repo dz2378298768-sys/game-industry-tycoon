@@ -91,14 +91,14 @@ describe('员工规则 (E16/E17/E18)', () => {
     const { gw } = bootstrap()
     const company = gw.getPlayerCompany()
     if (!company) throw new Error('no company')
-    // 手动制造负现金（固定结算场景）
+    // 手动制造负现金（固定结算场景）。用 tuning 起始金 + 额外 1,000,000 确保为负。
     gw.finance.postTransaction(
       {
         idempotencyKey: 'force-negative',
         companyId: company.id,
         day: 0,
         category: 'salary',
-        amountCents: -6_000_000,
+        amountCents: -(TUNING.company.startingCashCents + 1_000_000),
         description: 'force negative',
       },
       { allowNegativeBalance: true },

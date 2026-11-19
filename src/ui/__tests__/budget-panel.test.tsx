@@ -151,6 +151,20 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
     expect(text).not.toContain('预算已耗尽')
   })
 
+  it('耗尽横幅不再显示"（第 X 天）"，连续暂停只由 N/60 表达（DESIGN-G05 v1.7 §10.1a-4）', () => {
+    mockStore.projects = [makeProject({
+      isPaused: true,
+      budgetExhausted: true,
+      pauseReason: 'budget_exhausted',
+      pausedDays: 3,
+    })]
+    const { container } = renderDetail()
+    const text = container.textContent ?? ''
+    expect(text).toContain('预算已耗尽。研发已暂停')
+    expect(text).not.toMatch(/第\s*\d+\s*天/)
+    expect(text).toContain('已连续暂停 3/60 天')
+  })
+
   it('追加预算弹窗输入金额+原因后调用 topUpBudget 领域命令', () => {
     renderDetail()
     fireEvent.click(screen.getByText('追加预算'))

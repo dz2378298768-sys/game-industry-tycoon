@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { WorldState } from '@simulation/services/world-state'
+import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
 
 /** 当前存档结构版本 */
 export const SAVE_SCHEMA_VERSION = 1
@@ -209,6 +210,21 @@ export function parseSave(raw: unknown): ParseSaveResult {
   }
 
   const state = data as unknown as WorldState
+
+  // 终态解除团队分配（DESIGN-G05 v1.7 §3.3）：历史存档中终态项目残留的 teamAssignments
+  // 属历史数据而非损坏，读档时静默置空（不改存档版本、不新增字段、不因此拒绝加载）。
+  let releasedTerminalAssignments = 0
+  state.projects = state.projects.map((p) => {
+    if (!isTerminalProjectPhase(p.phase) || p.teamAssignments.length === 0) return p
+    releasedTerminalAssignments += p.teamAssignments.length
+    return { ...p, teamAssignments: [] }
+  })
+  if (releasedTerminalAssignments > 0) {
+    // 仅控制台留痕便于追溯，不弹 toast 打扰玩家
+    console.info(
+      `[save] 终态项目团队分配已按 DESIGN-G05 §3.3 释放（${releasedTerminalAssignments} 条）`,
+    )
+  }
 
   for (const [label, ids] of [
     ['公司', state.companies.map((c) => c.id)],

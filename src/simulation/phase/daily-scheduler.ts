@@ -99,6 +99,8 @@ export class DailyScheduler {
           budgetExhausted: false,
           riskFlags: project.riskFlags.filter((f) => f !== 'budget_exhausted'),
           cancellationReason: 'pause_timeout' as CancellationReason,
+          // 终态解除团队分配（DESIGN-G05 v1.7 §3.3）：超时取消同样必须释放员工
+          teamAssignments: [],
           version: project.version + 1,
           updatedAt: dayIndex,
         }
@@ -305,9 +307,12 @@ export class DailyScheduler {
         }
 
         // 有效分配以 TeamAssignment 是否仍存在为准，暂停项目不归零（G05-R6）
+        // 终态项目不入账（DESIGN-G05 v1.7 §3.3 / §6.1）：复用 isTerminalProjectPhase 的 active 定义，
+        // 作为旧存档或遗漏路径的双保险；本过滤不引入 isPaused 判断（暂停项目仍然分摊）。
         const assignments: Array<{ projectId: string; allocationRatio: number }> = []
         for (const p of state.projects) {
           if (p.companyId !== company.id) continue
+          if (isTerminalProjectPhase(p.phase)) continue
           for (const a of p.teamAssignments) {
             if (a.employeeId !== emp.id) continue
             assignments.push({ projectId: p.id, allocationRatio: a.allocationRatio })

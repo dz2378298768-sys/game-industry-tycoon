@@ -308,6 +308,8 @@ export class ProjectService {
         pausedDays: 0,
         riskFlags: p.riskFlags.filter((f) => f !== 'budget_exhausted'),
         cancellationReason: reason,
+        // 终态解除团队分配（DESIGN-G05 v1.7 §3.3）：员工回池，可立即投入新项目
+        teamAssignments: [],
         // 取消日 = 传入的游戏日（UI 取消日期唯一来源，TASK-M1.1-UI-001-FIX F4）
         updatedAt: dayIndex ?? p.updatedAt,
         version: p.version + 1,
@@ -353,6 +355,8 @@ export class ProjectService {
     const launched: Project = {
       ...advanced,
       actualLaunchDay: dayIndex,
+      // 终态解除团队分配（DESIGN-G05 v1.7 §3.3）：teamAssignments 清空与上市同一版本号内完成
+      teamAssignments: [],
       finalDefectLevel: defectLevel,
       finalQualityScore,
       finalQuality: finalQualityProfile,

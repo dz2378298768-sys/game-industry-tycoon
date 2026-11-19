@@ -59,6 +59,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const cancelReasonCategory = resolveCancelReason(project.cancellationReason)
   const cancelledDay = projectCancelledDay(project)
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
+  // v1.7（§10.1a-4）：起始日只服务手动暂停横幅，预算耗尽横幅不再显示日期
   const pausedSinceDay = store.dayIndex - pausedDays
   const fmtSigned = (cents: number) => `${cents >= 0 ? '+' : ''}${formatMoney(cents)}`
   // 预算面板金额：不带正号（DESIGN-G05 v1.5 §10.1a-1），|值|<100 分时补两位小数（§10.1a-2）
@@ -226,7 +227,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       {isExhausted && (
         <div className="panel" style={{ borderColor: '#e8912d', background: 'rgba(232,145,45,0.10)' }}>
           <p style={{ color: '#c46f13', fontSize: 13, margin: 0 }}>
-            ⚠ [{t('project.status.exhausted')}] {t('project.banner.exhausted').replace('{day}', String(pausedSinceDay))}
+            ⚠ [{t('project.status.exhausted')}] {t('project.banner.exhausted')}
           </p>
           {pausedDays > 0 && (
             <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
@@ -504,12 +505,11 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         <h2>{t('project.teamAssignments')}</h2>
         <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
           {project.teamAssignments.length === 0
-            ? t('project.team.empty')
+            ? t(isTerminal ? 'project.team.emptyTerminal' : 'project.team.empty')
             : t('project.team.assignedHint')
                 .replace('{n}', String(project.teamAssignments.length))
                 .replace('{pts}', String(Math.round(dailyPoints)))}
-          {' '}
-          {t('project.team.hint')}
+          {!isTerminal && <>{' '}{t('project.team.hint')}</>}
         </p>
 
         {assignedEmployees.length === 0 ? (

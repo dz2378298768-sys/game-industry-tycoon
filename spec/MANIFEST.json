@@ -3,7 +3,7 @@
   "revision": "2.1.7-final-freeze",
   "document_status": "DESIGN_SPECIFICATION_FROZEN_FOR_IMPLEMENTATION",
   "freeze_note": "V2.1.7 完成后进入 Development Baseline，不再开启设计循环。下一步启动第一个垂直切片开发。",
-  "total_bytes": 279495,
+  "total_bytes": 279491,
   "file_count_excluding_self": 24,
   "v217_patches": {
     "p0_refund_idempotency": "FIXED (RefundBatch interface, idempotencyKey = customer-refund:${refundBatch.id})",
@@ -129,8 +129,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 2737,
-      "sha256": "711f5d64c1885520ca0a98c5d1143eeb0385242c2bad520804092b574cfd6730"
+      "bytes": 2733,
+      "sha256": "83af634a7bc21a3a43e82a4fd4c9ef50a1f3ecd389582c982769b2c07b3faecc"
     }
   ]
 }

@@ -9,20 +9,9 @@ import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
-import { normalizeCancellationReason, projectCancelledDay, resolveProjectStatus, type CancelReasonKind } from '@ui/components/project-status'
+import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolveProjectStatus } from '@ui/components/project-status'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
-
-/** 详情取消横幅标题（唯一权威：TASK-M1.1-UI-001-FIX2 §10，与 §3.4 弹窗口径一致），详情留给弹窗 */
-const CANCEL_BANNER_TITLE_KEY: Record<CancelReasonKind, string> = {
-  pause_timeout: 'project.banner.cancel.title.pause_timeout',
-  player_decision: 'project.banner.cancel.title.player_decision',
-  scope_became_unviable: 'project.banner.cancel.title.scope_became_unviable',
-  team_dissolved: 'project.banner.cancel.title.team_dissolved',
-  market_window_missed: 'project.banner.cancel.title.market_window_missed',
-  legacy: 'project.banner.cancel.title.unknown',
-  unknown: 'project.banner.cancel.title.unknown',
-}
 
 export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const store = useGameStore()
@@ -66,7 +55,8 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   // 取消态：超时自动取消（⛔ 红）与其它原因（✕ 灰）分色呈现；标题按 cancellationReason 分流（N-7）
   const cancelledStatusKind = project.phase === 'CANCELLED' ? resolveProjectStatus(project) : null
   const cancelledByTimeout = cancelledStatusKind === 'cancelled_timeout'
-  const cancelReasonKind = normalizeCancellationReason(project.cancellationReason)
+  // 横幅标题与徽标短标签同源（CANCEL_BANNER_KEY / CANCEL_BADGE_KEY），本文件不持有取消文案表
+  const cancelReasonCategory = resolveCancelReason(project.cancellationReason)
   const cancelledDay = projectCancelledDay(project)
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
   const pausedSinceDay = store.dayIndex - pausedDays
@@ -279,7 +269,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             className={cancelledByTimeout ? 'negative' : undefined}
             style={{ color: cancelledByTimeout ? undefined : '#8b93a1', fontSize: 13, margin: 0 }}
           >
-            {cancelledByTimeout ? '⛔' : '✕'} {t(CANCEL_BANNER_TITLE_KEY[cancelReasonKind])}
+            {cancelledByTimeout ? '⛔' : '✕'} {t(CANCEL_BANNER_KEY[cancelReasonCategory])}
           </p>
           <div className="flex-gap" style={{ marginTop: 10 }}>
             <button className="btn btn-secondary btn-small" onClick={() => setCancelReasonOpen(true)}>{t('project.banner.viewReason')}</button>

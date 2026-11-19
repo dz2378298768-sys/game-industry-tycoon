@@ -113,6 +113,8 @@ describe('TASK-M1.1-UI-001 四态状态展示', () => {
   it('列表用图标+文案+暂停天数区分四类状态（不依赖颜色）', () => {
     const { container } = renderList()
     const text = container.textContent ?? ''
+    const badgeText = (kind: string) =>
+      container.querySelector(`[data-project-status="${kind}"]`)?.textContent ?? ''
 
     expect(text).toContain('⏸')
     expect(text).toContain('已手动暂停')
@@ -123,10 +125,12 @@ describe('TASK-M1.1-UI-001 四态状态展示', () => {
     expect(text).toContain('已暂停 3/60 天')
 
     expect(text).toContain('⛔')
-    expect(text).toContain('暂停超时取消')
+    // 取消徽标按原因分流（TASK-M1.1-UI-001-FIX3）：不再统一显示「玩家已取消」
+    expect(badgeText('cancelled_timeout')).toContain('暂停超时')
 
     expect(text).toContain('✕')
-    expect(text).toContain('玩家已取消')
+    expect(badgeText('cancelled_user')).toContain('主动取消')
+    expect(badgeText('cancelled_user')).not.toContain('玩家已取消')
 
     // 四种状态在 DOM 上各自有独立标识，可断言互不相同
     const kinds = Array.from(container.querySelectorAll('[data-project-status]')).map(
@@ -362,6 +366,78 @@ describe('TASK-M1.1-UI-001-FIX2 收尾微调', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(document.activeElement).toBe(trigger)
     focusSpy.mockRestore()
+  })
+})
+
+describe('TASK-M1.1-UI-001-FIX3 取消徽标按原因分流', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockStore.dayIndex = 100
+  })
+
+  const badgeTexts = (container: HTMLElement, kind: string) =>
+    Array.from(container.querySelectorAll(`[data-project-status="${kind}"]`)).map(el => el.textContent ?? '')
+
+  it('N-1①：team_dissolved 徽标显示「团队解散」，不得说成「玩家已取消」，与横幅同义', () => {
+    const team = makeProject({
+      id: 'p-team-badge',
+      name: 'Team Badge',
+      phase: 'CANCELLED',
+      cancellationReason: 'team_dissolved',
+      updatedAt: 44,
+    })
+    mockStore.projects = [team]
+
+    // 列表行徽标
+    const list = renderList()
+    const listBadge = badgeTexts(list.container, 'cancelled_user')[0] ?? ''
+    // 反向断言在前：徽标一旦回退为固定「玩家已取消」，本用例必须先在此失败
+    expect(listBadge).not.toContain('玩家已取消')
+    expect(listBadge).toContain('团队解散')
+    expect(listBadge).not.toContain('主动取消')
+    list.unmount()
+
+    // 详情抬头徽标与横幅必须同义（同屏不得出现两种含义）
+    const detail = renderDetail(team)
+    const detailBadge = badgeTexts(detail.container, 'cancelled_user')[0] ?? ''
+    expect(detailBadge).toContain('团队解散')
+    expect(detailBadge).not.toContain('玩家已取消')
+    expect(detail.container.textContent).toContain('团队解散，项目终止')
+  })
+
+  it('N-1②：market_window_missed 徽标与 player_decision 徽标文本必须不同', () => {
+    const market = makeProject({
+      id: 'p-market-badge',
+      name: 'Market Badge',
+      phase: 'CANCELLED',
+      cancellationReason: 'market_window_missed',
+      updatedAt: 45,
+    })
+    mockStore.projects = [market, userCancel]
+    const { container } = renderList()
+
+    const badges = badgeTexts(container, 'cancelled_user')
+    expect(badges).toHaveLength(2)
+    expect(new Set(badges).size).toBe(2)
+
+    const joined = badges.join('|')
+    expect(joined).toContain('错过窗口')
+    expect(joined).toContain('主动取消')
+    expect(joined).not.toContain('玩家已取消')
+  })
+
+  it('N-4：ETA 未开工项目取「计划第 X 天」，已上市项目取「无法估算」', () => {
+    const planned = makeProject({ id: 'p-planned', name: 'Planned ETA', phase: 'CONCEPT', plannedLaunchDay: 200 })
+    const launched = makeProject({ id: 'p-launched', name: 'Launched ETA', phase: 'LAUNCHED' })
+    mockStore.projects = [planned, launched]
+    renderList()
+
+    const plannedRow = screen.getByText('Planned ETA').closest('tr')!
+    expect(plannedRow.textContent).toContain('计划第 200 天')
+
+    const launchedRow = screen.getByText('Launched ETA').closest('tr')!
+    expect(launchedRow.textContent).toContain('无法估算')
+    expect(launchedRow.textContent).not.toContain('计划第')
   })
 })
 

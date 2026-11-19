@@ -1,7 +1,7 @@
 import React from 'react'
 import { t } from '@ui/state/game-store'
 import type { Project } from '@domain/entities/project'
-import { resolveProjectStatus, STATUS_ICON, STATUS_LABEL_KEY } from './project-status'
+import { CANCEL_BADGE_KEY, isCancelledStatus, resolveCancelReason, resolveProjectStatus, STATUS_ICON, STATUS_LABEL_KEY } from './project-status'
 
 interface Props {
   project: Project
@@ -36,6 +36,11 @@ export const ProjectStatusBadge: React.FC<Props> = ({ project, showPausedDays = 
 
   const paused = kind === 'manual_pause' || kind === 'budget_exhausted'
   const pausedDays = project.pausedDays ?? 0
+  // 取消态文案按 cancellationReason 分流（N-1）：不得把团队解散/错过窗口等说成玩家主动取消
+  // data-project-status 仍保留四态粗分类取值，选择器与筛选依赖不变
+  const labelKey = isCancelledStatus(kind)
+    ? CANCEL_BADGE_KEY[resolveCancelReason(project.cancellationReason)]
+    : STATUS_LABEL_KEY[kind]
   // 预算耗尽徽标 hover：原因 + 触发日（F6，恢复 001-E 的 title 能力）
   const exhaustedTitle =
     kind === 'budget_exhausted'
@@ -45,7 +50,7 @@ export const ProjectStatusBadge: React.FC<Props> = ({ project, showPausedDays = 
   return (
     <>
       <span className={badgeClass} style={style} data-project-status={kind} title={exhaustedTitle}>
-        <span aria-hidden="true">{STATUS_ICON[kind]}</span> {t(STATUS_LABEL_KEY[kind])}
+        <span aria-hidden="true">{STATUS_ICON[kind]}</span> {t(labelKey)}
       </span>
       {showPausedDays && paused && (
         <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>

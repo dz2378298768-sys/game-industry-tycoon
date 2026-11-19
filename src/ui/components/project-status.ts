@@ -64,6 +64,52 @@ export function normalizeCancellationReason(reason: string | null | undefined): 
   }
 }
 
+/**
+ * 取消文案分类（TASK-M1.1-UI-001-FIX3 §10）：把领域取消原因（含归一后的 legacy/unknown）
+ * 收窄为 6 个展示类别，供徽标短标签与详情横幅标题共用同一份映射。
+ * 命名说明见交付说明：任务书写作 `CancelReasonKind` 的名称已被上面的 7 值归一类型占用
+ * （弹窗依赖，改它需动 out-of-scope 文件），故新类型命名 `CancelReasonCategory`。
+ */
+export type CancelReasonCategory = 'timeout' | 'user' | 'scope' | 'team' | 'market' | 'legacy'
+
+/** 取消文案分类判定：领域 6 值 + null/未知 → 6 类，任何消费点不得自行 switch */
+export function resolveCancelReason(reason: string | null | undefined): CancelReasonCategory {
+  switch (normalizeCancellationReason(reason)) {
+    case 'pause_timeout':
+      return 'timeout'
+    case 'player_decision':
+      return 'user'
+    case 'scope_became_unviable':
+      return 'scope'
+    case 'team_dissolved':
+      return 'team'
+    case 'market_window_missed':
+      return 'market'
+    default:
+      return 'legacy'
+  }
+}
+
+/** 徽标短标签（≤5 汉字，避免列表列换行），文案唯一权威：TASK-M1.1-UI-001-FIX3 §10 */
+export const CANCEL_BADGE_KEY: Record<CancelReasonCategory, string> = {
+  timeout: 'project.status.cancelled.timeout',
+  user: 'project.status.cancelled.user',
+  scope: 'project.status.cancelled.scope',
+  team: 'project.status.cancelled.team',
+  market: 'project.status.cancelled.market',
+  legacy: 'project.status.cancelled.legacy',
+}
+
+/** 详情取消横幅标题（仅标题，说明句由取消原因弹窗承担），文案唯一权威同上 */
+export const CANCEL_BANNER_KEY: Record<CancelReasonCategory, string> = {
+  timeout: 'project.banner.cancel.title.pause_timeout',
+  user: 'project.banner.cancel.title.player_decision',
+  scope: 'project.banner.cancel.title.scope_became_unviable',
+  team: 'project.banner.cancel.title.team_dissolved',
+  market: 'project.banner.cancel.title.market_window_missed',
+  legacy: 'project.banner.cancel.title.unknown',
+}
+
 export const STATUS_ICON: Record<ProjectStatusKind, string> = {
   active: '▶',
   manual_pause: '⏸',
@@ -73,16 +119,17 @@ export const STATUS_ICON: Record<ProjectStatusKind, string> = {
   cancelled_generic: '✕',
 }
 
-export const STATUS_LABEL_KEY: Record<Exclude<ProjectStatusKind, 'active'>, string> = {
+/** 取消三态的公共子集（取消态文案改由 CANCEL_BADGE_KEY 按原因细分） */
+export type CancelledStatusKind = 'cancelled_timeout' | 'cancelled_user' | 'cancelled_generic'
+
+/** 非取消态徽标文案（取消态见 CANCEL_BADGE_KEY） */
+export const STATUS_LABEL_KEY: Record<'manual_pause' | 'budget_exhausted', string> = {
   manual_pause: 'project.status.manualPaused',
   budget_exhausted: 'project.status.exhausted',
-  cancelled_timeout: 'project.status.cancelledTimeout',
-  cancelled_user: 'project.status.cancelledUser',
-  cancelled_generic: 'project.status.cancelled',
 }
 
-/** 取消态判定（列表/详情入口共用） */
-export function isCancelledStatus(kind: ProjectStatusKind): boolean {
+/** 取消态判定（列表/详情入口共用）；类型谓词用于窄化非取消态文案分支 */
+export function isCancelledStatus(kind: ProjectStatusKind): kind is CancelledStatusKind {
   return kind === 'cancelled_timeout' || kind === 'cancelled_user' || kind === 'cancelled_generic'
 }
 

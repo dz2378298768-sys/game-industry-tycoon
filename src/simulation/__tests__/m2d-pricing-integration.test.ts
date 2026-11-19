@@ -99,7 +99,7 @@ describe('自动退市与存档（D35–D36）', () => {
     expect(result.products[0]?.status).toBe('active')
   })
 
-  it('D36 存档往返：三字段保留；旧档缺失字段可解析并由取价函数兜底', () => {
+  it('D36 存档往返：三字段保留；v1 旧档由迁移补默认值（M2-E 后语义）', () => {
     const base = makeFixtureWorld()
     const priced = {
       ...base,
@@ -122,14 +122,22 @@ describe('自动退市与存档（D35–D36）', () => {
 
     const legacy = {
       ...base,
-      products: base.products.map((p) => ({ ...p, launchPriceCents: 2000 })),
+      schemaVersion: 1,
+      products: base.products.map((p) => ({
+        ...p,
+        launchPriceCents: 2000,
+        pricePerUnitCents: undefined,
+        discountRatePercent: undefined,
+        lastPriceChangeDay: undefined,
+      })),
     }
     const parsedLegacy = parseSave(JSON.parse(JSON.stringify(legacy)))
     expect(parsedLegacy.ok).toBe(true)
     if (!parsedLegacy.ok) return
     const legacyProduct = parsedLegacy.state.products[0]
     if (legacyProduct === undefined) throw new Error('legacy product missing after parse')
-    expect(legacyProduct.pricePerUnitCents).toBeUndefined()
+    // M2-E：v1 档读档即迁移，已定价产品补 pricePerUnitCents = 上市价
+    expect(legacyProduct.pricePerUnitCents).toBe(2000)
   })
 })
 

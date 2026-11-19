@@ -100,7 +100,7 @@ export function makeWorld(parts: Partial<WorldState> = {}): WorldState {
     saveSeed: 42,
     simulationAlgorithmVersion: 'mulberry32-v1',
     currentDayIndex: 0,
-    schemaVersion: 1,
+    schemaVersion: 2, // 与生产 makeWorld 一致；v1 老档由测试显式构造
     ...parts,
   }
 }

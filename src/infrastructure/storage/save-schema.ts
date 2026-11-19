@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import type { WorldState } from '@simulation/services/world-state'
+import { migrateSave } from './save-migrations'
 import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
 import { makeSalesRecordId } from '@domain/entities/sales-record'
 import type { SalesRecord } from '@domain/entities/sales-record'
 import { makeRefundBatchId, refundBatchIdempotencyKey } from '@domain/entities/refund-batch'
 
 /** 当前存档结构版本 */
-export const SAVE_SCHEMA_VERSION = 1
+export const SAVE_SCHEMA_VERSION = 2
 
 /** 唯一支持的模拟算法版本 */
 export const SUPPORTED_ALGORITHM_VERSION = 'mulberry32-v1'
@@ -244,7 +245,7 @@ export const worldStateSchema = z
   .passthrough()
 
 export type ParseSaveResult =
-  | { ok: true; state: WorldState }
+  | { ok: true; state: WorldState; migratedFrom?: number }
   | { ok: false; errorCode: string; errorMessage: string }
 
 function duplicateId(ids: string[]): string | null {
@@ -261,7 +262,23 @@ function duplicateId(ids: string[]): string | null {
  * 任何失败都返回错误，调用方必须保持当前运行状态不变。
  */
 export function parseSave(raw: unknown): ParseSaveResult {
-  const parsed = worldStateSchema.safeParse(raw)
+  // 版本先行（DESIGN-M2-001-E §7 / R1 P2-1）：无迁移路径即拒绝，再判结构
+  const rawVersion =
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as { schemaVersion?: unknown }).schemaVersion
+      : undefined
+  let candidate = raw
+  let migratedFrom: number | undefined
+  if (typeof rawVersion === 'number' && Number.isInteger(rawVersion) && rawVersion !== SAVE_SCHEMA_VERSION) {
+    const migration = migrateSave(raw)
+    if (!migration.ok) {
+      return { ok: false, errorCode: migration.errorCode, errorMessage: migration.errorMessage }
+    }
+    candidate = migration.state
+    migratedFrom = migration.from
+  }
+
+  const parsed = worldStateSchema.safeParse(candidate)
   if (!parsed.success) {
     return {
       ok: false,
@@ -572,5 +589,5 @@ export function parseSave(raw: unknown): ParseSaveResult {
     }
   }
 
-  return { ok: true, state }
+  return migratedFrom === undefined ? { ok: true, state } : { ok: true, state, migratedFrom }
 }

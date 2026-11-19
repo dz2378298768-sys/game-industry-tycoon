@@ -625,7 +625,7 @@ describe('M2-A 销售/退款存档契约（DESIGN-M2-001-A T10–T44）', () => 
     expect(parseSave(world).ok).toBe(true)
   })
 
-  it('T41 旧 v1 存档缺字段兼容：补 [] 且 schemaVersion 仍为 1', () => {
+  it('T41 旧 v1 存档缺字段兼容：补 [] 且迁移升到 v2', () => {
     const world = makeContractWorld()
     const legacy = structuredClone(world) as unknown as {
       schemaVersion: number
@@ -639,10 +639,10 @@ describe('M2-A 销售/退款存档契约（DESIGN-M2-001-A T10–T44）', () => 
     const r = parseSave(legacy)
     expect(r.ok).toBe(true)
     if (!r.ok) return
-    expect(r.state.schemaVersion).toBe(1)
+    expect(r.state.schemaVersion).toBe(2)
     expect(r.state.products[0]?.salesByPeriod).toEqual([])
     expect(r.state.refundBatches).toEqual([])
-    expect(SAVE_SCHEMA_VERSION).toBe(1)
+    expect(SAVE_SCHEMA_VERSION).toBe(2)
   })
 
   it('T42 posted 累加与 actualRefundUnits 不一致被拒', () => {

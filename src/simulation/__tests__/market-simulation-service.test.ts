@@ -507,7 +507,7 @@ describe('销售管线服务（T10–T21 / T24–T26 / T28 / T32 / T34 / T36–T
     expect(new Set(day2.refundBatches.map((batch) => batch.id)).size).toBe(2)
   })
 
-  it('T32 边界：每记录 ≤1 pending auto 批次，无退款交易，schemaVersion 不变', () => {
+  it('T32 边界：每记录 ≤1 pending auto 批次，无退款交易，schemaVersion 保持 v2', () => {
     const world = makeSalesWorld([
       makeSalesProduct({ awarenessByMarket: { japan: 0.45, north_america: 0.3 } }),
     ])
@@ -524,7 +524,7 @@ describe('销售管线服务（T10–T21 / T24–T26 / T28 / T32 / T34 / T36–T
     expect(
       harness.finance.getAllTransactions().some((tx) => tx.category === 'customer_refund'),
     ).toBe(false)
-    expect(state.schemaVersion).toBe(1)
+    expect(state.schemaVersion).toBe(2)
   })
 
   it('T34 pending 唯一性：多市场 seq 唯一、ID 不冲突、重放不新增', () => {

@@ -2,11 +2,12 @@ import { get, set, del } from 'idb-keyval'
 import LZString from 'lz-string'
 import type { WorldState } from '@simulation/services/world-state'
 import { parseSave, SAVE_SCHEMA_VERSION } from './save-schema'
+import { backupKeyFor } from './save-migrations'
 
 const SAVE_KEY = 'git_save_v1'
 
 export type LoadGameResult =
-  | { status: 'ok'; state: WorldState }
+  | { status: 'ok'; state: WorldState; migratedFrom?: number; backupWritten?: boolean }
   | { status: 'empty' }
   | { status: 'invalid'; errorCode: string; errorMessage: string }
 
@@ -41,7 +42,23 @@ export async function loadGame(): Promise<LoadGameResult> {
   if (!parsed.ok) {
     return { status: 'invalid', errorCode: parsed.errorCode, errorMessage: parsed.errorMessage }
   }
-  return { status: 'ok', state: parsed.state }
+  if (parsed.migratedFrom === undefined) {
+    return { status: 'ok', state: parsed.state }
+  }
+
+  // v1 档先备份原始压缩串（按 seed 分开，已存在则跳过）；备份失败不阻断读档（R1 P2-2）
+  let backupWritten = false
+  try {
+    const key = backupKeyFor(parsed.state.saveSeed)
+    const existing = await get<string>(key)
+    if (existing === undefined || existing === null) {
+      await set(key, compressed)
+      backupWritten = true
+    }
+  } catch (error) {
+    console.warn('[save] v1 备份写入失败，读档继续', error)
+  }
+  return { status: 'ok', state: parsed.state, migratedFrom: parsed.migratedFrom, backupWritten }
 }
 
 export async function hasSave(): Promise<boolean> {

@@ -16,6 +16,9 @@ import {
   type ApplyDiscountCmd,
   type RetireProductCmd,
 } from '@simulation/services/product-pricing-service'
+import { MarketingService } from '@simulation/services/marketing-service'
+import type { MarketingChannel } from '@domain/value-objects/marketing-response'
+import { ContractService } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
@@ -63,6 +66,8 @@ export class GameWorld {
   public sales: MarketSimulationService
   public refunds: RefundService
   public pricing: ProductPricingService
+  public marketing: MarketingService
+  public contracts: ContractService
   public scheduler: DailyScheduler
   private readonly salesInputs: MarketInputProvider
 
@@ -93,11 +98,15 @@ export class GameWorld {
     })
     this.refunds = this.createRefundService()
     this.pricing = new ProductPricingService()
+    this.marketing = new MarketingService({ finance: this.finance, tuning: TUNING.sales })
+    this.contracts = new ContractService(this.finance)
     this.scheduler = new DailyScheduler({
       finance: this.finance,
       sales: this.sales,
       refunds: this.refunds,
       pricing: this.pricing,
+      marketing: this.marketing,
+      contracts: this.contracts,
     })
   }
 
@@ -750,6 +759,42 @@ export class GameWorld {
     return '分配失败：不满足项目团队约束。'
   }
 
+  // ----- M2-F：营销与发行合同命令 -----
+
+  setMarketingBudget(cmd: {
+    productId: string
+    channel: MarketingChannel
+    dailyBudgetCents: number
+  }): { success: boolean; errorCode?: string | undefined; message: string; result?: unknown } {
+    const r = this.marketing.setBudget(this.world, cmd, this.dayIndex)
+    if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '营销设置失败' }
+    this.world = r.world
+    return { success: true, message: r.ended === true ? '已停止投放' : '营销预算已更新', result: r.campaign }
+  }
+
+  signRevenueShareContract(cmd: {
+    productId: string
+    ratePercent: number
+    durationDays: number | null
+  }): { success: boolean; errorCode?: string | undefined; message: string; result?: unknown } {
+    const r = this.contracts.signRevenueShare(this.world, cmd, this.dayIndex)
+    if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '签约失败' }
+    this.world = r.world
+    return { success: true, message: '分成合同已签署', result: r.contract }
+  }
+
+  signMilestoneContract(cmd: {
+    productId: string
+    thresholdNetRevenueCents: number
+    payoutCents: number
+    durationDays: number | null
+  }): { success: boolean; errorCode?: string | undefined; message: string; result?: unknown } {
+    const r = this.contracts.signMilestone(this.world, cmd, this.dayIndex)
+    if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '签约失败' }
+    this.world = r.world
+    return { success: true, message: '里程碑合同已签署', result: r.contract }
+  }
+
   // ----- Persistence -----
 
   serialize(): WorldState {
@@ -790,11 +835,15 @@ export class GameWorld {
     })
     this.refunds = this.createRefundService()
     this.pricing = new ProductPricingService()
+    this.marketing = new MarketingService({ finance: this.finance, tuning: TUNING.sales })
+    this.contracts = new ContractService(this.finance)
     this.scheduler = new DailyScheduler({
       finance: this.finance,
       sales: this.sales,
       refunds: this.refunds,
       pricing: this.pricing,
+      marketing: this.marketing,
+      contracts: this.contracts,
     })
 
     this.projects.reset(state.projects)

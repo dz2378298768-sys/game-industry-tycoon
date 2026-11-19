@@ -7,6 +7,8 @@ import type { FinanceService } from '@simulation/services/finance-service'
 import type { MarketSimulationService } from '@simulation/services/market-simulation-service'
 import type { RefundService } from '@simulation/services/refund-service'
 import type { ProductPricingService } from '@simulation/services/product-pricing-service'
+import type { MarketingService } from '@simulation/services/marketing-service'
+import type { ContractService } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import {
   budgetExhaustedEventKey,
@@ -46,6 +48,10 @@ export interface DailySchedulerDeps {
   refunds?: RefundService
   /** 生命周期阶段（M2-D）；未注入时阶段不推进，保持既有行为不变 */
   pricing?: ProductPricingService
+  /** 营销投放（M2-F）；未注入时跳过 */
+  marketing?: MarketingService
+  /** 发行合同（M2-F）；未注入时跳过结算 */
+  contracts?: ContractService
 }
 
 const ZERO_WORK: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
@@ -83,6 +89,13 @@ export class DailyScheduler {
     // 退款到期兑现紧随销售之后（DESIGN-M2-001-C §10.10.2）：保证当日 sales 已落账再判 remaining
     if (this.deps.refunds !== undefined) {
       state = this.deps.refunds.processDueRefunds(state, dayIndex).world
+    }
+    // 营销与合同在退款之后（DESIGN-M2-001-F §8）：分成基数含当日退款冲减
+    if (this.deps.marketing !== undefined) {
+      state = this.deps.marketing.tick(state, dayIndex).world
+    }
+    if (this.deps.contracts !== undefined) {
+      state = this.deps.contracts.settle(state, dayIndex).world
     }
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)

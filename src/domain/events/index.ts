@@ -251,3 +251,92 @@ export function createProductLifecycleChangedEvent(
 export function createProductRetiredEvent(id: string, input: ProductRetiredPayload): DomainEvent {
   return { id, type: PRODUCT_RETIRED_EVENT, day: input.day, payload: { ...input } }
 }
+
+// ===== M2-F：营销与发行合同（DESIGN-M2-001-F §7）=====
+export const MARKETING_CAMPAIGN_SET_EVENT = 'MarketingCampaignSet'
+export const MARKETING_CAMPAIGN_ENDED_EVENT = 'MarketingCampaignEnded'
+export const MARKETING_SPEND_POSTED_EVENT = 'MarketingSpendPosted'
+export const MARKETING_SPEND_FAILED_EVENT = 'MarketingSpendFailed'
+export const PUBLISHING_CONTRACT_SIGNED_EVENT = 'PublishingContractSigned'
+export const PUBLISHING_REVENUE_SETTLED_EVENT = 'PublishingRevenueSettled'
+export const PUBLISHING_MILESTONE_PAID_EVENT = 'PublishingMilestonePaid'
+
+export interface MarketingCampaignSetPayload {
+  day: number
+  campaignId: string
+  productId: string
+  channel: string
+  dailyBudgetCents: number
+}
+
+export function createMarketingCampaignSetEvent(id: string, input: MarketingCampaignSetPayload): DomainEvent {
+  return { id, type: MARKETING_CAMPAIGN_SET_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface MarketingCampaignEndedPayload {
+  day: number
+  campaignId: string
+  productId: string
+  channel: string
+}
+
+export function createMarketingCampaignEndedEvent(id: string, input: MarketingCampaignEndedPayload): DomainEvent {
+  return { id, type: MARKETING_CAMPAIGN_ENDED_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface MarketingSpendPostedPayload {
+  day: number
+  campaignId: string
+  productId: string
+  channel: string
+  amountCents: number
+}
+
+export function createMarketingSpendPostedEvent(id: string, input: MarketingSpendPostedPayload): DomainEvent {
+  return { id, type: MARKETING_SPEND_POSTED_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface MarketingSpendFailedPayload {
+  day: number
+  campaignId: string
+  productId: string
+  channel: string
+  reasonCode: string
+}
+
+export function createMarketingSpendFailedEvent(id: string, input: MarketingSpendFailedPayload): DomainEvent {
+  return { id, type: MARKETING_SPEND_FAILED_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface PublishingContractSignedPayload {
+  day: number
+  contractId: string
+  productId: string
+  contractType: string
+}
+
+export function createPublishingContractSignedEvent(id: string, input: PublishingContractSignedPayload): DomainEvent {
+  return { id, type: PUBLISHING_CONTRACT_SIGNED_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface PublishingRevenueSettledPayload {
+  day: number
+  contractId: string
+  baseCents: number
+  amountCents: number
+  direction: 'pay' | 'clawback'
+}
+
+export function createPublishingRevenueSettledEvent(id: string, input: PublishingRevenueSettledPayload): DomainEvent {
+  return { id, type: PUBLISHING_REVENUE_SETTLED_EVENT, day: input.day, payload: { ...input } }
+}
+
+export interface PublishingMilestonePaidPayload {
+  day: number
+  contractId: string
+  amountCents: number
+}
+
+export function createPublishingMilestonePaidEvent(id: string, input: PublishingMilestonePaidPayload): DomainEvent {
+  return { id, type: PUBLISHING_MILESTONE_PAID_EVENT, day: input.day, payload: { ...input } }
+}

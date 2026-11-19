@@ -51,3 +51,4 @@ export {
   isPriceChangeAllowed,
   resolveDiscount,
 } from './product-pricing'
+export * from './marketing-response'

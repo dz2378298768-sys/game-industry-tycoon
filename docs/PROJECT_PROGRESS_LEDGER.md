@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 `main` HEAD **`d27dd5c53e946937616c1e62384506a19342d444`**（与 `origin/main` **0/0** 对齐；`git rev-list --left-right --count origin/main...HEAD` = `0 0`）。工作区含 M2 第一批**未 commit**改动（M2-A / M2-B / M2-C / **M2-D** 均 CLOSED）。最新全量核验（真实退出码，2026-11-19）：**50 文件 / 458 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → **M2-E 50/458**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A **CLOSED**、M2-B **CLOSED**、**M2-C CLOSED**、M2-D CLOSED、**M2-E CLOSED**（存档 v1→v2 迁移） |
+| 当前基线 | 本地 `main` HEAD **`d27dd5c53e946937616c1e62384506a19342d444`**（与 `origin/main` **0/0** 对齐；`git rev-list --left-right --count origin/main...HEAD` = `0 0`）。工作区含 M2 第一批**未 commit**改动（M2-A / M2-B / M2-C / **M2-D** 均 CLOSED）。最新全量核验（真实退出码，2026-11-19）：**51 文件 / 491 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → **M2-F 51/491**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A **CLOSED**、M2-B **CLOSED**、**M2-C CLOSED**、M2-D CLOSED、M2-E CLOSED、**M2-F CLOSED**（营销与发行合同） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -20,7 +20,7 @@
 | M1（已交付） | 游戏公司经营垂直切片 | CLOSED | 100% |
 | M1.1（**已关闭**） | 稳定性修复 + A1-G21 设计裁定落地 + 自动化测试 + G-05 成本口径补齐 | **CLOSED**（Owner 2026-11-19 授权跳过真人试玩、当前阶段可关闭，书面决策 `DECISION-M1.1-CLOSE.md`） | **25/25 任务主表已清点**；14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（P1）已闭环；九项核查 9/9 满足（见 `STAGE-CHECK-M1.1.md` v1.0）；体验验证推迟到 M1.2 首批交付后 | **24/26 CLOSED**（含 1 项 Owner 决策留档 + 2 项 Owner 待办挂起） |
 | M1.2 | M1.2 首批：默认配置调参 + 现金下限/破产 + 砍范围 descope + 延期上市 delay launch；**第二批：UI 层落地**（破产/现金警告横幅、descope/延期弹窗、状态徽标、命令入口） | **首批 4 任务 CLOSED + 第二批 UI 层 CLOSED**（UI 层设计审核 REVISE_REQUIRED → v1.1 修订 → 实现全绿） | 5 设计规格 + 4 编码任务 + **1 UI 设计规格 + 1 UI 编码任务** 全 CLOSED；**32 文件 / 230 用例 / 0 skip / 全绿**；反证 5/5 锁住；本会话补 V3/V4/V5/V10/V14 覆盖测试 9 条并修 1 条边界用例；V11/V12/V13 UI 级覆盖待补（PLANNED） | 12/13 CLOSED（1 项覆盖补测 PLANNED） |
-| M2 | 商业化与销售系统 | **M2-A/B/C/D/E 全部 CLOSED**（E 存档迁移）；F/G 待派发 | A/B/C 已完成：46 文件/388 用例全绿；M2-C 退款窗口含 42 条用例、6 个错误码、3 项反证 |
+| M2 | 商业化与销售系统 | **M2-A/B/C/D/E/F 全部 CLOSED**（F 营销与合同）；G 待派发 | A/B/C 已完成：46 文件/388 用例全绿；M2-C 退款窗口含 42 条用例、6 个错误码、3 项反证 |
 
 **阶段目标（M1.1 收尾）**：完成 G-05 预算成本核算、D-01 暂停超时、pause_timeout UI、版本元数据一致性，形成可玩的研发经营闭环，通过体验验收与独立审核，由 Owner 确认关闭。
 
@@ -80,6 +80,8 @@
 
 | DESIGN-M2-001-E | M2-E 存档 v1→v2 迁移规格（canMigrate / migrateSave / 1→2 步骤 / 备份 / parseSave 接入 / 26 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | PLAN D-07 + DESIGN-M2-001-D v1.2 三字段 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）→ v1.2（偏差回写）** | P1：返回类型未定义 / 备份单槽丢档 / 迁移档白送冷却；D-N1~D-N3 已回写 | 已实现并交付 |
 | TASK-M2-001-E | M2-E 存档迁移编码任务（26 例 + 反证 4 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-E v1.2（CLOSED） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0；D-N1~D-N3 偏差登记） | 26 例全绿；反证 4/4 变红（不补价/覆盖备份/重算历史/断迁移接线）；四命令全 0（50/458，build 2.94s） | 待 Owner 决定 commit/push |
+| DESIGN-M2-001-F | M2-F 营销渠道与发行合同规格（3 渠道 / 2 类合同 / 跨日退款冲减 / 7 事件 / 8 错误码 / 33 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | PLAN D-08 + B v1.2 销售公式 + E v1.2 存档 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）→ v1.2（偏差回写）** | P1：衰减与投放顺序冲突 / 跨日退款多付 / 里程碑口径歧义；D-N1~D-N3 已回写 | 已实现并交付 |
+| TASK-M2-001-F | M2-F 营销与合同编码任务（33 例 + 反证 4 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-F v1.2（CLOSED） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0） | 33 例全绿；反证 4/4 变红（幂等重复计费/缺冲减/无边际递减/里程碑未完成）；四命令全 0（51/491） | 待 Owner 决定 commit/push |
 | PLAN-M2-REMAINING-001 | M2 后续批次进度规划与设计裁定（D→E→F→G、12 项裁定、D 的具体细节、止损规则） | M2 | 设计负责人（主 AI 代行） | **CLOSED** | P1 | M2-A/B/C CLOSED | — | 设计自裁定（D-01~D-12，无需 Owner 追认；commit/push 仍归 Owner） | D 的具体细节已锁：阶段阈值 21/90/180/365、双价格字段、折扣冷静期 14 天 + 5%~50%、6 错误码、36 例密度 | 已生效；下一步产出 `DESIGN-M2-001-D-PRICING.md` v1.0 并过 R1 |
 
 ---
@@ -104,7 +106,7 @@
 
 | 口径 | 值 | 说明 |
 |---|---|---|
-| 任务计数 | **45 / 47 = 96%** | CLOSED 45 项 / 主表 47 项；未闭环 2 项＝SEC-01、PLAYTEST-M1.1-EXEC（DESIGN_BLOCKED） |
+| 任务计数 | **46 / 47 = 98%** | CLOSED 46 项 / 主表 47 项；未闭环 1 项＝SEC-01（PLAYTEST-M1.1-EXEC 为 DESIGN_BLOCKED，不计入） |
 | 编码任务计数 | **26 / 26 = 100%** | 24 项 `TASK-` 编码任务 CLOSED（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1 + COVERAGE-FOLLOWUP 1 + PARITY-FIX 1 + M2-001-A 1 + M2-001-B 1 + M2-001-C 1 + **M2-001-D 1**）；1 项未闭环＝AUDIT-DELTA-CLARIFY（非编码） |
 | **阶段完成判断** | **M1.1 CLOSED；M1.2 首批 + 第二批 CLOSED；M2 第一批已启动** | M1.1：Owner 授权跳过真人试玩，九项核查 9/9。M1.2：首批审核 PASS；第二批 UI 层全绿，但 M2 启动前的 V12/V13 覆盖核验发现真实实现缺陷（错误码错配 + 预览公式偏离），已立 P1 整改任务并进入编码。M2：设计前置满足（七项裁定 + DATA-001），M2-A 编码已 CLOSED（38 文件/292 用例）；M2-B 规格经 R3 PASS_WITH_NOTES（41 条测试），编码进行中 |
 

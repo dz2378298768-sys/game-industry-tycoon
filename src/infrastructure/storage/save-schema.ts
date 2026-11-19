@@ -228,6 +228,38 @@ const transactionSchema = z
   })
   .passthrough()
 
+const marketingCampaignSchema = z
+  .object({
+    id: z.string().min(1),
+    productId: z.string().min(1),
+    channel: z.enum(['social', 'expo', 'ads']),
+    dailyBudgetCents: z.number().int().nonnegative(),
+    startDay: z.number().int().nonnegative(),
+    status: z.enum(['active', 'ended']),
+    version: z.number().int().nonnegative(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .passthrough()
+
+const publishingContractSchema = z
+  .object({
+    id: z.string().min(1),
+    productId: z.string().min(1),
+    type: z.enum(['revenue_share', 'milestone']),
+    ratePercent: z.number().int().min(5).max(30).optional(),
+    thresholdNetRevenueCents: z.number().int().nonnegative().optional(),
+    payoutCents: z.number().int().nonnegative().optional(),
+    signedDay: z.number().int().nonnegative(),
+    durationDays: z.number().int().min(30).max(365).nullable(),
+    status: z.enum(['active', 'completed', 'terminated']),
+    settledCents: z.number().int(),
+    version: z.number().int().nonnegative(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .passthrough()
+
 export const worldStateSchema = z
   .object({
     schemaVersion: z.number().int(),
@@ -240,6 +272,9 @@ export const worldStateSchema = z
     products: z.array(productSchema),
     /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
     refundBatches: z.array(refundBatchSchema).default([]),
+    /** M2-F：旧档缺省 []，不升存档版本 */
+    marketingCampaigns: z.array(marketingCampaignSchema).default([]),
+    publishingContracts: z.array(publishingContractSchema).default([]),
     transactions: z.array(transactionSchema),
   })
   .passthrough()

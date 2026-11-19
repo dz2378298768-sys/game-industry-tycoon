@@ -3,11 +3,11 @@
 | 属性 | 内容 |
 |---|---|
 | 文件编号 | PROJECT-PROGRESS-LEDGER-001 |
-| 版本 | 2.6 |
+| 版本 | 2.7 |
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 main HEAD **`9e474de`**（审核与设计侧各实测一次：**22 文件 / 173 用例 / 0 skip**，typecheck / lint:check / build 通过；`git rev-list --count origin/main..HEAD` = **14** 提交，**未 push**）；**UI 线已收尾**，阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED），**S-1 已关闭**（`TERMINAL-RELEASE-001` CLOSED） |
+| 当前基线 | 本地 main HEAD **`405f4c4`**（审核与设计侧各实测一次：**22 文件 / 173 用例 / 0 skip**，typecheck / lint:check / build 通过；`git rev-list --count origin/main..HEAD` = **14** 提交，**未 push**）；**UI 线已收尾**，阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED），**S-1 已关闭**（`TERMINAL-RELEASE-001` CLOSED） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -290,3 +290,4 @@
 | 2.4 | 2026-11-19 | FIX3 交付+复审 PASS_WITH_NOTES+五项 NOTE 处置（2 改文档/2 补证据/1 风险接受）→ CLOSED；规格 v1.8、任务书 v1.1；走查 v1.0（44 项全通过、脚本入库）；UI 线判定收尾；阶段审核启动；进度按"仅剩体验维度"表述 | 设计负责人 |
 | 2.5 | 2026-11-19 | 阶段审核结论入账（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED）；S-1 升级 P1 并派 `TERMINAL-RELEASE-001`；S-2 先改规格 G05 v1.7 + PAUSE-UI v1.9；S-3/S-4/S-6 文档类处置；**自纠提交数 21→13**（附根因与硬措施） | 设计负责人 |
 | 2.6 | 2026-11-19 | `TERMINAL-RELEASE-001`（`9e474de`）复审 PASS_WITH_NOTES（P1=0/P2=0/P3=3）+ 设计侧真实浏览器 10/10 走查 → CLOSED、**S-1 关闭**；R-01 设计裁定不改（C-06）、R-02 转 OI-25、R-03 补 4 张自证截图；走查 v1.2（54 项断言）；**自纠两处数字**：STAGE-CHECK"16 项"→"14 项编码+1 项元数据"、§4 加权 84.7%/92% 并存 → 改为 22/25 计数口径 | 设计负责人 |
+| 2.7 | 2026-11-19 | 交接：新增 `HANDOFF-2026-11-19.md`（内容规划+进度+资产+代行决定清单）；路线图升 v1.2；元数据 D-05 落库（`405f4c4`）；清理临时 worktree 4 个与 `/tmp` 残留（198M→9.2M） | 设计负责人 |

@@ -38,12 +38,14 @@ README 完整新 SHA256：`83af634a7bc21a3a43e82a4fd4c9ef50a1f3ecd389582c982769b
 
 - 修正后完整设计包校验：**24 / 24** 文件 SHA256 与 bytes 与修正版 MANIFEST 一致，无不匹配。
 - 规格正文零改动证据：非 README 的 **23 / 23** 份规格文件 SHA256 与 bytes 与原始冻结包**完全一致**。
-- 原始冻结证据未被覆盖：原始 README 仍为 2.1.6（已复核），可供追溯。
+- 原始冻结证据保留于 git 历史：并入前的 `spec/README.md` 版本为 2.1.6，可用 `git show dfcf93f:spec/README.md` 追溯；原始上传 zip 仍在 `/root/uploads/`。
 
-## 5. 落库动作（待编码者执行，纳入下一轮）
+## 5. 落库动作（已完成）
 
-- 将 `/workspace/spec_version_fix/README.md` 与 `/workspace/spec_version_fix/MANIFEST.json` 并入仓库 `spec/` 对应文件。
-- 提交 SHA 记入台账；由于仅元数据变更，**不触发任何代码重编码或重新审核**（无实现影响）。
+- **已并入**：提交 **`405f4c4`**（`chore(spec): unify version tag to 2.1.7-final-freeze (D-05)`），改动 2 文件 / +4 −4 行，全部为版本元数据。
+- 并入后实测：`spec/README.md` sha256 = `83af634a…b3faecc`、`spec/MANIFEST.json` sha256 = `b50c6947…97b3cfc`，与修正件一致；`git diff --stat` 仅 2 文件 4 行。
+- 暂存副本 `/workspace/spec_version_fix/` 已在交接清理中移除，内容已全部入库。
+- 由于仅元数据变更，**不触发任何代码重编码或重新审核**（无实现影响），构建产物与线上 Pages 无需重新发布。
 - 提交信息建议：`chore(spec): unify version tag to 2.1.7-final-freeze (D-05)`。
 
 ## 6. 变更记录
@@ -51,3 +53,4 @@ README 完整新 SHA256：`83af634a7bc21a3a43e82a4fd4c9ef50a1f3ecd389582c982769b
 | 版本 | 日期 | 变更 | 维护人 |
 |---|---|---|---|
 | 1.0 | 2026-11-19 | Owner 授权后统一版本标记，重算 SHA256，规格正文零改动 | 设计负责人 |
+| 1.1 | 2026-11-19 | 落库完成：修正件并入 `spec/`（提交 `405f4c4`）；§4 原始证据追溯方式改为 git 历史；暂存副本清理 | 设计负责人 |

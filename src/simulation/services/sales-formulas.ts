@@ -37,6 +37,18 @@ export const SALES_FORMULA_CONSTANTS = Object.freeze({
 })
 
 export const FORMULA_CONSTANTS_VERSION = SALES_FORMULA_CONSTANTS.VERSION
+
+/**
+ * 稳定产品键（M2-H P1-D）：不用随机 id，避免同 seed 不可复现。
+ * 上市后 name 只读，故 `name|genre|launchDay` 足以区分同公司不同产品。
+ */
+export function stableProductKey(product: {
+  name: string
+  genreId: string
+  launchDay: number | null
+}): string {
+  return `p:${fnv1a(`${product.name}|${product.genreId}|${product.launchDay ?? -1}`)}`
+}
 export const ALGORITHM_VERSION = 'mulberry32-v1'
 
 /** 显式平台 → 类别映射（14 条，唯一权威，§10.2.1） */
@@ -375,10 +387,12 @@ export function perturbationContext(input: {
   marketId: string
   platformId: string
   segmentId: string
+  /** 稳定实体键（M2-H P1-D）：缺省回退 productId，生产传 stableProductKey */
+  entityKey?: string
 }): RngContext {
   return {
     subsystemId: 'sales',
-    entityId: input.productId,
+    entityId: input.entityKey ?? input.productId,
     dayIndex: input.dayIndex,
     purposeId: 'purchase_conversion_perturbation',
     scopeId: `${input.marketId}:${input.platformId}:${input.segmentId}`,

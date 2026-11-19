@@ -7,6 +7,8 @@ import { RandomService } from '@simulation/services/random-service'
 import { MarketSimulationService } from '@simulation/services/market-simulation-service'
 import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
 import type { MarketInputProvider } from '@simulation/services/sales-types'
+import { seedInitialAwareness } from '@content/market-inputs'
+import { createProductLifecycleChangedEvent } from '@domain/events'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
@@ -446,6 +448,11 @@ export class GameWorld {
     if (launched) {
       company.brand = Math.max(0, Math.min(100, company.brand + result.result.product.brandImpact))
     }
+    // M2-H §4.2：上市建立初始认知度（首发曝光），否则产品永远进不了任何市场
+    const product = this.world.products.find((p) => p.sourceProjectId === projectId)
+    if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
+      product.awarenessByMarket = seedInitialAwareness(company.brand, this.dayIndex)
+    }
     this.syncCash(company)
     return { success: true, result: result.result.product }
   }
@@ -814,6 +821,22 @@ export class GameWorld {
   }
 
   restore(state: WorldState): void {
+    // M2-H §4.3：旧档空认知度回填（只写认知度，不回补历史销量/现金），并留事件
+    for (const product of state.products) {
+      if (product.status !== 'active' || Object.keys(product.awarenessByMarket).length > 0) continue
+      const company = state.companies.find((c) => c.id === product.companyId)
+      product.awarenessByMarket = seedInitialAwareness(company?.brand ?? 0, state.currentDayIndex)
+      state.events = [
+        ...state.events,
+        createProductLifecycleChangedEvent(`product-awareness-backfill:${product.id}`, {
+          productId: product.id,
+          from: product.lifecycleStage,
+          to: product.lifecycleStage,
+          day: state.currentDayIndex,
+          reason: 'awareness_backfill',
+        }),
+      ]
+    }
     this.world = state
     this.calendar = new GameCalendar(state.currentDayIndex)
     this.rng = new RandomService(state.saveSeed)

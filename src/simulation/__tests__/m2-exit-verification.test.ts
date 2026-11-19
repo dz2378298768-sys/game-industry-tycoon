@@ -1,82 +1,61 @@
 /**
- * M2 出口条件验证（阶段验收用，非功能回归）。
+ * M2 出口验证 v2（M2-H 修复后）。
  *
- * 目的：回答三个问题——
- *   1) 生产装配（`new GameWorld(seed)`，即 `init()` 的路径）能不能真的卖出产品？
- *   2) 两类定位在 30 天内的销量差是多少（出口条件：≥25%）？
- *   3) 现金流、退款、营销、合同能不能被解释（账实相符）？
+ * 与 v1 的差别：v1 断言的是“阻断事实”（生产 0 销量）；v2 必须断言“出口成立”，
+ * 且用生产工厂 `createGameWorld`（真实内容 provider），不再手工补输入。
  *
- * 本文件把实测数字打到 stdout，验收报告 `docs/M2-EXIT-VERIFICATION.md` 引用。
+ * 数字打到 stdout，供 `docs/M2-EXIT-VERIFICATION.md` v2 引用。
  */
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
+import { createGameWorld } from '@application/factories/create-game-world'
+import { buildMarketInput, seedInitialAwareness } from '@content/market-inputs'
 import { makeCompany, makeProject, makeWorld } from '../../__tests__/helpers'
-import type { MarketInputBundle, MarketInputProvider } from '@simulation/services/sales-types'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 
 const DAYS = 30
 const PRICE = 2999
-const MARKET = 'japan'
 const PLATFORM = 'arcade_pre_1975'
 
-function seedWorld(gw: GameWorld, segmentId: string): { companyId: string; projectId: string } {
-  const company = makeCompany({ id: 'company-1', cashBalanceCents: 10_000_000, status: 'active' })
-  const project = makeProject({
-    id: 'project-1',
-    companyId: company.id,
-    phase: 'READY_TO_LAUNCH',
-    plannedLaunchDay: 0,
-    audienceSegmentIds: [segmentId],
-    targetPlatformIds: [PLATFORM],
-    workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 0 },
-  })
-  gw.world = makeWorld({ companies: [company], projects: [project], employees: [] })
-  // 生产路径由 createCompany 完成“注册 + 初始资本入账”，夹具必须等价补齐，否则销售无法入账
+function seedCompany(gw: GameWorld, cashCents = 10_000_000) {
+  const company = makeCompany({ id: 'company-1', cashBalanceCents: cashCents, status: 'active' })
+  gw.world = makeWorld({ companies: [company], projects: [], employees: [] })
   gw.finance.registerCompany(company.id)
   gw.finance.postTransaction({
     idempotencyKey: 'fixture-capital',
     companyId: company.id,
     day: 0,
     category: 'advance',
-    amountCents: company.cashBalanceCents,
+    amountCents: cashCents,
     description: '初始资本',
   })
-  return { companyId: company.id, projectId: project.id }
+  return company
 }
 
-function launchAndPrice(gw: GameWorld, projectId: string, stableId?: string): string {
+function addProjectAndLaunch(gw: GameWorld, projectId: string, segmentId: string, stableId: string | null) {
+  gw.world.projects.push(makeProject({
+    id: projectId,
+    companyId: 'company-1',
+    phase: 'READY_TO_LAUNCH',
+    plannedLaunchDay: gw.calendar.currentDayIndex,
+    audienceSegmentIds: [segmentId],
+    targetPlatformIds: [PLATFORM],
+    workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 0 },
+  }))
   const launched = gw.launchProject(projectId)
   expect(launched.success).toBe(true)
   const productId = launched.result!.id
-  // 产品 id 由 crypto.randomUUID 生成，会带进销售扰动的 rng context：
-  // 固定 id 才能让“同 seed 同结果”成立（不可复现性见 M2-EXIT-VERIFICATION-001 §4 P1-D）
-  if (stableId !== undefined) {
-    gw.world.products.find((p) => p.id === productId)!.id = stableId
-    expect(gw.setProductPrice({ productId: stableId, priceCents: PRICE }).success).toBe(true)
-    return stableId
-  }
-  const priced = gw.setProductPrice({ productId, priceCents: PRICE })
-  expect(priced.success).toBe(true)
-  return productId
+  // 产品 id 随机；固定后 rng 才可复现（M2-H 已把 rng 键换成 stableProductKey，这里只保证引用稳定）
+  const product = gw.world.products.find((p) => p.id === productId)!
+  // stableId=null 时保留随机 id：用于证明“不靠固定 id 也复现”
+  if (stableId !== null) product.id = stableId
+  const id = stableId ?? productId
+  expect(gw.setProductPrice({ productId: id, priceCents: PRICE }).success).toBe(true)
+  return { productId: id, product }
 }
 
-/** 只在“补输入端口”这一处不同的 provider：按定位给不同受众与兴趣。 */
-function makeSegmentProvider(map: Record<string, MarketInputBundle>): MarketInputProvider {
-  return {
-    getMarketInput: ({ segmentId }) => map[segmentId] ?? null,
-  }
-}
-
-const BUNDLES: Record<string, MarketInputBundle> = {
-  // 街机核心玩家：人少但兴趣高
-  arcade_enthusiasts: { eligibleAudience: 120_000, competitionFactor: 0.15, categoryInterest: 0.75, baseConsideration: 0.55, dailyMarketingSpendCents: 0 },
-  // 家用机玩家：人多但兴趣低
-  home_players: { eligibleAudience: 400_000, competitionFactor: 0.2, categoryInterest: 0.35, baseConsideration: 0.45, dailyMarketingSpendCents: 0 },
-}
-
-function unitsOf(gw: GameWorld, productId: string): { units: number; gross: number; net: number; records: number } {
-  const product = gw.world.products.find((p) => p.id === productId)
-  const sales = product?.salesByPeriod ?? []
+function totals(gw: GameWorld, productId: string) {
+  const sales = gw.world.products.find((p) => p.id === productId)?.salesByPeriod ?? []
   return {
     units: sales.reduce((a, r) => a + r.grossUnits, 0),
     gross: sales.reduce((a, r) => a + r.grossRevenueCents, 0),
@@ -85,107 +64,139 @@ function unitsOf(gw: GameWorld, productId: string): { units: number; gross: numb
   }
 }
 
-describe('M2 出口验证', () => {
-  it('E1 生产装配（无输入端口）30 天不产生任何销量', () => {
-    const gw = new GameWorld(42) // 与 store.init() 一致：默认 NULL provider
-    const { projectId } = seedWorld(gw, 'arcade_enthusiasts')
-    const productId = launchAndPrice(gw, projectId, 'PROD-E1')
+describe('M2 出口验证 v2', () => {
+  it('H08 生产工厂路径：30 天产生销量、退款与现金变化', () => {
+    const gw = createGameWorld(42)
+    seedCompany(gw)
+    const { productId, product } = addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', 'PROD-1')
+    console.log('[H08] 上市认知度:', JSON.stringify(product.awarenessByMarket))
+    expect(Object.keys(product.awarenessByMarket).length).toBeGreaterThan(0)
     gw.advanceSimulation(DAYS)
-    const r = unitsOf(gw, productId)
-    const codeSet = new Set<string>()
-    for (const e of gw.world.events) codeSet.add(String((e as { type?: string }).type ?? ''))
-    const codes = [...codeSet].filter(Boolean)
-    console.log('[E1] 生产装配 30 天:', JSON.stringify(r), '事件类型:', codes.slice(0, 6).join(','))
-    // 事实断言：无输入端口 + 无认知度 → 不产生销量（阻断出口条件）
-    expect(r.records).toBe(0)
-    expect(r.units).toBe(0)
+    const t = totals(gw, productId)
+    const refunds = gw.world.refundBatches.filter((b) => b.productId === productId)
+    const cash = gw.finance.getCashBalance('company-1')
+    console.log('[H08]', JSON.stringify(t), '退款批次:', refunds.length, '现金:', cash)
+    expect(t.records).toBeGreaterThan(0)
+    expect(t.units).toBeGreaterThan(0)
+    expect(t.net).toBeGreaterThan(0)
+    expect(refunds.length).toBeGreaterThan(0)
   })
 
-  it('E2 补输入端口但认知度仍为空 → 依旧 0 销量（第二个独立阻断）', () => {
-    const gw = new GameWorld(42, makeSegmentProvider(BUNDLES))
-    const { projectId } = seedWorld(gw, 'arcade_enthusiasts')
-    const productId = launchAndPrice(gw, projectId, 'PROD-E2')
-    gw.advanceSimulation(DAYS)
-    const r = unitsOf(gw, productId)
-    console.log('[E2] 有输入端口、认知度为空 30 天:', JSON.stringify(r))
-    expect(r.records).toBe(0)
+  it('H01/H02 内容 provider：字段完整，未开放市场返回 null', () => {
+    const at1970 = buildMarketInput('japan', PLATFORM, 'arcade_enthusiasts', 0)
+    const at1970EastAsia = buildMarketInput('east_asia', PLATFORM, 'arcade_enthusiasts', 0)
+    console.log('[H01] japan@1970:', JSON.stringify(at1970), 'east_asia@1970:', JSON.stringify(at1970EastAsia))
+    expect(at1970).not.toBeNull()
+    expect(at1970!.eligibleAudience).toBeGreaterThan(0)
+    expect(at1970!.categoryInterest).toBeGreaterThan(0)
+    expect(at1970!.dailyMarketingSpendCents).toBe(0)
+    expect(at1970EastAsia).toBeNull()
   })
 
-  it('E3 补输入端口 + 预置认知度 → 销量产生，且两类定位同窗口 30 天销量差实测', () => {
-    // 1977 起 arcade_enthusiasts 与 home_players 同时可用；跳到该年再同窗口对比，避免“跨年代不可比”
-    const START = gregorianToDayIndex(1977, 1, 1)
-    const gw = new GameWorld(42, makeSegmentProvider(BUNDLES))
-    // 空跑 7 年会有月度固定支出，资本金需足够（否则销售入账前就被扣成负余额）
-    const company = makeCompany({ id: 'company-1', cashBalanceCents: 5_000_000_000, status: 'active' })
-    gw.world = makeWorld({ companies: [company], projects: [], employees: [] })
-    gw.finance.registerCompany(company.id)
-    gw.finance.postTransaction({
-      idempotencyKey: 'fixture-capital', companyId: company.id, day: 0,
-      category: 'advance', amountCents: company.cashBalanceCents, description: '初始资本',
-    })
-    gw.advanceSimulation(START)
+  it('H03 初始认知度按市场开放年份过滤', () => {
+    const a1970 = seedInitialAwareness(7, 0)
+    const a1985 = seedInitialAwareness(7, gregorianToDayIndex(1985, 1, 1))
+    console.log('[H03] 1970 markets:', Object.keys(a1970).join(','), '1985 markets:', Object.keys(a1985).join(','))
+    expect(Object.keys(a1970).sort()).toEqual(['japan', 'north_america', 'western_europe'])
+    expect(a1985.east_asia).toBeDefined()
+    expect(a1970.east_asia).toBeUndefined()
+  })
 
-    const launch = (id: string, segmentId: string, stableId: string) => {
-      gw.world.projects.push(makeProject({
-        id, companyId: company.id, phase: 'READY_TO_LAUNCH', plannedLaunchDay: gw.calendar.currentDayIndex,
-        audienceSegmentIds: [segmentId], targetPlatformIds: [PLATFORM],
-        workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 0 },
-      }))
-      const launched = gw.launchProject(id)
-      expect(launched.success).toBe(true)
-      const productId = launched.result!.id
-      gw.world.products.find((p) => p.id === productId)!.id = stableId
-      expect(gw.setProductPrice({ productId: stableId, priceCents: PRICE }).success).toBe(true)
-      gw.world.products.find((p) => p.id === stableId)!.awarenessByMarket = { [MARKET]: 0.25 }
-      return stableId
+  it('H07 两类定位同窗口 30 天销量差 ≥25%', () => {
+    const gw = createGameWorld(42)
+    seedCompany(gw, 5_000_000_000)
+    gw.advanceSimulation(gregorianToDayIndex(1977, 1, 1))
+    const arcade = addProjectAndLaunch(gw, 'project-arcade', 'arcade_enthusiasts', 'PROD-ARCADE')
+    const home = addProjectAndLaunch(gw, 'project-home', 'home_players', 'PROD-HOME')
+    // 测量协议：同认知度（消除品牌加成差异），同价、同市场、同平台、无营销
+    const baseline = 0.072
+    for (const p of [arcade.product, home.product]) {
+      const seeded = { ...p.awarenessByMarket }
+      for (const key of Object.keys(seeded)) seeded[key] = baseline
+      p.awarenessByMarket = seeded
     }
-    const arcadeId = launch('project-arcade', 'arcade_enthusiasts', 'PROD-ARCADE')
-    const homeId = launch('project-home', 'home_players', 'PROD-HOME')
     gw.advanceSimulation(DAYS)
-
-    const arcade = unitsOf(gw, arcadeId)
-    const home = unitsOf(gw, homeId)
-    const delta = Math.abs(arcade.units - home.units) / Math.max(arcade.units, home.units, 1)
-    console.log('[E3] arcade_enthusiasts:', JSON.stringify(arcade), 'home_players:', JSON.stringify(home), '相对差:', (delta * 100).toFixed(2) + '%')
-    expect(arcade.units).toBeGreaterThan(0)
-    expect(home.units).toBeGreaterThan(0)
-    expect(arcade.units).not.toBe(home.units)
+    const a = totals(gw, arcade.productId)
+    const b = totals(gw, home.productId)
+    const delta = Math.abs(a.units - b.units) / Math.max(a.units, b.units, 1)
+    console.log('[H07] arcade:', JSON.stringify(a), 'home:', JSON.stringify(b), '相对差:', (delta * 100).toFixed(2) + '%')
+    expect(a.units).toBeGreaterThan(0)
+    expect(b.units).toBeGreaterThan(0)
+    expect(delta).toBeGreaterThanOrEqual(0.25)
   })
 
-  it('E4 账实相符：现金变动 = 全部交易流水之和（含销售/退款/营销）', () => {
-    const gw = new GameWorld(42, makeSegmentProvider(BUNDLES))
-    const { projectId, companyId } = seedWorld(gw, 'arcade_enthusiasts')
-    const productId = launchAndPrice(gw, projectId, 'PROD-E4')
-    const product = gw.world.products.find((p) => p.id === productId)!
-    product.awarenessByMarket = { [MARKET]: 0.3 }
+  it('H06 同 seed 两次跑逐字段相等（不固定随机 id，销量与现金）', () => {
+    const run = () => {
+      const gw = createGameWorld(42)
+      seedCompany(gw)
+      // stableId=null：产品 id 保持随机，复现性不能靠夹具固定
+      const { productId } = addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', null)
+      gw.advanceSimulation(DAYS)
+      return { t: totals(gw, productId), cash: gw.finance.getCashBalance('company-1') }
+    }
+    const first = run()
+    const second = run()
+    console.log('[H06] first:', JSON.stringify(first), 'second:', JSON.stringify(second))
+    expect(second).toEqual(first)
+  })
+
+  it('H04/H05 旧档空认知度回填：幂等、不覆盖已有、留事件', () => {
+    const gw = createGameWorld(42)
+    seedCompany(gw)
+    addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', 'PROD-OLD')
+    // 注意：setProductPrice 会替换 world，必须重新从 world 取活引用
+    gw.world.products[0]!.awarenessByMarket = {}
+    gw.advanceSimulation(1)
+    const before = gw.world.products[0]!.salesByPeriod.length
+    gw.restore(gw.world) // 模拟读档
+    const backfilled = gw.world.products[0]!.awarenessByMarket
+    const events = gw.world.events.filter((e) => (e.payload as { reason?: string }).reason === 'awareness_backfill')
+    console.log('[H04] backfilled:', JSON.stringify(backfilled), 'events:', events.length, '读档前销量记录:', before)
+    expect(Object.keys(backfilled).length).toBeGreaterThan(0)
+    expect(events.length).toBe(1)
+    // 幂等：再 restore 不重复回填、不重复事件
+    gw.restore(gw.world)
+    const eventsAgain = gw.world.events.filter((e) => (e.payload as { reason?: string }).reason === 'awareness_backfill')
+    expect(eventsAgain.length).toBe(1)
+    // 不覆盖已有
+    gw.world.products[0]!.awarenessByMarket = { japan: 0.5 }
+    gw.restore(gw.world)
+    expect(gw.world.products[0]!.awarenessByMarket).toEqual({ japan: 0.5 })
+  })
+
+  it('H11 定位配置自检：两段“份额×兴趣”必须拉开 ≥25%（配置被改成相同则变红）', () => {
+    const arcade = buildMarketInput('japan', PLATFORM, 'arcade_enthusiasts', gregorianToDayIndex(1977, 1, 1))!
+    const home = buildMarketInput('japan', PLATFORM, 'home_players', gregorianToDayIndex(1977, 1, 1))!
+    const demandArcade = (arcade.eligibleAudience ?? 0) * (arcade.categoryInterest ?? 0)
+    const demandHome = (home.eligibleAudience ?? 0) * (home.categoryInterest ?? 0)
+    const delta = Math.abs(demandArcade - demandHome) / Math.max(demandArcade, demandHome, 1)
+    console.log('[H11] 需求侧差:', (delta * 100).toFixed(2) + '%')
+    expect(delta).toBeGreaterThanOrEqual(0.25)
+  })
+
+  it('H09 账实相符：现金变动 = 流水之和', () => {
+    const gw = createGameWorld(42)
+    seedCompany(gw)
+    const { productId } = addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', 'PROD-LEDGER')
     gw.setMarketingBudget({ productId, channel: 'social', dailyBudgetCents: 5_000 })
     gw.advanceSimulation(DAYS)
-
-    const initialCash = 0 // 夹具资本金本身也是一条流水，故从 0 起算
-    const ledgerSum = gw.finance.getTransactionsByCompany(companyId).reduce((a, t) => a + t.amountCents, 0)
-    const cashDelta = gw.finance.getCashBalance(companyId) - initialCash
-    const refunds = gw.world.refundBatches.filter((b) => b.productId === productId)
-    console.log('[E4] 现金差:', cashDelta, '流水和:', ledgerSum, '退款批次:', refunds.length,
-      'posted:', refunds.filter((b) => b.status === 'posted').length,
-      '营销支出:', gw.finance.getTransactionsByCompany(companyId).filter((t) => t.category === 'marketing').length,
-      '销量记录:', unitsOf(gw, productId).records)
-    expect(cashDelta).toBe(ledgerSum)
-    expect(gw.finance.getTransactionsByCompany(companyId).some((t) => t.category === 'marketing')).toBe(true)
+    const ledger = gw.finance.getTransactionsByCompany('company-1').reduce((a, t) => a + t.amountCents, 0)
+    const cash = gw.finance.getCashBalance('company-1')
+    console.log('[H09] 现金:', cash, '流水和:', ledger)
+    expect(cash).toBe(ledger)
   })
 
-  it('E5 合同结算：分成金额随销售净额产生且落在流水里', () => {
-    const gw = new GameWorld(42, makeSegmentProvider(BUNDLES))
-    const { projectId, companyId } = seedWorld(gw, 'arcade_enthusiasts')
-    const productId = launchAndPrice(gw, projectId, 'PROD-E5')
-    const product = gw.world.products.find((p) => p.id === productId)!
-    product.awarenessByMarket = { [MARKET]: 0.3 }
-    const signed = gw.signRevenueShareContract({ productId, ratePercent: 10, durationDays: 30 })
-    expect(signed.success).toBe(true)
+  it('H10 合同结算比例 10%±2pp', () => {
+    const gw = createGameWorld(42)
+    seedCompany(gw)
+    const { productId } = addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', 'PROD-CT')
+    expect(gw.signRevenueShareContract({ productId, ratePercent: 10, durationDays: 30 }).success).toBe(true)
     gw.advanceSimulation(DAYS)
     const contract = gw.world.publishingContracts.find((c) => c.productId === productId)!
-    const net = unitsOf(gw, productId).net
-    console.log('[E5] 销售净额:', net, '合同已结:', contract.settledCents, '状态:', contract.status)
-    expect(contract.settledCents).toBeGreaterThan(0)
-    expect(gw.finance.getTransactionsByCompany(companyId).some((t) => t.category === 'contract_payment')).toBe(true)
+    const net = totals(gw, productId).net
+    const ratio = net === 0 ? 0 : contract.settledCents / net
+    console.log('[H10] 净额:', net, '已结:', contract.settledCents, '比例:', (ratio * 100).toFixed(2) + '%', contract.status)
+    expect(net).toBeGreaterThan(0)
+    expect(Math.abs(ratio - 0.1)).toBeLessThanOrEqual(0.02)
   })
 })

@@ -20,6 +20,7 @@ import {
 } from '@content/queries'
 import type { Product } from '@domain/entities/product'
 import { effectivePriceCents } from '@domain/value-objects'
+import { stableProductKey } from './sales-formulas'
 import type { SalesRecord } from '@domain/entities/sales-record'
 import { makeSalesRecordId } from '@domain/entities/sales-record'
 import type { RefundBatch } from '@domain/entities/refund-batch'
@@ -380,6 +381,7 @@ export class MarketSimulationService {
           this.deps.rng,
           perturbationContext({
             productId: product.id,
+            entityKey: stableProductKey(product),
             dayIndex,
             marketId,
             platformId,

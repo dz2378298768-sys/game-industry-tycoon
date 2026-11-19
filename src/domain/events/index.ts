@@ -200,6 +200,8 @@ export type ProductLifecycleChangedPayload = {
   from: string
   to: string
   day: number
+  /** 可选原因（M2-H 旧档认知度回填 = 'awareness_backfill'） */
+  reason?: string
 }
 
 export type ProductRetiredPayload = {

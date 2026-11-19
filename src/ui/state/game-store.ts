@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { GameWorld } from '@application/mediators/game-world'
+import type { GameWorld } from '@application/mediators/game-world'
+import { createGameWorld } from '@application/factories/create-game-world'
 import { saveGame, loadGame, hasSave } from '@infrastructure/storage/save-service'
 import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
@@ -142,7 +143,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   locale: 'zh-CN',
 
   init(seed = 42) {
-    const gw = new GameWorld(seed)
+    const gw = createGameWorld(seed)
     gw.calendar.setSpeed('paused')
     set({ game: gw, dayIndex: gw.calendar.currentDayIndex, speed: gw.calendar.getSpeed() })
   },
@@ -483,7 +484,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       get().toast(result.errorMessage, 'error')
       return false
     }
-    const gw = get().game ?? new GameWorld(result.state.saveSeed)
+    const gw = get().game ?? createGameWorld(result.state.saveSeed)
     gw.restore(result.state)
     set({ game: gw, speed: gw.calendar.getSpeed(), dayIndex: gw.calendar.currentDayIndex })
     get().refresh()

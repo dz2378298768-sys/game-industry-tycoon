@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 `main` HEAD **`117cc44`**（M2-G 已推送，`origin/main` 0/0）。最新全量核验（真实退出码，2026-11-20）：**53 文件 / 517 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → M2-F 51/491 → M2-G 52/508 → 出口验证 53/513 → **M2-H 53/517**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A/B/C/D/E/F **CLOSED**、**M2-G CLOSED**（UI + i18n） |
+| 当前基线 | 本地 `main` HEAD **`aa1241c`**（M2-H 已推送，`origin/main` 0/0）。最新全量核验（真实退出码，2026-11-20）：**53 文件 / 517 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → M2-F 51/491 → M2-G 52/508 → 出口验证 53/513 → **M2-H 53/517**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A/B/C/D/E/F **CLOSED**、**M2-G CLOSED**（UI + i18n） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 

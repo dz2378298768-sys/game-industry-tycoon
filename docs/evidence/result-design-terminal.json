@@ -1,0 +1,96 @@
+{
+  "out": [
+    {
+      "id": "T0 前置",
+      "desc": "项目A 已分配 2 人",
+      "pass": true,
+      "detail": "assigned=2"
+    },
+    {
+      "id": "T1 取消前",
+      "desc": "取消前项目仍持有团队",
+      "pass": true,
+      "detail": "phase=CONCEPT team=2 spent=120000"
+    },
+    {
+      "id": "T2 取消后解绑",
+      "desc": "CANCELLED 且 teamAssignments 清空",
+      "pass": true,
+      "detail": "phase=CANCELLED team=0"
+    },
+    {
+      "id": "T3 终态不再计费",
+      "desc": "取消后 30 天 spent 与 allocations 均不增长",
+      "pass": true,
+      "detail": "spent 120000 → 120000, allocs 2 → 2（历史记录应保留、不得新增）"
+    },
+    {
+      "id": "T4 终态团队区文案",
+      "desc": "显示\"项目已结束，团队已释放\"",
+      "pass": true,
+      "detail": "\"团队分配\\n\\n项目已结束，团队已释放，员工可重新投入其它项目。\\n\\n—\""
+    },
+    {
+      "id": "T5 终态无分配表单",
+      "desc": "终态\"团队分配\"面板内无 select（排除全局语言选择器）",
+      "pass": true,
+      "detail": "团队面板内select=0；全页select=[\"中文|English\"]"
+    },
+    {
+      "id": "T6 终态无移除按钮",
+      "desc": "终态详情页无\"移除\"按钮",
+      "pass": true,
+      "detail": "buttons=[\"暂停\",\"慢速 (0.25x)\",\"正常 (1x)\",\"快速 (3x)\",\"极速 (7x)\",\"+30d\",\"保存\",\"读取\",\"← 返回\",\"查看取消原因\"]"
+    },
+    {
+      "id": "T7 终态不显示团队提示",
+      "desc": "不再提示\"分配后点+30d\"",
+      "pass": true,
+      "detail": "ok"
+    },
+    {
+      "id": "T8 S-1 用户视角复现",
+      "desc": "取消 A 后，通过真实 UI 可把原员工分配到 B",
+      "pass": true,
+      "detail": "select={\"chosen\":\"中文\",\"count\":2} click=OK teamB={\"team\":1,\"mem\":[100]}"
+    },
+    {
+      "id": "T9 分配后 B 团队区",
+      "desc": "B 显示已分配 1 人",
+      "pass": true,
+      "detail": "\"团队分配\\n\\n已分配 1 人，日均产出约为 6 工作点。 分配员工后，点击顶部「+30d」或启动时间流速来推进研发。\\n\\n姓名\\t岗位\\t技能等级\\t投入比例\\t\\n甲程序员\\t程序员\\t3\\t100%\\t移除\\n姓名\\n乙美术 · 美术师 · Lv.3\\n投入比例 (%)"
+    }
+  ],
+  "setup": {
+    "pid": "31bf69bf-0aae-4091-8051-2bb66df4a1ef",
+    "assigned": 2,
+    "emp": [
+      "bd014f3d-24a0-40b3-8c85-3b8bc1f79a5a",
+      "f9c99f86-8150-4e3b-9dc2-c05021290da8"
+    ]
+  },
+  "beforeCancel": {
+    "phase": "CONCEPT",
+    "team": 2,
+    "spent": 120000,
+    "allocs": 2
+  },
+  "afterCancel": {
+    "phase": "CANCELLED",
+    "team": 0,
+    "spent": 120000,
+    "allocs": 2
+  },
+  "after30": {
+    "spent": 120000,
+    "allocs": 2
+  },
+  "teamB": {
+    "team": 1,
+    "mem": [
+      100
+    ]
+  },
+  "teamText": "团队分配\n\n项目已结束，团队已释放，员工可重新投入其它项目。\n\n—",
+  "afterAssignText": "团队分配\n\n已分配 1 人，日均产出约为 6 工作点。 分配员工后，点击顶部「+30d」或启动时间流速来推进研发。\n\n姓名\t岗位\t技能等级\t投入比例\t\n甲程序员\t程序员\t3\t100%\t移除\n姓名\n乙美术 · 美术师 · Lv.3\n投入比例 (%)\n分配"
+}

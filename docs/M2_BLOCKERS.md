@@ -9,6 +9,8 @@
 - 全部 7 项（1.1–1.7）状态仍为 **未解决 / 待裁定**。
 - M1.1 唯一相关变更：存档新增 Zod 结构化校验（`src/infrastructure/storage/save-schema.ts`），但 `schemaVersion` 仍为 **1**，未提前增加 SalesRecord / RefundBatch 等 M2 字段。v1→v2 迁移规则仍只保留设计（见 3.1）。
 
+> **更新（2026-11-19，设计负责人代行裁定）**：七项阻塞 1.1–1.7 已全部裁定，权威结论见 `/workspace/docs/DESIGN-M2-UNBLOCK-001.md`。裁定确认 1.1–1.5/1.7 属文档滞后不一致（以冻结规格 08/09 权威定义收敛），1.6 为新裁定（窗口统一 TUNING refundWindowDays=14、actual 允许超 estimated、退款上限受 grossUnits 约束）。**M2 设计前置已满足，可解冻**；仍需完成 BDD 旧键更新、领域字段补充、M2 任务包 + GDR gate 后方可派发 M2 编码。各条目标题下已追加裁定结论。
+
 ## 1. 销售与退款规则
 
 ### 1.1 TC-FIN-010 退款幂等键冲突

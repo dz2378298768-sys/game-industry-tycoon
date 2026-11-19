@@ -1,0 +1,68 @@
+[
+  {
+    "id": "D3 构造超时取消",
+    "expect": "phase=CANCELLED / reason=pause_timeout",
+    "actual": "{\"phase\":\"CANCELLED\",\"reason\":\"pause_timeout\",\"day\":60}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "D2 构造预算耗尽暂停",
+    "expect": "isPaused/budget_exhausted/budgetExhausted=true",
+    "actual": "{\"isPaused\":true,\"reason\":\"budget_exhausted\",\"exhausted\":true,\"pausedDays\":1,\"day\":90}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "D 四态可区分",
+    "expect": "四行徽标文本互不相同，且能看出「暂停超时 / 预算耗尽 / 已手动暂停 / 主动取消」语义",
+    "actual": "[\"⛔ 暂停超时\",\"⚠ 预算耗尽\",\"⏸ 已手动暂停\",\"✕ 主动取消\"]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "D 无 i18n 原始键",
+    "expect": "徽标不得出现 project.status.* 原始键",
+    "actual": "[]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "D 详情徽标与横幅同义",
+    "expect": "徽标「暂停超时」与横幅「暂停超时，已被系统自动取消」不得互相矛盾",
+    "actual": "{\"badge\":\"⛔ 暂停超时\",\"panels\":[\"⛔ 暂停超时，已被系统自动取消查看取消原因\"]}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E3 存档公式不符",
+    "expect": "拒绝加载（SAVE_BUDGET_FORMULA_MISMATCH），不覆盖当前运行态",
+    "actual": "{\"ok\":false,\"before\":{\"cash\":4964000,\"day\":0,\"n\":2},\"after\":{\"cash\":4964000,\"day\":0,\"n\":2},\"unchanged\":true,\"toasts\":[\"✓ 保存成功\",\"项目 dc24f36f-a4f9-4bb6-bb43-039b01108e74 的 remainingCapCents（12345）与权威公式结果（9000000）不一致。\"]}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E2 旧存档缺字段",
+    "expect": "正常加载，budgetExhausted 缺省 false、resumeSeq 缺省 0",
+    "actual": "{\"ok\":true,\"budgetExhausted\":false,\"resumeSeq\":0,\"pausedDays\":0,\"isPaused\":false}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E1 损坏存档",
+    "expect": "拒绝加载并提示存档损坏，不覆盖当前运行态",
+    "actual": "{\"ok\":false,\"unchanged\":true,\"toasts\":[\"✓ 读取成功\",\"存档数据无法解压，可能已损坏。\"]}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E5 取消原因为 null",
+    "expect": "正常加载；徽标显示「已取消」通用文案，不崩溃、不显示\"玩家已取消\"",
+    "actual": "[{\"kind\":\"cancelled_generic\",\"text\":\"✕ 已取消\"}]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E5b 无原因弹窗",
+    "expect": "显示\"历史数据未记录取消原因\"一类通用说明，不崩溃",
+    "actual": "{\"text\":\"项目取消详情项目E-已取消取消日期第 0 天原因代码—说明历史存档未记录取消原因。后续状态项目不再推进研发、不产生人员产出与新支出；已发生义务按 G-05 处理。关闭\",\"buttons\":[\"关闭\"]}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "E4 终态项目详情",
+    "expect": "无恢复/追加按钮，不崩溃",
+    "actual": "{\"resume\":false,\"topup\":false,\"cancelBtn\":false,\"len\":702}",
+    "verdict": "PASS"
+  }
+]

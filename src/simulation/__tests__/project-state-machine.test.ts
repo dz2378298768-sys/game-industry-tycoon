@@ -89,6 +89,16 @@ describe('项目状态机', () => {
     expect(p?.cancellationReason).toBe('player_decision')
   })
 
+  it('cancel() 传入 dayIndex 时写入 updatedAt，缺省时保留原值（F4）', () => {
+    const withDay = serviceWith(makeProject({ phase: 'PRODUCTION', updatedAt: 10 }))
+    withDay.cancel('project-1', 'player_decision', 50)
+    expect(withDay.getById('project-1')?.updatedAt).toBe(50)
+
+    const withoutDay = serviceWith(makeProject({ phase: 'PRODUCTION', updatedAt: 10 }))
+    withoutDay.cancel('project-1', 'player_decision')
+    expect(withoutDay.getById('project-1')?.updatedAt).toBe(10)
+  })
+
   it('手动 cancel() 清除预算耗尽过程态标记（终态清理口径 DESIGN-G05 §6.3）', () => {
     const svc = serviceWith(
       makeProject({

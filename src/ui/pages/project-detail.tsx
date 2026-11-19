@@ -8,6 +8,7 @@ import { computeFinalQualityScore, defectLevelOf, computeInitialDefectLevel } fr
 import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
+import { ProjectStatusBadge } from '@ui/components/project-status-badge'
 import { normalizeCancellationReason, projectCancelledDay, resolveProjectStatus } from '@ui/components/project-status'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
@@ -57,7 +58,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const cancelledByUser = cancelledStatusKind === 'cancelled_user'
   const cancelledWithoutReason = cancelledStatusKind === 'cancelled_generic'
   const cancelReasonKind = normalizeCancellationReason(project.cancellationReason)
-  const cancelledDay = projectCancelledDay(project, store.dayIndex)
+  const cancelledDay = projectCancelledDay(project)
   // 耗尽/暂停发生日：耗尽即暂停，pausedDays 自该日起累计
   const pausedSinceDay = store.dayIndex - pausedDays
   const fmtSigned = (cents: number) => `${cents >= 0 ? '+' : ''}${formatMoney(cents)}`
@@ -193,8 +194,14 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             <button className="btn btn-secondary btn-small mb-16" onClick={() => onNavigate('projects')}>← {t('common.back')}</button>
             <h2 style={{ marginBottom: 4 }}>{project.name}</h2>
             <p className="muted" style={{ fontSize: 12 }}>
-              {genre?.displayNameZh ?? project.genreId} · {t(`phase.${project.phase}`)} · Created {formatDay(project.createdAt)}
+              {genre?.displayNameZh ?? project.genreId} · {t(`phase.${project.phase}`)}
+              {project.isPaused && project.phase !== 'CANCELLED' && t('project.status.phasePausedSuffix')}
+              {' · '}Created {formatDay(project.createdAt)}
             </p>
+            {/* 与列表一致的状态徽标（F5），暂停态由阶段后缀「（暂停）」+ 徽标双通道标识 */}
+            <div>
+              <ProjectStatusBadge project={project} currentDay={store.dayIndex} />
+            </div>
           </div>
           {!isTerminal && (
             <div className="flex-gap">

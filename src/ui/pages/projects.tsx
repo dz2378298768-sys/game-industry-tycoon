@@ -1,6 +1,8 @@
 import React from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
-import { totalCompletion } from '@simulation/systems/project-progress'
+import { totalCompletion, estimateDaysToFinish } from '@simulation/systems/project-progress'
+import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
+import type { Discipline } from '@domain/enums'
 import type { Project } from '@domain/entities/project'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
@@ -10,8 +12,14 @@ interface Props { onNavigate: (route: string, param?: string) => void }
 
 type ProjectFilter = 'all' | 'paused' | 'cancelled'
 
+/** 风险标记 → i18n 键；未登记标记原样显示，不编造文案 */
+const RISK_LABEL_KEY: Record<string, string> = {
+  budget_exhausted: 'project.risk.budget_exhausted',
+  quality_risk: 'project.risk.quality_risk',
+}
+
 export const Projects: React.FC<Props> = ({ onNavigate }) => {
-  const { projects, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
+  const { projects, employees, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
   const [filter, setFilter] = React.useState<ProjectFilter>('all')
   const [reasonTargetId, setReasonTargetId] = React.useState<string | null>(null)
 
@@ -30,6 +38,32 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
     { key: 'cancelled', label: t('project.filter.cancelled'), count: cancelledCount },
   ]
 
+  /** 预计完成日：制作/测试按当前团队产能推算；未开工/待上市用计划上市日；无可估数据返回 null */
+  const estimateProjectDay = (p: Project): number | null => {
+    if (p.phase === 'PRODUCTION' || p.phase === 'QA') {
+      const daily: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
+      for (const a of p.teamAssignments) {
+        const emp = employees.find(e => e.id === a.employeeId)
+        if (!emp || emp.status !== 'hired') continue
+        const work = baseEffectiveWorkPerDay(emp, a.allocationRatio)
+        daily.design += work.design
+        daily.programming += work.programming
+        daily.art += work.art
+        daily.qa += work.qa
+      }
+      const days = estimateDaysToFinish(
+        p,
+        daily,
+        p.phase === 'PRODUCTION' ? ['design', 'programming', 'art'] : ['qa'],
+      )
+      return days === null ? null : dayIndex + days
+    }
+    if (p.phase === 'CONCEPT' || p.phase === 'PRE_PRODUCTION' || p.phase === 'READY_TO_LAUNCH') {
+      return p.plannedLaunchDay
+    }
+    return null
+  }
+
   return (
     <div className="panel">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -37,7 +71,7 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
         <button className="btn btn-small" onClick={() => onNavigate('newProject')}>{t('nav.newProject')}</button>
       </div>
 
-      <div className="flex-gap" style={{ marginBottom: 12 }} role="group" aria-label={t('project.fields.phase')}>
+      <div className="flex-gap" style={{ marginBottom: 12 }} role="group" aria-label={t('project.filter.label')}>
         {filters.map(f => (
           <button
             key={f.key}
@@ -53,78 +87,113 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
       {filtered.length === 0 ? (
         <p className="muted">{t('project.empty')}</p>
       ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>{t('project.fields.name')}</th>
-              <th>{t('project.fields.phase')}</th>
-              <th>{t('project.fields.progress')}</th>
-              <th>{t('project.fields.budgetSpent')}</th>
-              <th className="text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((p: Project) => {
-              const total = Math.round(totalCompletion(p) * 100)
-              const budgetPct = p.budgetTotalCapCents > 0 ? Math.round((p.budgetSpentCents / p.budgetTotalCapCents) * 100) : 0
-              const canAdvance = !p.isPaused && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && p.phase !== 'READY_TO_LAUNCH'
-              const canLaunch = p.phase === 'READY_TO_LAUNCH'
-              const cancelled = isCancelledStatus(resolveProjectStatus(p))
-              return (
-                <React.Fragment key={p.id}>
-                  <tr style={{ cursor: 'pointer' }} onClick={() => onNavigate('projectDetail', p.id)}>
-                    <td>{p.name}</td>
-                    <td>
-                      <ProjectStatusBadge project={p} showPausedDays />
-                    </td>
-                    <td style={{ width: 220 }}>
-                      <div className="progress-bar">
-                        <div className="fill" style={{ width: `${total}%` }} />
-                      </div>
-                      <span className="muted" style={{ fontSize: 11 }}>{total}%</span>
-                    </td>
-                    <td>
-                      {formatMoney(p.budgetSpentCents)} / {formatMoney(p.budgetTotalCapCents)}
-                      <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>({budgetPct}%)</span>
-                    </td>
-                    <td className="text-right">
-                      <div className="flex-gap" style={{ justifyContent: 'flex-end' }}>
-                        {p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && (
-                          <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); toggleProjectPause(p.id) }}>
-                            {p.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
-                          </button>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="data-table" style={{ minWidth: 1040 }}>
+            <thead>
+              <tr>
+                <th>{t('project.fields.name')}</th>
+                <th>{t('project.fields.phase')}</th>
+                <th>{t('project.fields.risk')}</th>
+                <th>{t('project.fields.eta')}</th>
+                <th>{t('project.fields.progress')}</th>
+                <th>{t('project.fields.budgetSpent')}</th>
+                <th className="text-right">{t('common.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p: Project) => {
+                const total = Math.round(totalCompletion(p) * 100)
+                const budgetPct = p.budgetTotalCapCents > 0 ? Math.round((p.budgetSpentCents / p.budgetTotalCapCents) * 100) : 0
+                const canAdvance = !p.isPaused && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && p.phase !== 'READY_TO_LAUNCH'
+                const canLaunch = p.phase === 'READY_TO_LAUNCH'
+                const cancelled = isCancelledStatus(resolveProjectStatus(p))
+                const paused = p.isPaused && p.phase !== 'CANCELLED'
+                const etaDay = estimateProjectDay(p)
+                const lateDays = etaDay === null ? null : etaDay - p.plannedLaunchDay
+                return (
+                  <React.Fragment key={p.id}>
+                    <tr style={{ cursor: 'pointer' }} onClick={() => onNavigate('projectDetail', p.id)}>
+                      <td>{p.name}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {/* 阶段文案与状态徽标并存，二者都可读（F1） */}
+                        <span>
+                          {t(`phase.${p.phase}`)}
+                          {paused && t('project.status.phasePausedSuffix')}
+                        </span>
+                        <ProjectStatusBadge project={p} showPausedDays currentDay={dayIndex} />
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {p.riskFlags.length === 0
+                          ? '—'
+                          : p.riskFlags.map(flag => (
+                              <span key={flag} className="badge" style={{ marginRight: 4 }}>
+                                {RISK_LABEL_KEY[flag] ? t(RISK_LABEL_KEY[flag]!) : flag}
+                              </span>
+                            ))}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {etaDay === null ? (
+                          <span className="muted">{t('common.notEstimable')}</span>
+                        ) : (
+                          <>
+                            {t('project.eta.estimated').replace('{day}', String(etaDay))}
+                            {lateDays !== null && lateDays > 0 && (
+                              <span className="negative" style={{ marginLeft: 4 }}>
+                                {t('project.eta.late').replace('{n}', String(lateDays))}
+                              </span>
+                            )}
+                          </>
                         )}
-                        {canLaunch && (
-                          <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.launch')}</button>
-                        )}
-                        {canAdvance && (
-                          <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.advancePhase')}</button>
-                        )}
-                        {cancelled && (
-                          <button
-                            className="btn btn-secondary btn-small"
-                            onClick={(e) => { e.stopPropagation(); setReasonTargetId(p.id) }}
-                          >
-                            {t('project.actions.viewReason')}
-                          </button>
-                        )}
-                        {p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && (
-                          <button className="btn btn-danger btn-small" onClick={(e) => { e.stopPropagation(); cancelProject(p.id) }}>{t('project.actions.cancel')}</button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                </React.Fragment>
-              )
-            })}
-          </tbody>
-        </table>
+                      </td>
+                      <td style={{ width: 220 }}>
+                        <div className="progress-bar">
+                          <div className="fill" style={{ width: `${total}%` }} />
+                        </div>
+                        <span className="muted" style={{ fontSize: 11 }}>{total}%</span>
+                      </td>
+                      <td>
+                        {formatMoney(p.budgetSpentCents)} / {formatMoney(p.budgetTotalCapCents)}
+                        <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>({budgetPct}%)</span>
+                      </td>
+                      <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
+                        <div className="flex-gap" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          {p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && (
+                            <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); toggleProjectPause(p.id) }}>
+                              {p.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
+                            </button>
+                          )}
+                          {canLaunch && (
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.launch')}</button>
+                          )}
+                          {canAdvance && (
+                            <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.advancePhase')}</button>
+                          )}
+                          {cancelled && (
+                            <button
+                              className="btn btn-secondary btn-small"
+                              onClick={(e) => { e.stopPropagation(); setReasonTargetId(p.id) }}
+                            >
+                              {t('project.actions.viewReason')}
+                            </button>
+                          )}
+                          {p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && (
+                            <button className="btn btn-danger btn-small" onClick={(e) => { e.stopPropagation(); cancelProject(p.id) }}>{t('project.actions.cancel')}</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {reasonTarget && (
         <CancelReasonDialog
           project={reasonTarget}
-          cancelledDay={projectCancelledDay(reasonTarget, dayIndex)}
+          cancelledDay={projectCancelledDay(reasonTarget)}
           onClose={() => setReasonTargetId(null)}
         />
       )}

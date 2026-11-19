@@ -456,7 +456,9 @@ export class GameWorld {
   }
 
   cancelProject(projectId: string): CommandOutcome<Project> {
-    const result = this.withProjects(() => this.projects.cancel(projectId, 'player_decision'))
+    const result = this.withProjects(() =>
+      this.projects.cancel(projectId, 'player_decision', this.calendar.currentDayIndex),
+    )
     if (!result.success || !result.result) {
       return { success: false, errorCode: result.errorCode, message: result.errorMessage ?? '取消失败' }
     }

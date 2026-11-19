@@ -5,37 +5,41 @@ import { normalizeCancellationReason, type CancelReasonKind } from './project-st
 
 interface Props {
   project: Project
-  /** 取消发生日（第 X 天）；调用方按 cancelledDay → updatedAt 顺序推导 */
+  /** 取消发生日（第 X 天）；唯一来源 project.updatedAt */
   cancelledDay: number
   onClose: () => void
 }
 
 const REASON_TEXT_KEY: Record<CancelReasonKind, string> = {
   pause_timeout: 'project.cancel.reason.pause_timeout',
-  user_requested: 'project.cancel.reason.user_requested',
+  player_decision: 'project.cancel.reason.player_decision',
   scope_became_unviable: 'project.cancel.reason.scope_became_unviable',
+  team_dissolved: 'project.cancel.reason.team_dissolved',
+  market_window_missed: 'project.cancel.reason.market_window_missed',
+  legacy: 'project.cancel.reason.legacy',
   unknown: 'project.cancel.reason.unknown',
-}
-
-const REASON_CODE_KEY: Record<CancelReasonKind, string> = {
-  pause_timeout: 'project.cancel.code.pause_timeout',
-  user_requested: 'project.cancel.code.user_requested',
-  scope_became_unviable: 'project.cancel.code.scope_became_unviable',
-  unknown: 'project.cancel.code.unknown',
 }
 
 /**
  * DIALOG-CANCEL-REASON（DESIGN-M1-PAUSE-TIMEOUT-UI-001 §3.4）：
- * 只读模态，仅【关闭】；Esc 可关；焦点进入弹窗并在弹窗内循环。
- * 不使用 `budget_exhausted` 作为取消原因（GDR D-UI-02），未知原因按历史存档宽容展示。
+ * 只读模态，仅【关闭】；Esc 可关；焦点进入弹窗并在弹窗内循环，关闭后归还触发元素。
+ * 「原因代码」显示领域原值（player_decision 等），不显示 UI 归一值。
+ * 不使用 `budget_exhausted` 作为取消原因（GDR D-UI-02），历史存档值按未记录展示。
  */
 export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onClose }) => {
   const cardRef = React.useRef<HTMLDivElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
+  const previousFocusRef = React.useRef<HTMLElement | null>(null)
   const titleId = React.useId()
 
   React.useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
+
+    // 打开期间锁背景滚动（F7）
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -58,7 +62,12 @@ export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onC
       }
     }
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = previousOverflow
+      // 关闭后焦点归还触发按钮（F7）
+      previousFocusRef.current?.focus()
+    }
   }, [onClose])
 
   const reasonKind = normalizeCancellationReason(project.cancellationReason)
@@ -99,7 +108,14 @@ export const CancelReasonDialog: React.FC<Props> = ({ project, cancelledDay, onC
             </tr>
             <tr>
               <td className="muted">{t('project.cancel.field.code')}</td>
-              <td><code>{t(REASON_CODE_KEY[reasonKind])}</code></td>
+              {/* 领域原值，可追溯（F3 / N-1）；历史无原因/预算耗尽旧值不外显 */}
+              <td>
+                <code>
+                  {reasonKind === 'unknown' || reasonKind === 'legacy'
+                    ? t('project.cancel.code.unknown')
+                    : project.cancellationReason}
+                </code>
+              </td>
             </tr>
             <tr>
               <td className="muted">{t('project.cancel.field.description')}</td>

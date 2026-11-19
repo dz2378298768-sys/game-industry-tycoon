@@ -193,7 +193,7 @@ describe('TASK-M1.1-UI-001 取消原因弹窗', () => {
     const userView = renderDetail(userCancel)
     fireEvent.click(screen.getByText('查看取消原因'))
     dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText('user_requested')).toBeTruthy()
+    expect(within(dialog).getByText('player_decision')).toBeTruthy()
     expect(within(dialog).getByText('由玩家主动确认取消。')).toBeTruthy()
     const userText = dialog.textContent ?? ''
     userView.unmount()
@@ -215,7 +215,7 @@ describe('TASK-M1.1-UI-001 取消原因弹窗', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog.textContent).not.toContain('budget_exhausted')
     expect(within(dialog).getByText('—')).toBeTruthy()
-    expect(within(dialog).getByText('历史存档未记录取消原因。')).toBeTruthy()
+    expect(within(dialog).getByText('历史数据未记录取消原因。')).toBeTruthy()
     view.unmount()
 
     const noReason = makeProject({ id: 'p-null', name: 'Unknown', phase: 'CANCELLED', cancellationReason: null })
@@ -231,6 +231,88 @@ describe('TASK-M1.1-UI-001 取消原因弹窗', () => {
     expect(buttons).not.toContain('恢复项目')
     expect(buttons).not.toContain('暂停')
     expect(buttons).not.toContain('取消')
+  })
+})
+
+describe('TASK-M1.1-UI-001-FIX 整改回归', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('F1：暂停行阶段文案仍可见，且状态徽标独立存在', () => {
+    mockStore.projects = [manual]
+    renderList()
+    const row = screen.getByText('Manual Pause').closest('tr')!
+    expect(within(row).getByText('制作中（暂停）')).toBeTruthy()
+    expect(within(row).getByText('已手动暂停')).toBeTruthy()
+  })
+
+  it('F2/F9：列表包含风险与预计完成列，表头操作列走 i18n', () => {
+    mockStore.projects = [makeProject({ id: 'p-risk', name: 'Risky', riskFlags: ['quality_risk', 'budget_exhausted'] })]
+    const { container } = renderList()
+    const headers = Array.from(container.querySelectorAll('th')).map(th => th.textContent)
+    expect(headers).toContain('风险')
+    expect(headers).toContain('预计完成')
+    expect(headers).toContain('操作')
+    expect(container.textContent).toContain('质量风险')
+    expect(container.textContent).toContain('预计第 110 天')
+  })
+
+  it('F3：scope_became_unviable / team_dissolved / market_window_missed 文案互不相同且原因码为原值', () => {
+    const scope = makeProject({ id: 'p-scope', name: 'Scope', phase: 'CANCELLED', cancellationReason: 'scope_became_unviable', updatedAt: 30 })
+    const team = makeProject({ id: 'p-team', name: 'Team', phase: 'CANCELLED', cancellationReason: 'team_dissolved', updatedAt: 31 })
+    const market = makeProject({ id: 'p-market', name: 'Market', phase: 'CANCELLED', cancellationReason: 'market_window_missed', updatedAt: 32 })
+    mockStore.projects = [scope, team, market]
+    renderList()
+
+    const read = (name: string) => {
+      const row = screen.getByText(name).closest('tr')!
+      fireEvent.click(within(row).getByText('查看原因'))
+      const text = screen.getByRole('dialog').textContent ?? ''
+      fireEvent.click(within(screen.getByRole('dialog')).getByText('关闭'))
+      return text
+    }
+
+    const scopeText = read('Scope')
+    const teamText = read('Team')
+    const marketText = read('Market')
+
+    expect(scopeText).toContain('范围不可行')
+    expect(teamText).toContain('核心团队解散')
+    expect(marketText).toContain('市场窗口已错过')
+    expect(scopeText).toContain('scope_became_unviable')
+    expect(teamText).toContain('team_dissolved')
+    expect(marketText).toContain('market_window_missed')
+    expect(teamText).not.toContain('未记录')
+    expect(new Set([scopeText, teamText, marketText]).size).toBe(3)
+  })
+
+  it('F4：第 10 天创建、第 50 天取消，弹窗显示第 50 天而非当前日', () => {
+    const late = makeProject({
+      id: 'p-late',
+      name: 'Late Cancel',
+      phase: 'CANCELLED',
+      cancellationReason: 'player_decision',
+      createdAt: 10,
+      updatedAt: 50,
+    })
+    renderDetail(late)
+    fireEvent.click(screen.getByText('查看取消原因'))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('第 50 天')).toBeTruthy()
+    expect(dialog.textContent).not.toContain('第 100 天')
+  })
+
+  it('F7：弹窗关闭后焦点归还触发按钮', () => {
+    renderDetail(userCancel)
+    const trigger = screen.getByText('查看取消原因')
+    trigger.focus()
+    fireEvent.click(trigger)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('关闭'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
   })
 })
 

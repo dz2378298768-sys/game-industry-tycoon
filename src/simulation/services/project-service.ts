@@ -293,7 +293,7 @@ export class ProjectService {
     )
   }
 
-  cancel(projectId: string, reason: CancellationReason): CommandResult<Project> {
+  cancel(projectId: string, reason: CancellationReason, dayIndex?: number): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase === 'LAUNCHED') return fail('PRJ_ALREADY_LAUNCHED', 'Launched project cannot be cancelled')
     if (p.phase === 'CANCELLED') return fail('PRJ_ALREADY_TERMINAL', 'Already cancelled')
@@ -308,6 +308,8 @@ export class ProjectService {
         pausedDays: 0,
         riskFlags: p.riskFlags.filter((f) => f !== 'budget_exhausted'),
         cancellationReason: reason,
+        // 取消日 = 传入的游戏日（UI 取消日期唯一来源，TASK-M1.1-UI-001-FIX F4）
+        updatedAt: dayIndex ?? p.updatedAt,
         version: p.version + 1,
       }),
     )

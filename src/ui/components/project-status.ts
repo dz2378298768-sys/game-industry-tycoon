@@ -22,7 +22,7 @@ export function resolveProjectStatus(p: StatusSource): ProjectStatusKind {
   if (p.phase === 'CANCELLED') {
     if (p.cancellationReason === 'pause_timeout') return 'cancelled_timeout'
     const kind = normalizeCancellationReason(p.cancellationReason)
-    return kind === 'unknown' ? 'cancelled_generic' : 'cancelled_user'
+    return kind === 'unknown' || kind === 'legacy' ? 'cancelled_generic' : 'cancelled_user'
   }
   if (p.isPaused) {
     if (p.budgetExhausted === true || p.pauseReason === 'budget_exhausted') return 'budget_exhausted'
@@ -31,22 +31,34 @@ export function resolveProjectStatus(p: StatusSource): ProjectStatusKind {
   return 'active'
 }
 
-export type CancelReasonKind = 'pause_timeout' | 'user_requested' | 'scope_became_unviable' | 'unknown'
-
 /**
- * 取消原因归一。领域枚举中玩家主动取消落库值为 `player_decision`（与设计稿 `user_requested` 同义），
- * 本函数将两者归为同一可读原因；`budget_exhausted` 不是取消原因（GDR D-UI-02），一并归入 unknown，
- * 确保其不会出现在取消原因弹窗中。
+ * 取消原因归一（映射表唯一权威：TASK-M1.1-UI-001-FIX §10 / DESIGN §3.4 v1.3）。
+ * `budget_exhausted` 不是取消原因（GDR D-UI-02），历史存档出现该值单独归为 `legacy`，
+ * 不得归入玩家取消，也不得展示为 `budget_exhausted` 原文。
  */
+export type CancelReasonKind =
+  | 'pause_timeout'
+  | 'player_decision'
+  | 'scope_became_unviable'
+  | 'team_dissolved'
+  | 'market_window_missed'
+  | 'legacy'
+  | 'unknown'
+
 export function normalizeCancellationReason(reason: string | null | undefined): CancelReasonKind {
   switch (reason) {
     case 'pause_timeout':
       return 'pause_timeout'
-    case 'user_requested':
     case 'player_decision':
-      return 'user_requested'
+      return 'player_decision'
     case 'scope_became_unviable':
       return 'scope_became_unviable'
+    case 'team_dissolved':
+      return 'team_dissolved'
+    case 'market_window_missed':
+      return 'market_window_missed'
+    case 'budget_exhausted':
+      return 'legacy'
     default:
       return 'unknown'
   }
@@ -75,14 +87,11 @@ export function isCancelledStatus(kind: ProjectStatusKind): boolean {
 }
 
 /**
- * 取消发生日：优先可选字段 cancelledDay（设计稿 §2，当前实体尚未声明），
- * 退回 updatedAt（D-01 自动取消会写入 dayIndex）；两者皆缺时用当前日。
+ * 取消发生日：唯一来源 `updatedAt`（TASK-M1.1-UI-001-FIX F4）。
+ * 主动取消由 ProjectService.cancel 写入传入的游戏日；超时取消由每日调度写入 dayIndex。
+ * 不再回退“当前日”，避免把未知日期伪造成精确值。
  */
-export function projectCancelledDay(
-  project: Project & { cancelledDay?: number | null },
-  fallbackDay: number,
-): number {
+export function projectCancelledDay(project: Project & { cancelledDay?: number | null }): number {
   if (typeof project.cancelledDay === 'number') return project.cancelledDay
-  if (typeof project.updatedAt === 'number') return project.updatedAt
-  return fallbackDay
+  return project.updatedAt
 }

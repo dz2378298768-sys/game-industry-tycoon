@@ -3,7 +3,7 @@ import type { WorldState } from '@simulation/services/world-state'
 import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
 import { makeSalesRecordId } from '@domain/entities/sales-record'
 import type { SalesRecord } from '@domain/entities/sales-record'
-import { makeRefundBatchId } from '@domain/entities/refund-batch'
+import { makeRefundBatchId, refundBatchIdempotencyKey } from '@domain/entities/refund-batch'
 
 /** 当前存档结构版本 */
 export const SAVE_SCHEMA_VERSION = 1
@@ -202,6 +202,10 @@ const productSchema = z
     name: z.string().min(1),
     launchDay: z.number().int().nonnegative(),
     launchPriceCents: z.number().int().nullable(),
+    /** M2-D：三字段可选，旧档缺失即 undefined，由 effectivePriceCents 兜底（不升 schemaVersion） */
+    pricePerUnitCents: z.number().int().positive().optional(),
+    discountRatePercent: z.number().int().min(0).max(50).optional(),
+    lastPriceChangeDay: z.number().int().nonnegative().optional(),
     defectLevel: z.number().min(0).max(100),
     status: z.enum(['active', 'retired']),
     /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
@@ -471,6 +475,36 @@ export function parseSave(raw: unknown): ParseSaveResult {
         ok: false,
         errorCode: 'SAVE_REFUND_INCONSISTENT',
         errorMessage: `销售记录 ${record.id} 的已入账退款量（${posted}）与 actualRefundUnits（${record.actualRefundUnits}）不一致`,
+      }
+    }
+  }
+
+  // ===== M2-C 退款金额校验（DESIGN-M2-001-C §10.9.2 / DECISION-M2-C-Q06-Q07）=====
+  // 段 1（全局、无条件）：每个 posted 批次的金额必须等于 refundedUnits × unitPriceAtSaleCents。
+  //   这一段不得以"有没有交易凭据"为前提，否则在旧存档上永不生效（R1 P1-2）。
+  // 段 2（有凭据才校验）：仅当存档中确实存在 customer-refund:<batchId> 交易时，账实必须一致。
+  //   Q7：不强制"每个 posted 必有交易"，故无凭据不是错误。
+  const transactionByKey = new Map(state.transactions.map((t) => [t.idempotencyKey, t]))
+  for (const b of state.refundBatches) {
+    if (b.status !== 'posted') continue
+    const record = salesRecordById.get(b.salesRecordId)
+    if (record === undefined) continue // 第 5 步已拦截，此处不可达
+    const expectedAmount = b.refundedUnits * record.unitPriceAtSaleCents
+    if (b.refundAmountCents !== expectedAmount) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_REFUND_INCONSISTENT',
+        errorMessage: `已入账退款批次 ${b.id} 的金额（${b.refundAmountCents}）不等于 件数×单价（${expectedAmount}）`,
+      }
+    }
+    const tx = transactionByKey.get(refundBatchIdempotencyKey(b.id))
+    if (tx !== undefined) {
+      if (tx.category !== 'customer_refund' || tx.amountCents !== -b.refundAmountCents) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_REFUND_INCONSISTENT',
+          errorMessage: `已入账退款批次 ${b.id} 与交易流水不一致（分类或金额不符）`,
+        }
       }
     }
   }

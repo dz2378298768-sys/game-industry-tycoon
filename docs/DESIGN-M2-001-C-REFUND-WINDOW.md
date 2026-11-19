@@ -4,8 +4,9 @@
 |---|---|
 | 文件编号 | DESIGN-M2-001-C |
 | 任务编号 | M2-001-C（父任务包：TASK-M2-001） |
-| 版本 | **1.0** |
-| 状态 | **DRAFT（待复审）**；未通过复审 gate 前不得置 READY、不得派发编码 |
+| 版本 | **1.2**（1.1 → READY；1.2 = 交付后回写实现级偏差 N-7~N-9，业务规则零变更） |
+| 状态 | **READY → CLOSED（已实现）**（设计审核 R2：`GDR-REVIEW-M2-001-C-R2.md`；编码交付：`DELIVERY-M2-001-C.md`；编码审核：`GDR-REVIEW-M2-001-C-CODE.md`） |
+| 复审依据 | R1 `GDR-REVIEW-M2-001-C.md`（REVISE_REQUIRED，P1×3）；处置单 `DISPOSITION-M2-C-R1.md`；裁定 `DECISION-M2-C-Q01-Q06-Q07-Q10.md`；勘误 `ERRATA-M2-001-A-T16.md` |
 | 适用阶段 | M2 第一批（流 A）第 3 项，串行 A → B → **C** |
 | 设计代理 | 设计代理（本文件作者） |
 | 日期 | 2026-11-19 |
@@ -18,7 +19,7 @@
 
 > 本稿是**补充规格**，只把已裁定的退款窗口规则细化为可编码、可验收的实现规格。
 > §1–§16 为任务书要求的 16 项标准结构，§17 开放问题、§18 变更记录为附加章节。
-> 本稿不裁定新的业务规则。凡现有权威条款未覆盖、且会影响玩家可见行为或财务结果的空白，一律进 §17 开放问题；正文中的“暂按”仅为可编码的防御性口径，编码代理不得据此扩张业务语义。
+> 本稿**不自创业务规则**。v1.0 中影响玩家可见行为/财务结果的空白（原 Q1/Q6/Q7）已由 `DECISION-M2-C-Q01-Q06-Q07-Q10.md` 裁定，v1.1 正文已改为确定口径；其余 §17 条目不影响账实一致、可直接实现。编码代理不得据此扩张业务语义。
 
 ---
 
@@ -38,12 +39,12 @@
 5. 在 `parseSave` 追加**向后兼容**的退款金额等式校验；读档不读 TUNING、不复算历史窗口。
 6. 把退款阶段接入 `DailyScheduler`（销售之后）与 `GameWorld`（构造/恢复）。
 
-**可度量的完成态**：新增 1 个纯规则模块（7 个纯函数）+ 1 个 `RefundService` + 2 个领域事件工厂；`parseSave` 追加 1 个退款校验段；**32 条新增测试（R01–R32）**全绿；`npm run typecheck`、`npm run lint:check`、`npm test`、`npm run build` 真实退出码全 0；不改 `RefundBatch` / `SalesRecord` 字段、不改 `SAVE_SCHEMA_VERSION`。
+**可度量的完成态**：新增 1 个纯规则模块（8 个纯函数）+ 1 个 `RefundService` + 2 个领域事件工厂；`parseSave` 追加 1 个退款校验段（**两段：全局批次内等式 + 有凭据时账实**）；**42 条新增测试（R01–R42）**全绿；`npm run typecheck`、`npm run lint:check`、`npm test`、`npm run build` 真实退出码全 0；不改 `RefundBatch` / `SalesRecord` 字段、不改 `SAVE_SCHEMA_VERSION`。
 
 ## 3. 背景
 
 - M2-A（实体 + 存档契约）已 **CLOSED**：`RefundBatch` 13 字段、三态 `pending|posted|rejected`、`customer-refund:${id}` 幂等键、`parseSave` 第 3–9 步跨实体校验已落地并有 44 条契约测试（T01–T44）保护。
-- M2-B（销售管线）**编码审核中**：`MarketSimulationService` 已在销售日生成恰好 1 条 `pending` `auto_window` 批次（`estimated > 0` 时），字段为 `refundedUnits = estimated`、`refundDayIndex = saleDay + TUNING.sales.refundWindowDays`、`refundAmountCents = refundedUnits × unitPriceAtSaleCents`，且不产生 `customer_refund` 交易。
+- M2-B（销售管线）已 **CLOSED**（编码审核 PASS_WITH_NOTES，44 条测试，`d27dd5c`）：`MarketSimulationService` 已在销售日生成恰好 1 条 `pending` `auto_window` 批次（`estimated > 0` 时），字段为 `refundedUnits = estimated`、`refundDayIndex = saleDay + TUNING.sales.refundWindowDays`、`refundAmountCents = refundedUnits × unitPriceAtSaleCents`，且不产生 `customer_refund` 交易。
 - 主 AI 已按 **Q10** 裁定 B/C 边界：B 只生成 `pending`，C 负责到期兑现、窗口拒绝与幂等入账；本稿逐条承接 `DECISION-M2-A-Q1-Q3` 的 Q1/Q2/Q3。
 - 代码事实（已核对当前工作树）：
   - `RefundBatch` 无 `rejectionReason` 字段，且 A §16 禁止新增字段；因此拒绝原因只能由 `status='rejected'` + `DomainEvent` 承载。
@@ -59,9 +60,10 @@
 | 文件 | 版本/状态 | 本任务采用的条款 |
 |---|---|---|
 | `DESIGN-M2-001-A-SALES-ENTITY.md` | v1.3 / CLOSED | §10.3 13 字段；§10.4 R5/R7/R8；§10.5 ID/幂等键；§10.8.4 第 3–9 步；§12.3 E16–E22；§12.6 四项下游承接 |
-| `DESIGN-M2-001-B-SALES-PIPELINE.md` | v1.2 / 编码审核中 | §10.3 S7 批次取值；§10.6 写入契约；§10.7 调度落点；§10.8 X1–X9；§12.3 B/C 边界；T34/T37 |
+| `DESIGN-M2-001-B-SALES-PIPELINE.md` | v1.2 / CLOSED | §10.3 S7 批次取值；§10.6 写入契约；§10.7 调度落点；§10.8 X1–X9；§12.3 B/C 边界；T34/T37 |
 | `DECISION-M2-B-Q1-Q10.md` | v1.0 / APPROVED | Q10：B 生成 1 条 pending；C 到期兑现/窗口拒绝/幂等入账；C 须承接 status 优先判据、拒绝原因、读档断言 |
 | `DECISION-M2-A-Q1-Q3.md` | v1.0 / APPROVED | Q1 窗口内拒绝且不产生 Transaction、窗口到期后允许 player_request；Q2 唯一金额公式与读档断言；Q3 历史窗口只按存档快照 |
+| `DECISION-M2-C-Q01-Q06-Q07-Q10.md` | v1.0 / FINAL | Q1 允许负现金＋未注册公司 fail-fast；Q6 全局断言＋A 夹具勘误；Q7 不强制交易但显式化；Q10 窗口快照优先 |
 | `DESIGN-M2-UNBLOCK-001.md` | v1.2 / PASS_WITH_NOTES | §1.1 幂等键；§1.4 三态；§1.5 销售时单价；§1.6 auto 取值、上限、零退款、触发 |
 | `DESIGN-M2-DATA-001.md` | v1.0 + 1.1 | §1 TC-FIN-010 v1.1；§2 `refundWindowDays=14`；§3.1/§3.2 字段 |
 | `spec/08_设计补齐/09_...md` | DECIDED V2.1.1 | §1.3 RefundBatch 状态语义；§2.4 退款财务模型与 Transaction 字段 |
@@ -70,7 +72,7 @@
 
 ### 4.2 优先级（冲突时自上而下）
 
-1. `DECISION-M2-B-Q1-Q10` Q10 与 `DECISION-M2-A-Q1-Q3` Q1–Q3；
+1. `DECISION-M2-C-Q01-Q06-Q07-Q10`（本任务三项裁定，优先级最高）；`DECISION-M2-B-Q1-Q10` Q10 与 `DECISION-M2-A-Q1-Q3` Q1–Q3；
 2. `DESIGN-M2-001-A` v1.3 的实体/存档契约（13 字段、三态、幂等键、既有校验步）；
 3. `DESIGN-M2-001-B` v1.2 的 B/C 边界与批次生成契约；
 4. `DESIGN-M2-UNBLOCK-001` §1.6 的退款口径；
@@ -89,13 +91,13 @@
 
 | 编号 | 范围 |
 |---|---|
-| S1 | 新增 `src/domain/value-objects/refund-window.ts`：窗口到期日、到期判据、金额等式、seq 分配、单位求和、入账排序 7 个纯函数 |
+| S1 | 新增 `src/domain/value-objects/refund-window.ts`：窗口到期日、到期判据、窗口基准解析、金额等式、seq 分配、单位求和、入账排序 8 个纯函数 |
 | S2 | 新增 `src/simulation/services/refund-service.ts`：`processDueRefunds` 到期兑现；`requestPlayerRefund` 窗口判定与拒绝 |
 | S3 | 新增 `RefundBatchPosted` / `RefundBatchRejected` 事件工厂（`src/domain/events/index.ts`） |
 | S4 | 幂等与崩溃重放：`status` → 幂等键 → 持久化流水扫描 → 重算 `actualRefundUnits` |
-| S5 | `parseSave` 新增校验段：对有交易凭据的 `posted` 批次断言金额等式与交易金额 |
+| S5 | `parseSave` 新增校验段（两段）：① 对所有 `posted` 批次断言批次内金额等式（**全局、无凭据要求**）；② 存在 `customer-refund:<batch.id>` 交易时再断言交易类别与金额 |
 | S6 | `DailyScheduler` 在销售之后、研发之前调用退款阶段；`GameWorld` 构造/恢复时重建 `RefundService` |
-| S7 | 新增 32 条测试（R01–R32），含正向与反证 |
+| S7 | 新增 42 条测试（R01–R42），含正向与反证 |
 
 ## 6. 非范围
 
@@ -139,12 +141,14 @@
 
 | 编号 | 前置 | 验证方式 |
 |---|---|---|
-| P1 | M2-A 已 CLOSED，44 条（T01–T44）契约测试全绿 | 基线测试通过 |
+| P1 | M2-A 已 CLOSED，44 条（T01–T44）契约测试全绿；**T16 两处金额已按 `ERRATA-M2-001-A-T16` 勘误**（否则全局断言无法在 A 基线生效） | 基线测试通过 |
 | P2 | M2-B 的 `MarketSimulationService` 已合入或工作树可用，且销售日生成 `pending` 批次 | 运行 B 的 T34/T37 |
-| P3 | 本稿通过复审 gate | 审核记录 |
-| P4 | 四命令基线全绿 | §13.6 |
+| P3 | 本稿通过复审 gate（R2 结论 + 主 AI 依 §13.8 确认） | `GDR-REVIEW-M2-001-C-R2.md` |
+| P4 | 四命令基线全绿 | **CODEBUDDY §13.8**（READY 转换规则），非 §13.6 |
 | P5 | 工作树干净，分支 `main` | `git status` |
 | P6 | 已阅读 §4.1 全部上游文件 | 编码交付说明（§15.3） |
+
+> **章节引用说明（R1 的 P3-3）**：R1 审核清单曾引用"§8.1 到期兑现"，本稿 §8 为前置条件表，无 §8.1 子节；**到期兑现规则在 §10.5.1**（"到期兑现只对 `pending`，且会同时处理 `pending player_request`"），请勿按 §8.1 查找。
 
 ## 9. 功能
 
@@ -240,9 +244,18 @@ lastRefundDay = saleDayIndex + refundWindowDays
 |---|---|
 | `parseSave` 禁读 TUNING | 存储层不得 import `TUNING`；不得校验 `refundDayIndex - saleDayIndex === 当前 refundWindowDays` |
 | 历史批次只用快照 | `processDueRefunds` 只读 `batch.refundDayIndex`；即使当前 TUNING 改为 7/21/30，旧批次仍在原计划日兑现 |
-| 当前 TUNING 的唯一用途 | `requestPlayerRefund` 判定**新请求**是否在窗口内（`saleDay + 当前 window`） |
+| **新请求的窗口基准（Q10 已裁定）** | 按 `DECISION-M2-C-Q10` 解析（见下表）：**有 `auto_window` 批次 → 用其 `refundDayIndex` 作快照基准**；无批次（`estimated = 0`）→ 回退当前 TUNING 并显式标注 `windowBasis='current_tuning'` |
 | 读档接受 | `refundDayIndex >= saleDayIndex` 即可（A 已校验）；不得因窗口天数变化拒绝旧档 |
 | 版本可追溯 | `tuningVersion` 属 M2-E；C 不实现、不读取、不阻断 |
+
+**Q10 窗口基准判定表（`resolveRefundWindow` 的唯一口径）**
+
+| 该 `SalesRecord` 的 `auto_window` 批次 | 判定基准 | `windowBasis` |
+|---|---|---|
+| 存在（含 `status='rejected'`） | 取其中 `refundDayIndex` **最大**者：`windowEnd = max(refundDayIndex)` | `'snapshot'` |
+| 不存在（`estimatedRefundUnits = 0`） | `windowEnd = saleDayIndex + TUNING.sales.refundWindowDays` | `'current_tuning'` |
+
+> 取最大值而非最小值，是因为 `auto_window` 唯一性只约束"非 `rejected` ≤ 1"，`rejected` 可存在多条；取最大与"窗口只随销售日单调"一致，也最宽松，不会因历史上一次异常拒绝而收紧玩家权利。
 
 ### 10.3 纯函数契约（`src/domain/value-objects/refund-window.ts`）
 
@@ -259,6 +272,17 @@ export function isRefundBatchDue(
   batch: Pick<RefundBatch, 'status' | 'refundDayIndex'>,
   currentDayIndex: number,
 ): boolean
+/**
+ * Q10：解析某条销售记录上"新 player_request"的窗口终点。
+ * 该记录存在 auto_window 批次（含 rejected）→ 取最大 refundDayIndex 作快照；
+ * 否则回退 saleDayIndex + currentRefundWindowDays。
+ */
+export function resolveRefundWindow(
+  salesRecordId: string,
+  saleDayIndex: number,
+  batches: readonly RefundBatch[],
+  currentRefundWindowDays: number,
+): { windowEnd: number; basis: 'snapshot' | 'current_tuning' }
 export function expectedRefundAmountCents(
   refundedUnits: number,
   unitPriceAtSaleCents: number,
@@ -284,8 +308,8 @@ export function compareRefundBatchesForPosting(a: RefundBatch, b: RefundBatch): 
 - `expectedRefundAmountCents` 只做整数乘法，不二次舍入；`unitPrice=0` 时返回 0（调用方不得入账）。
 - `nextRefundSeq`：扫描 `productId + saleDayIndex + refundDayIndex` 完全匹配的批次，取 ID 末段 `seq` 最大值 + 1；无匹配返回 1；ID 末段非法抛 `RangeError`（读档已保证合法）。
 - `sumRefundedUnits`：`non-rejected` = `pending + posted`；`posted` 仅 `posted`；`rejected` 恒不计入。
-- `compareRefundBatchesForPosting` 的稳定顺序：
-  1. `refundDayIndex` 升序；
+- `resolveRefundWindow`：只扫描 `salesRecordId` 匹配且 `source='auto_window'` 的批次（`status` 不限，`rejected` 也算快照）；取 `refundDayIndex` 最大值；无此类批次时 `windowEnd = saleDayIndex + currentRefundWindowDays`，`basis='current_tuning'`。该函数**不读全局 TUNING**，窗口天数由调用方以参数注入。
+- `compareRefundBatchesForPosting` 的稳定顺序：  1. `refundDayIndex` 升序；
   2. `source`：`auto_window` 先于 `player_request`；
   3. `productId` 字典序；
   4. `saleDayIndex` 升序；
@@ -303,9 +327,18 @@ export interface RefundServiceDeps {
     FinanceService,
     'postTransaction' | 'hasTransaction' | 'getAllTransactions'
   >
-  /** 当前 TUNING 的窗口天数；只用于新 player_request，不用于历史批次 */
+  /** 当前 TUNING 的窗口天数；仅用于**无快照**的 player_request（Q10 回退口径），历史批次一律按 batch.refundDayIndex */
   refundWindowDays: number
+  /**
+   * 装配探针：公司是否已注册到 `FinanceService`（v1.2 追加，源于实现时的端口缺口）。
+   * `FinanceService` 无注册查询方法且 `getCashBalance` 对未注册公司返回 0，
+   * 故"预检即 fail-fast"必须由装配方提供该能力；生产装配必须注入。
+   */
+  isCompanyRegistered?: (companyId: string) => boolean
 }
+
+/** 注（v1.2）：`RefundRejectReason` / `RefundWindowBasis` 落 `@domain/enums`（避免 events → services 循环依赖），
+ *  若放本文件会形成环；公开类型形状不变。 */
 
 export interface RefundFailedItem {
   batchId: string
@@ -361,14 +394,27 @@ export class RefundService {
 | 错误码 | 触发 | 行为 |
 |---|---|---|
 | `REFUND_DAY_MISMATCH` | 命令 `dayIndex !== world.currentDayIndex` | 返回失败，不生成批次 |
-| `REFUND_INVALID_REQUEST` | `requestId` 为空 / `requestedUnits` 非正整数 / 产品与记录不匹配 | 返回失败，不生成批次 |
+| `REFUND_INVALID_REQUEST` | `requestId` 为空 / `requestedUnits` 非正整数 / 产品与记录不匹配 / 同一 `requestId` 复现但 `salesRecordId` 不一致 | 返回失败，不生成批次 |
 | `REFUND_RECORD_NOT_FOUND` | `productId` 或 `salesRecordId` 不存在 | 返回失败，不生成批次 |
 | `REFUND_UNITS_MISMATCH` | `auto_window.refundedUnits ≠ estimatedRefundUnits` | 抛 `RefundServiceError`（数据损坏；无部分写入） |
-| `REFUND_AMOUNT_MISMATCH` | 批次存储金额 ≠ `units × record.unitPriceAtSaleCents` | 抛 `RefundServiceError`（阻断当日退款阶段；无部分写入） |
-| `REFUND_BROKEN_REF` | 批次回指的记录/产品缺失或元组不一致 | 抛 `RefundServiceError`（同上） |
-| `REFUND_POSTING_FAILED` | `FinanceService` 返回失败（余额不足/未注册） | 不抛；批次保持 `pending`，进入 `failed`，次日重试；`failed[].errorCode` 透传 Finance 的 `FIN_*`，本码仅作日志分类 |
+| `REFUND_AMOUNT_MISMATCH` | 批次存储金额 ≠ `units × record.unitPriceAtSaleCents`；或既有交易金额 ≠ `-refundedUnits × unitPrice` | 抛 `RefundServiceError`（阻断当日退款阶段；无部分写入） |
+| `REFUND_BROKEN_REF` | 批次回指的记录/产品缺失或元组不一致；公司未在 `FinanceService` 注册（`FIN_COMPANY_NOT_REGISTERED`，见 `DECISION-M2-C-Q01` Q1-b） | 抛 `RefundServiceError`（同上；**不得置 pending、不得重试**） |
 
-> `REFUND_UNITS_MISMATCH` / `REFUND_AMOUNT_MISMATCH` / `REFUND_BROKEN_REF` 属“数据已损坏”，必须 fail-fast，不得吞错；`REFUND_POSTING_FAILED` 属“资金暂不可用”，必须可恢复，不得置态。
+> **关于 `REFUND_POSTING_FAILED`（v1.1 收窄）**：M2 的退款金额恒为正（`units>0` 且 `unitPrice>0`；`unitPrice=0` 已在 §10.5.2 直接 `rejected(zero_amount)`），故 `FinanceService` 只会返回 `FIN_COMPANY_NOT_REGISTERED`（→ `REFUND_BROKEN_REF`，见 Q1-b）或成功；允许负现金后 `FIN_INSUFFICIENT_CASH` 不再出现。因此本任务**不新增** `REFUND_POSTING_FAILED` 错误码，`RefundProcessResult.failed[]` 仅透传 Finance 的 `FIN_*` 原码用于日志分类。这样 §10.4 的全部 6 个错误码都有对应测试，不存在"承诺无覆盖"。
+
+> `REFUND_UNITS_MISMATCH` / `REFUND_AMOUNT_MISMATCH` / `REFUND_BROKEN_REF` 属“数据已损坏或装配损坏”，必须 fail-fast，不得吞错、不得置态、不得重试。
+>
+> **错误码 → 测试映射（R1 的 P1-1 强制整改项，CODEBUDDY §13.2）**
+
+| 错误码 | 对应测试 | 断言要点 |
+|---|---|---|
+| `REFUND_DAY_MISMATCH` | **R33** | 抛/返回该码；`refundBatches` 数量不变；`getAllTransactions()` 不变 |
+| `REFUND_INVALID_REQUEST` | **R34** | 空 `requestId`、`requestedUnits=0`、产品-记录不匹配、`requestId` 复现但 `salesRecordId` 不同，四种输入各断言该码 |
+| `REFUND_RECORD_NOT_FOUND` | **R35** | 产品不存在 / 记录不存在，各 1 例 |
+| `REFUND_UNITS_MISMATCH` | **R36** | 运行期手工构造（绕过 schema）→ 抛出；world 引用与交易笔数不变 |
+| `REFUND_AMOUNT_MISMATCH` | **R37** | 运行期手工构造金额漂移 → 抛出；world 与交易不变 |
+| `REFUND_BROKEN_REF` | **R38** | 公司未注册 → 抛出；批次状态不变、交易 0 笔 |
+| `REFUND_UNITS_MISMATCH` / `AMOUNT_MISMATCH` / `BROKEN_REF` 的"无部分写入" | **R36–R38** | 抛出后 `world` 深比较不变、`getAllTransactions()` 笔数不变、不产生任何事件 |
 
 ### 10.5 到期兑现（F2–F5）
 
@@ -379,28 +425,31 @@ export class RefundService {
    - 记录与产品必须存在；`productId / saleDayIndex / marketId / platformId` 必须与 `SalesRecord` 一致，否则抛 `REFUND_BROKEN_REF`。
    - `source === 'auto_window'` 时 `refundedUnits === record.estimatedRefundUnits`，否则抛 `REFUND_UNITS_MISMATCH`（A E18 的运行时防线）。
    - `refundAmountCents === refundedUnits × record.unitPriceAtSaleCents`，否则抛 `REFUND_AMOUNT_MISMATCH`。
-   - 公司存在（`products[].companyId` 命中 `companies`），否则抛 `REFUND_BROKEN_REF`。
-   - 以上任一失败均**不修改 world、不调用 FinanceService**。
+   - 公司存在（`products[].companyId` 命中 `companies`）**且已在 `FinanceService` 注册**，否则抛 `REFUND_BROKEN_REF`（`DECISION-M2-C-Q01` Q1-b：装配损坏，不得重试）。
+   - 以上任一失败均**不修改 world、不调用 FinanceService**（`R36–R38` 逐条断言：抛出后 `world` 深比较不变、交易笔数不变、事件不新增）。
 3. **逐条入账**（顺序固定）：
    - `refundedUnits <= 0` → `rejected(zero_units)`（防御；schema 禁止 0，正常不可达）。
    - `refundAmountCents <= 0` → `rejected(zero_amount)`（防御；M2 单价为正，正常不可达）。
    - `remaining = record.grossUnits - Σposted(record)`；若 `refundedUnits > remaining` → `rejected(over_limit)`。
    - 查重（§10.8）：命中既有 `customer_refund` 交易 → 不新提交，直接视为成功。
-   - 否则调用 `finance.postTransaction` 提交退款交易（字段见下方代码块）。**不传** `allowNegativeBalance`（暂按默认 false，见 §17 Q1）。
+   - 否则调用 `finance.postTransaction` 提交退款交易（字段见下方代码块）。**必须传** `allowNegativeBalance: true`（`DECISION-M2-C-Q01` Q1-a：破产/负现金公司仍须履行已收货款返还义务，避免永久 pending）。
    - 成功或幂等命中 → 批次 `posted`；`actualRefundUnits` 按 §10.5.3 重算；追加 `RefundBatchPosted` 事件（去重）。
    - 失败 → 批次保持 `pending`，进入 `failed`，不追加事件，继续下一条（批次之间互不阻塞）。
 4. **返回**新 `WorldState` 与报告；除 `refundBatches` / `products[].salesByPeriod[].actualRefundUnits` / `events` 外，其他字段引用保持不变。
 
 ```ts
-finance.postTransaction({
-  idempotencyKey: `customer-refund:${batch.id}`, // 即 batch.idempotencyKey
-  companyId: product.companyId,
-  day: dayIndex,
-  category: 'customer_refund',
-  amountCents: -batch.refundAmountCents,
-  referenceId: batch.productId,
-  description: `Refund batch ${batch.id}: ${batch.refundedUnits} units`,
-})
+finance.postTransaction(
+  {
+    idempotencyKey: `customer-refund:${batch.id}`, // 即 batch.idempotencyKey
+    companyId: product.companyId,
+    day: dayIndex,
+    category: 'customer_refund',
+    amountCents: -batch.refundAmountCents,
+    referenceId: batch.productId,
+    description: `Refund batch ${batch.id}: ${batch.refundedUnits} units`,
+  },
+  { allowNegativeBalance: true }, // DECISION-M2-C-Q01 Q1-a
+)
 ```
 
 #### 10.5.2 `refundedUnits` 与金额
@@ -448,11 +497,12 @@ rejected--任何调用--> rejected （no-op）
 #### 10.6.2 判定顺序（固定）
 
 1. **去重**：全量 `refundBatches` 中若存在 `firstRefundRequestId === requestId` 的批次：`salesRecordId` 一致则返回该批次（`outcome='deduplicated'`，不新建、不重复入账、不追加事件）；不一致返回 `REFUND_INVALID_REQUEST`。
-2. **窗口判定**：`currentDay < saleDayIndex + refundWindowDays` → 生成 `rejected` 批次，`reasonCode='window_not_elapsed'`，**不提交交易**。
+2. **窗口判定**：`window = resolveRefundWindow(record.id, record.dayIndex, batches, deps.refundWindowDays)`（Q10）；`currentDay < window.windowEnd` → 生成 `rejected` 批次，`reasonCode='window_not_elapsed'`，`windowBasis=window.basis`，**不提交交易**。
 3. **上限判定**：`remaining = grossUnits - Σ non-rejected`（含 `pending` 的 `auto_window`，A E17）；`requestedUnits > remaining` → 生成 `rejected` 批次，`reasonCode='over_limit'`，不提交交易。
-4. **允许**：生成 `pending` 批次并立即尝试入账：
-   - 成功 → `posted`，`outcome='posted'`；
-   - `FinanceService` 失败 → 保持 `pending`，`outcome='pending'`，返回 `errorCode`，次日 `processDueRefunds` 重试。
+4. **允许**：生成 `pending` 批次并立即尝试入账（与 §10.5.1 同一入账路径，`allowNegativeBalance: true`）：
+   - 成功 → `posted`、`outcome='posted'`；**必须重算 `actualRefundUnits`（§10.5.3）并追加 `RefundBatchPosted`（§10.6.4，`id` 去重）**；
+   - `FinanceService` 失败 → 保持 `pending`，`outcome='pending'`，返回 `errorCode`，次日 `processDueRefunds` 重试；
+   - 装配类失败（`FIN_COMPANY_NOT_REGISTERED`）→ 抛 `REFUND_BROKEN_REF`（Q1-b）。
 
 > 窗口未到 + 超上限同时成立时，`window_not_elapsed` 优先（请求在窗口内根本不合法）。
 
@@ -500,12 +550,15 @@ export function createRefundBatchRejectedEvent(
     refundedUnits: number
     amountCents: number
     reasonCode: RefundRejectReason
+    /** Q10：窗口判定的基准来源；over_limit / zero_* 拒绝时为 'not_applicable' */
+    windowBasis: 'snapshot' | 'current_tuning' | 'not_applicable'
   },
 ): DomainEvent
 ```
 
 - `id` 由调用方注入（与既有事件工厂一致），C 固定传 `refund-posted:${batch.id}` / `refund-rejected:${batch.id}`。
 - `payload` 字段与上表一致；`amountCents` 为绝对值（非负），与 `RefundBatch.refundAmountCents` 相同。
+- **`windowBasis`（Q10 新增，只进事件 payload，不新增实体字段）**：`window_not_elapsed` 拒绝必须写实际基准（`snapshot` / `current_tuning`），使"同一记录两种窗口基准"的口径差异可审计；其余拒绝原因写 `'not_applicable'`。
 - 追加前检查 `world.events.some(e => e.id === 事件id)`；已存在则跳过，保证重放不重复。
 - `RefundBatchPosted` 每个 `posted` 批次恰好 1 条（08/04 Phase 4.7）；`RefundBatchRejected` 每个 `rejected` 批次恰好 1 条。
 - 拒绝原因只通过事件持久化；G 读取事件 `payload.reasonCode` 展示。
@@ -515,6 +568,7 @@ export function createRefundBatchRejectedEvent(
 - `currentDay >= lastRefundDay` 的 `player_request` 合法；在额度内生成 `pending` 并即时入账（或资金失败挂起）。
 - 到期日当天（`==`）视为“已到期”，允许请求；`auto_window` 与 `player_request` 同日时按 §10.3 排序，`auto` 先入账。
 - `estimated = 0`（无 auto 批次）的记录仍允许 `player_request`，上限为 `grossUnits`（UNBLOCK §1.6-4）。
+- 其窗口终点按 §10.2.4 判定表处理：无快照 → 回退 `saleDay + 当前 TUNING` 并标 `windowBasis='current_tuning'`（Q10），**不得**因 `estimated=0` 直接放行。
 
 ### 10.7 上限、占用与拒绝优先级
 
@@ -573,28 +627,35 @@ export function createRefundBatchRejectedEvent(
 位置：`parseSave` 第 9 步之后、预算权威公式校验之前。
 
 ```ts
-// 新增校验段：有交易凭据的 posted 批次，金额必须可复算
+// 第 9 步之后插入：两段校验
+// 段 1（全局）：所有 posted 批次，批次内金额必须可复算（不要求交易凭据）
+for (const b of state.refundBatches) {
+  if (b.status !== 'posted') continue
+  const record = salesRecordById.get(b.salesRecordId)!
+  const expected = b.refundedUnits * record.unitPriceAtSaleCents
+  if (b.refundAmountCents !== expected) return SAVE_REFUND_INCONSISTENT
+}
+
+// 段 2（有凭据时）：账实一致
 const refundTxByKey = new Map<string, Transaction>()
 for (const t of state.transactions) {
   if (t.category === 'customer_refund') refundTxByKey.set(t.idempotencyKey, t)
 }
 for (const b of state.refundBatches) {
   if (b.status !== 'posted') continue
-  const tx = refundTxByKey.get(b.idempotencyKey)
-  if (tx === undefined) continue            // 纯数据夹具/无凭据：跳过（见下）
-  const record = salesRecordById.get(b.salesRecordId)!
-  const expected = b.refundedUnits * record.unitPriceAtSaleCents
-  if (b.refundAmountCents !== expected) return SAVE_REFUND_INCONSISTENT
+  const tx = refundTxByKey.get(b.idempotencyKey)   // customer-refund:<batch.id>
+  if (tx === undefined) continue                   // 无凭据：Q7 裁定不强制，见下
   if (tx.amountCents !== -b.refundAmountCents) return SAVE_REFUND_INCONSISTENT
 }
 ```
 
 规则：
 
-- 只校验 `posted` 且有 `customer-refund:<batch.id>` 交易的批次；`pending`/`rejected` 不校验金额（入账前 runtime 预检会复算；`rejected` 不产生现金）。
+- **段 1 是全局的**（`DECISION-M2-C-Q06`）：对**所有** `posted` 批次断言 `refundAmountCents === refundedUnits × record.unitPriceAtSaleCents`，与 `source`、与是否有交易凭据无关；`pending` / `rejected` 不校验（入账前 runtime 预检会复算，`rejected` 不产生现金）。
+- **段 2 只在有 `customer-refund:<batch.id>` 凭据时执行**（`DECISION-M2-C-Q07`）：允许"无凭据的 posted 批次"通过，但该缺口必须被**显式测试**（R30 正向例）并在 §17 风险表登记，不得隐式放过。
 - 等式使用 `record.unitPriceAtSaleCents`，**不得**重算 `grossRevenueCents / grossUnits`；非整除单价同样成立（R29–R31）。
 - 失败返回既有错误码 `SAVE_REFUND_INCONSISTENT`，调用方保持当前运行状态不变。
-- **兼容性说明（重要）**：M2-A 的契约夹具（T16/T22）为纯数据构造，`player_request` 批次金额未按 Q2 设置，且交易幂等键不是 `customer-refund:<id>`；若对全部批次做全局等式断言，会击穿已 CLOSED 的 A 基线。因此本稿采用“有交易凭据才断言”的向后兼容口径。该缺口登记为 §17 Q6。
+- **兼容性说明（v1.1 已消除 R1 的 P1-2）**：R1 时之所以只能条件化，根因是 M2-A 的 T16 夹具两条 `player_request` 批次金额未按 Q2 设置（10 件/5 件却写 60,000）。该夹具已按 `ERRATA-M2-001-A-T16` 勘误为 20,000 / 10,000，A 基线 35 用例仍全绿；因此段 1 可全局执行，无需再为兼容 A 而弱化。全局段在 A 基线上**确实被触发**（T16 两条批次、T10/T11 的 auto 批次），不再是"休眠校验"。
 - 读档仍然**不读 TUNING、不复算窗口**；只做金额与归属校验。
 
 ### 10.10 与 `DailyScheduler` / `GameWorld` 的集成（F9）
@@ -665,13 +726,16 @@ for (const b of state.refundBatches) {
 | E6 | 窗口内请求产生交易 | **禁止**；0 笔 `customer_refund` | R12 |
 | E7 | 拒绝原因丢失 | `RefundBatchRejected` 事件含 `reasonCode`，且随存档保留 | R12/R13 |
 | E8 | 到期日当天误拒 | Day `== lastRefundDay` 允许 `player_request` | R14 |
-| E9 | 同 `requestId` 重复生成 | 返回既有批次，`deduplicated`，批次/事件/交易均不增 | R15 |
-| E10 | 已 `posted` 重复入账 | 第 1 判据 no-op，交易仍 1 笔 | R16 |
-| E11 | 交易已存在、批次仍 `pending` | 命中幂等键，置 `posted`，不新增交易 | R17 |
-| E12 | 幂等索引被裁剪、流水仍在 | 全量扫描命中，不重复入账 | R18 |
-| E13 | `units=0` 提交零交易 | `rejected(zero_units)`，无交易 | R19 |
-| E14 | 单价 0 提交零金额 | `rejected(zero_amount)`，无交易 | R20 |
-| E15 | 历史批次按当前 TUNING 复算 | 只用 `refundDayIndex` 快照；改窗口天数不影响 | R27 |
+| E9 | 同 `requestId` 重复生成 | 返回既有批次，`deduplicated`，批次/事件/交易均不增 | R15pending --成功入账--> posted   （终态）
+pending --业务拒绝--> rejected （终态：zero_units / zero_amount / over_limit）
+pending --资金失败--> pending  （次日重试；不写事件）
+posted  --任何调用--> posted   （no-op，不得再生成交易）
+rejected--任何调用--> rejected （no-op）
+```
+
+- `posted` / `rejected` 不得回退；C 不得修改已终态批次。
+- `posted` 的判据是"`customer_refund` 交易已存在且金额匹配"，不是"函数执行过"。
+- **"资金失败 → pending"在 v1.1 已收窄**：允许负现金后仅剩装配类失败（`FIN_COMPANY_NOT_REGISTERED`），而该类按 Q1-b 直接抛 `REFUND_BROKEN_REF`、**不置 pending、不重试**。即 v1.1 下"永久 pending"路径不存在（R23/R38 锁定）。Index` 快照；改窗口天数不影响 | R27 |
 | E16 | 读档批次金额漂移 | `SAVE_REFUND_INCONSISTENT` | R30 |
 | E17 | 读档交易金额漂移 | `SAVE_REFUND_INCONSISTENT` | R31 |
 | E18 | 读档归属/累加漂移 | `SAVE_BROKEN_REF` / `SAVE_REFUND_INCONSISTENT` | R32 |
@@ -711,13 +775,14 @@ for (const b of state.refundBatches) {
 | 文件 | 类型 | 覆盖 |
 |---|---|---|
 | `src/domain/value-objects/__tests__/refund-window.test.ts` | 新增 | R01–R06 |
-| `src/simulation/__tests__/refund-service.test.ts` | 新增 | R07–R23 |
-| `src/simulation/__tests__/refund-integration.test.ts` | 新增 | R24–R28 |
+| `src/simulation/__tests__/refund-service.test.ts` | 新增 | R07–R23、R39、R40 |
+| `src/simulation/__tests__/refund-integration.test.ts` | 新增 | R24–R28、R41、R42 |
 | `src/infrastructure/__tests__/m2c-refund-read-validation.test.ts` | 新增 | R29–R32 |
+| `src/simulation/__tests__/m2c-refund-contract.test.ts` | 新增 | R33–R38（接口错误码 + 无部分写入） |
 
-框架：Vitest；禁止 `any` 绕过类型；夹具用显式字面量；每个反向用例必须先证明“去掉被测守卫后断言会失败”。
+框架：Vitest；禁止 `any` 绕过类型；夹具用显式字面量；每个反向用例必须先证明"去掉被测守卫后断言会失败"。
 
-### 13.2 测试用例清单（32 条）
+### 13.2 测试用例清单（42 条）
 
 | 编号 | 文件 | 用例 | 正向断言 | 反证/可失败点 |
 |---|---|---|---|---|
@@ -734,7 +799,7 @@ for (const b of state.refundBatches) {
 | R11 | refund-service | 超上限双防线 | 建单：Day 120 请求 1480 → `rejected(over_limit)`；入账：既有 pending 1480（构造）+ auto 30 → auto posted，player `rejected(over_limit)`，`actual=30`，仅 1 笔交易 | 若入账不做剩余量检查，会突破 1500 |
 | R12 | refund-service | 窗口内请求拒绝 | Day 107 请求 30：生成 `rejected` 批次（`refundDay=107`、`amount=60000`、`firstRefundRequestId` 存在）；0 笔交易；`actual=0`；`RefundBatchRejected` 的 `reasonCode='window_not_elapsed'` | 若窗口内放行，交易数/状态断言失败 |
 | R13 | refund-service | 拒绝原因优先级 | Day 107 请求 1480（同时超限）→ `reasonCode='window_not_elapsed'` | 若先判上限，原因码错误 |
-| R14 | refund-service | 到期日当天允许 | Day 114 请求 10：`outcome='posted'`，交易 -20000，`actual=10`；随后日推进兑现 auto 30 → `actual=40` | 若把 `==` 归入窗口内，请求被拒 |
+| R14 | refund-service | 到期日当天允许 | Day 114 请求 10：`outcome='posted'`，交易 -20000，`actual=10`，`RefundBatchPosted` 恰 1 条（v1.1 增）；随后日推进兑现 auto 30 → `actual=40`，事件共 2 条 | 若把 `==` 归入窗口内，请求被拒；若成功路径漏写事件，事件数断言失败 |
 | R15 | refund-service | `requestId` 去重 | 同 ID 调两次：批次 1 条、交易 1 笔、事件 1 条；第二次 `outcome='deduplicated'` | 若按参数去重/不去重，数量断言失败 |
 | R16 | refund-service | 重复执行幂等 | `processDueRefunds` 连续两次：交易 1 笔，`actual=30`，事件 1 条，第二次报告为空 | 若无 `posted` 早退，会重复入账 |
 | R17 | refund-service | 交易已存在、批次 pending | 预置同键交易 + 批次 `pending`：处理 → `posted`，交易仍 1 笔，`actual=30` | 若只信 `status` 而不查键，会重复提交（Finance 虽幂等，但事件/累加可能重复） |
@@ -743,16 +808,26 @@ for (const b of state.refundBatches) {
 | R20 | refund-service | 单价 0 / 金额 0 | 记录 `unitPriceAtSaleCents=0`，批次 2 件金额 0 → `rejected(zero_amount)`，0 交易 | 若提交零金额，Finance 拒绝且批次可能被误置态 |
 | R21 | refund-service | 非整除单价兑现 | 记录 2 件/3001 分/单价 1501；批次 2 件/3002 → `posted`，交易 -3002，现金减少 3002 | 若钳制 3001 或重算 `3001/2`，金额断言失败 |
 | R22 | refund-service | rejected 不占额度 | 记录 100；Day 107 rejected 100；Day 114 auto 30 入账；再请求 70 → `posted`，`actual=100`；再请求 1 → `rejected(over_limit)` | 若 rejected 计入，70 会被拒 |
-| R23 | refund-service | 资金失败不置态 | 现金 0/公司未注册：`postTransaction` 失败 → 批次 `pending`、无 `RefundBatchPosted`、`actual=0`、`failed` 含错误码；补足现金后再处理 → `posted` | 若吞错置 `posted`，状态/事件断言失败 |
+| R23 | refund-service | 未注册公司 fail-fast（Q1-b） | 批次 `pending`、公司未在 `FinanceService` 注册：处理 → 抛 `REFUND_BROKEN_REF`；批次**仍为 pending**（未置任何态）、0 笔 `customer_refund`、无 `RefundBatchPosted`、`actual=0` | 若吞错置 `posted` 或长期重试，状态/交易/抛出类型断言失败 |
 | R24 | refund-integration | 调度顺序（销售 → 退款） | Day 30 销售 → 1 条 pending、2 笔销售相关交易（`sales_revenue` + `platform_fee`）、0 退款；Day 43 无退款；Day 44 仅 1 笔 `customer_refund` 且晚于全部销售交易；现金 3,344,185 → 3,251,216 | 若退款在销售前/月末后，交易顺序与余额断言失败 |
 | R25 | refund-integration | B/C 边界 | 销售日：每记录恰好 1 条 `pending` auto；auto 的 `firstRefundRequestId` 为 `undefined`；`customer_refund` 0 笔；C 不新增 auto 批次；到期后恰 1 条 `posted`，批次总数不变 | 若 C 生成 auto、auto 带玩家请求 ID 或重复批次，数量/字段断言失败 |
 | R26 | refund-integration | 存档往返 + 同日重放 | 入账后 `serialize → parseSave → restore`；恢复后直接调用 `processDueRefunds(114)`（绕过 `executeDay` 早退）：交易/`actual`/事件均不增；`parseSave` ok | 若重放重复入账，数量断言失败 |
 | R27 | refund-integration | 历史窗口不复算 | 存档批次 `refundDay=107`（销售 100），注入当前 `refundWindowDays=30`；Day 120 处理 → `posted`，`refundDayIndex` 仍 107，无拒绝事件 | 若按当前窗口复算，会误判未到期 |
 | R28 | refund-integration | 旧档/空批次 | v1 档无 `refundBatches` → `[]`；`processDueRefunds` no-op，0 交易，无异常 | 若把空数组当损坏或生成批次，断言失败 |
 | R29 | read-validation | 非整除单价一致 | posted 2 件/3002 + 同键交易 -3002 → `parseSave` ok；允许 3002 > grossRevenue 3001 | 若全局钳制/重算，拒绝加载 |
-| R30 | read-validation | 批次金额漂移 | posted 2 件金额 3001（应为 3002）+ 同键交易 -3001 → `SAVE_REFUND_INCONSISTENT` | 若不校验批次金额，错误数据被接受 |
-| R31 | read-validation | 交易金额漂移 | 批次 3002，交易 -3001 → `SAVE_REFUND_INCONSISTENT` | 若不校验交易金额，账实不符被接受 |
+| R30 | read-validation | 批次金额漂移（**无凭据也拒**，Q6） | posted 2 件金额 3001（应为 3002）、**无同键交易** → `SAVE_REFUND_INCONSISTENT` | 若只在有凭据时校验（v1.0 口径），该用例会绿 → 反证精准指向"全局断言" |
+| R31 | read-validation | 交易金额漂移（有凭据） | 批次 3002 + 同键 `customer-refund:RB-...-1` 交易 -3001 → `SAVE_REFUND_INCONSISTENT` | 若不校验交易金额，账实不符被接受 |
 | R32 | read-validation | 归属/累加漂移 | (a) `marketId` 与记录不一致 → `SAVE_BROKEN_REF`；(b) posted 30 但 `actualRefundUnits=29` → `SAVE_REFUND_INCONSISTENT` | 任一不触发即失败 |
+| **R33** | refund-contract | `dayIndex` 不匹配 | `cmd.dayIndex` ≠ `world.currentDayIndex` → 返回 `errorCode='REFUND_DAY_MISMATCH'`；`refundBatches` 长度不变；`getAllTransactions()` 笔数不变 | 若忽略日校验，会凭空生成批次 |
+| **R34** | refund-contract | 参数守卫（4 例） | 空 `requestId` / `requestedUnits=0` / 产品-记录不匹配 / `requestId` 复现但 `salesRecordId` 不同 → 均 `REFUND_INVALID_REQUEST`；批次数不变 | 若任一放行，错误码与数量断言失败 |
+| **R35** | refund-contract | 记录/产品不存在（2 例） | 产品不存在 / `salesRecordId` 不存在 → `REFUND_RECORD_NOT_FOUND`；0 新批次 | 若抛 TypeError 或放行，错误码断言失败 |
+| **R36** | refund-contract | 运行期 units 漂移 | 手工构造 `auto_window` 批次 `refundedUnits=29`（`estimated=30`，绕过 schema）→ 抛 `REFUND_UNITS_MISMATCH`；`world` 深比较不变、交易 0 笔、无事件 | 若无运行期预检，会按错误件数入账 |
+| **R37** | refund-contract | 运行期金额漂移 | 手工构造批次 `refundAmountCents=59999`（应为 60000）→ 抛 `REFUND_AMOUNT_MISMATCH`；`world`/交易/事件均不变 | 若不预检金额，会少退 1 分 |
+| **R38** | refund-contract | 未注册公司 fail-fast | `FIN_COMPANY_NOT_REGISTERED` → 抛 `REFUND_BROKEN_REF`；批次状态不变、0 交易、无事件（**不留永久 pending**） | 若按 v1.0 置 pending 重试，抛出类型与状态断言失败 |
+| **R39** | refund-service | 窗口基准（Q10 双口径） | ①`TUNING=30`、老记录（`saleDay=100`、auto 批次 `refundDay=114`）在 Day 116 请求 → `posted`，`windowBasis='snapshot'`；②`estimated=0` 记录在 Day 116 请求 → `rejected(window_not_elapsed)` 且 `windowBasis='current_tuning'` | 若一律用当前 TUNING，①会被误拒；若一律用快照，②会误放行 |
+| **R40** | refund-service | 破产负现金仍兑现（Q1-a） | 现金 −1,000,000、公司已注册：Day 114 处理 → `posted`、现金 −1,060,000、`actual=30`、事件 1 条、`failed` 为空 | 若仍传 `allowNegativeBalance=false`，批次保持 pending → 状态/现金断言失败 |
+| **R41** | refund-integration | `restore` 内不兑现 | 存档含到期 `pending` 批次 → `restore` 后：批次仍 `pending`、交易数不变、`actual` 不变；再手动 `processDueRefunds(114)` 才 `posted` | 若 restore 内部兑现，首次断言失败 |
+| **R42** | refund-integration | 排序 7 级键（补 2 级） | 同时到期多条：`refundDayIndex` 小者先入账；同 `refundDay` 同源时 `seq` 小者先入账（用交易数组顺序断言） | 若只按 `source` 排序或依赖数组原序，顺序断言失败 |
 
 ### 13.3 异常 → 测试映射
 
@@ -786,14 +861,15 @@ for (const b of state.refundBatches) {
 | F3（非整除） | 2 件、收入 3,001、单价 1,501、抽成 900、净 2,101、estimated 2；批次 2 件、3,002 分 |
 | F4（玩家请求） | 基于 F1；`requestId='req-1'`；`requestedUnits` 按用例 |
 | 现金 | 单元测试用 `advance` 注入 2,100,000 分；集成测试用 B 的真实销售流水；不直接改 `Company.cashBalanceCents` |
-| 交易 | 每笔 `customer_refund` 的 `key` 必须为 `customer-refund:<batch.id>`；读档测试需同时放入同键交易 |
+| 交易 | 每笔 `customer_refund` 的 `key` 必须为 **`customer-refund:<batch.id>`**（不是 `key:<txId>`，也不是 `customer-refund:<txId>`）；R29/R31 必须按此键构造，否则段 2 校验不生效（v1.1 明确点出，R1 的 P1-2 即源于此键不匹配） |
+| R30（无凭据用例） | 同一夹具**故意不放**同键交易，用于验证段 1 全局断言在"无凭据"下仍生效 |
 
 ### 13.6 执行命令与期望
 
 ```bash
 npm run typecheck      # 退出码 0
 npm run lint:check     # 退出码 0
-npm test               # 退出码 0；新增 32 条全绿，0 skip
+npm test               # 退出码 0；新增 42 条全绿，0 skip
 npm run build          # 退出码 0
 ```
 
@@ -802,17 +878,19 @@ npm run build          # 退出码 0
 | 编号 | 验收项 | 通过条件 |
 |---|---|---|
 | V1 | 窗口公式 | R01–R04 全绿；跨月/跨年示例逐日相等 |
-| V2 | 到期兑现 | R08/R09/R24 全绿；交易字段/事件/现金逐项断言 |
+| V2 | 到期兑现 | R08/R09/R24/R40 全绿；交易字段/事件/现金逐项断言 |
 | V3 | 未到期不兑现 | R07 全绿；Day 113 无交易 |
-| V4 | 窗口内拒绝 | R12/R13 全绿；0 交易、`reasonCode` 持久化 |
-| V5 | 窗口后允许 | R14/R22 全绿；到期日当天可请求 |
+| V4 | 窗口内拒绝 | R12/R13/R39 全绿；0 交易、`reasonCode` + `windowBasis` 持久化 |
+| V5 | 窗口后允许 | R14/R22/R39 全绿；到期日当天可请求 |
 | V6 | 上限 | R10/R11/R22 全绿；`Σ posted ≤ grossUnits` |
-| V7 | 幂等/重放 | R15–R18/R26 全绿；交易/`actual`/事件均不重复 |
+| V7 | 幂等/重放 | R15–R18/R26/R41 全绿；交易/`actual`/事件均不重复 |
 | V8 | 零退款 | R19/R20/R28 全绿；0 交易 |
 | V9 | 历史不复算 | R27 全绿；改窗口天数不改变历史批次 |
-| V10 | 读档断言 | R29–R32 全绿；错误码正确、加载被拒 |
-| V11 | 边界 | R25 全绿；C 不生成 auto、不改 `estimated`、不冲正 `platform_fee` |
+| V10 | 读档断言 | R29–R32 全绿；错误码正确、加载被拒（含无凭据 R30） |
+| V11 | 边界 | R25/R42 全绿；C 不生成 auto、不改 `estimated`、不冲正 `platform_fee` |
 | V12 | 基线 | A/B 既有测试全绿；`SAVE_SCHEMA_VERSION=1`；`RefundBatch` 仍 13 字段 |
+| **V13** | **接口错误约定** | R33–R38 全绿；6 个错误码各有用例；抛出后 `world`/交易/事件零变化 |
+| **V14** | **裁定落地** | Q1（R23/R40）、Q6（R30）、Q7（R30 正向+R31）、Q10（R39）逐条有对应用例且全绿 |
 
 ## 15. 交付物
 
@@ -820,22 +898,24 @@ npm run build          # 退出码 0
 
 | 文件 | 内容 |
 |---|---|
-| `src/domain/value-objects/refund-window.ts` | 7 个纯函数（§10.3） |
+| `src/domain/value-objects/refund-window.ts` | 8 个纯函数（§10.3） |
 | `src/simulation/services/refund-service.ts` | `RefundService`、DTO、`RefundServiceError`（§10.4） |
 | `src/domain/value-objects/__tests__/refund-window.test.ts` | R01–R06 |
 | `src/simulation/__tests__/refund-service.test.ts` | R07–R23 |
-| `src/simulation/__tests__/refund-integration.test.ts` | R24–R28 |
+| `src/simulation/__tests__/refund-integration.test.ts` | R24–R28、R41、R42 |
 | `src/infrastructure/__tests__/m2c-refund-read-validation.test.ts` | R29–R32 |
+| `src/simulation/__tests__/m2c-refund-contract.test.ts` | R33–R38 |
 
 ### 15.2 修改文件
 
 | 文件 | 修改 |
 |---|---|
-| `src/domain/events/index.ts` | 新增 `RefundBatchPosted` / `RefundBatchRejected` 常量与工厂（§10.6.4） |
-| `src/domain/value-objects/index.ts` | 导出 `refund-window` 纯函数 |
+| `src/domain/events/index.ts` | 新增 `RefundBatchPosted` / `RefundBatchRejected` 常量与工厂（§10.6.4，`RefundBatchRejected.payload` 含 `windowBasis`） |
+| `src/domain/value-objects/index.ts` | 导出 `refund-window` 纯函数（含 `resolveRefundWindow`） |
 | `src/simulation/phase/daily-scheduler.ts` | `DailySchedulerDeps.refund?`；销售后调用退款阶段 |
 | `src/application/mediators/game-world.ts` | 构造/恢复 `RefundService`；`requestRefund` 薄命令 |
-| `src/infrastructure/storage/save-schema.ts` | 追加退款校验段（§10.9.2），不新增错误码 |
+| `src/infrastructure/storage/save-schema.ts` | 追加退款校验段（§10.9.2 **两段**），不新增错误码 |
+| `src/infrastructure/__tests__/m2a-sales-refund-contract.test.ts` | **不改**（T16 金额已由 `ERRATA-M2-001-A-T16` 勘误，属主 AI 授权的前置条件，编码代理不得再动） |
 
 **禁止修改**：`src/domain/entities/refund-batch.ts`、`sales-record.ts`、`world-state.ts` 的字段定义；`SAVE_SCHEMA_VERSION`；`FinanceService` 方法签名；`spec/` 与既有 `docs/`。
 
@@ -843,13 +923,14 @@ npm run build          # 退出码 0
 
 编码代理交付时必须逐条说明：
 
-1. 7 个纯函数的签名与守卫；
+1. 8 个纯函数的签名与守卫；
 2. 退款阶段在 `DailyScheduler` 中的精确位置；
 3. 四道幂等防线的实现位置；
-4. 退款校验段在 `parseSave` 中的插入位置与向后兼容理由；
-5. 32 条测试与 E1–E20 的映射；
+4. 退款校验段（两段）在 `parseSave` 中的插入位置与"全局段不再休眠"的证明（A 基线上确被触发）；
+5. 42 条测试与 E1–E20、6 个错误码的映射；
 6. 四命令真实退出码；
-7. 未实现项（§6）与开放问题（§17）的处理方式：不得自行裁定。
+7. 裁定落地对照：Q1（R23/R40）、Q6（R30）、Q7（R30 正向 + R31）、Q10（R39）逐条指明实现位置；
+8. 未实现项（§6）与开放问题（§17）的处理方式：不得自行裁定。
 
 ## 16. 禁止事项
 
@@ -861,30 +942,34 @@ npm run build          # 退出码 0
 6. 不把退款金额钳制到 `grossRevenueCents`。
 7. 不提交零金额交易；`units=0`/`amount=0` 必须拒绝且无交易。
 8. 不把 `status` 判断降级为仅靠幂等键；`posted` 必须第一判据。
-9. 不吞 `FinanceService` 失败；失败不得置 `posted`/`rejected`，只能保持 `pending` 并报告。
+9. 不吞 `FinanceService` 失败；但**装配类失败**（`FIN_COMPANY_NOT_REGISTERED`）必须按 `REFUND_BROKEN_REF` 抛出，不得置 `pending` 重试；资金类失败不得置 `posted`/`rejected`。
 10. 不修改 `platform_fee`、不生成冲正、不回写 `SalesRecord` 金额字段。
 11. 不在 `parseSave`/`restore`/`serialize` 中执行兑现。
 12. 不新增 UI/文案/i18n；不实现 M2-D/M2-E/M2-F/M2-G/M5 的内容。
 13. 不对开放问题自行选择实现口径；必须上报设计负责人。
 
-## 17. 开放问题（只列不裁定）
+## 17. 开放问题（v1.1：Q1/Q6/Q7 已裁定，新增 Q10 已裁定）
 
-> 以下问题均不阻断其余功能编码；涉及具体口径的，正文以“暂按”标注临时行为，最终以主 AI 裁定为准。
+> **状态变更（v1.1）**：R1 审核认定 Q1/Q6/Q7 属"规则空白"，已由 `DECISION-M2-C-Q01-Q06-Q07-Q10.md` 裁定，正文对应处改为确定口径；新增 **Q10**（历史记录窗口基准）同文件裁定。下表"裁定"列写明结论与落点。
+> 仍为"只列不裁定"的仅 Q2、Q3、Q4、Q5、Q8、Q9：它们不阻断编码、不影响账实一致，按正文口径实现即可；如需变更须另立裁定。**本表不再包含"靠猜实现"的条目。**
 
-| 编号 | 问题 | 现象/冲突 | 正文暂按 | 影响面 |
+| 编号 | 问题 | 现象/冲突 | 正文口径 | 裁定/落点 |
 |---|---|---|---|---|
-| Q1 | 退款导致余额不足时是否允许负现金？ | `FinanceService` 允许负余额的白名单只列工资/租金/解雇补偿/重放；退款是“不可拒绝”的既收款返还，但未在文档中授权 | 默认 `allowNegativeBalance=false`：失败保持 `pending`、次日重试 | 破产公司可能永久无法退款；若裁定允许负现金，只需改一处 options 与 R23 |
+| Q1 | 退款导致余额不足时是否允许负现金？ | 退款是"不可拒绝"的既收款返还；破产公司现金已为负，`allowNegativeBalance=false` 会导致永久 pending | **允许负现金**：`postTransaction(..., { allowNegativeBalance: true })`；`FIN_COMPANY_NOT_REGISTERED` 按 `REFUND_BROKEN_REF` fail-fast、不重试 | **已裁定** `DECISION-M2-C-Q01` Q1-a/Q1-b；落点 §10.5.1、§10.5.4、R23/R38/R40 |
 | Q2 | `refundAmountCents = 0`（单价 0）的批次应置 `posted` 还是 `rejected`？ | 单位已退但无现金；`posted` 语义是“交易已入账”，零金额无交易 | `rejected(zero_amount)`，不累加 `actual` | M2 首发单价为正，正常不可达；影响未来促销/免费 SKU |
 | Q3 | 补兑现是否有跨度上限？ | 08/04 规定 `==`；失败/跳日后 `<=` 可能一次补很多天 | 无上限，全部 `refundDayIndex <= day` 的 pending 都处理 | 长期未玩存档一次性扣款；可能需要“最多补 N 天”或分期 |
 | Q4 | 补兑现时 `Transaction.day` 应记执行日还是计划退款日？ | 执行日记账符合“现金发生日”；计划日符合权责发生/月报归属 | 执行日 `dayIndex`；既有交易保留原 `day` | 跨月补兑时退款计入下月，影响月度报表 |
 | Q5 | 非整除单价下退款总额可大于 `grossRevenueCents`（3002 > 3001），是否封顶？ | A 允许 `grossRevenue` 非整除（T04/T36），Q2 又要求唯一乘法；两者叠加可能多退 1 分 | 不封顶，严格按 `units × unitPrice` | M2 首发 `grossRevenue = units × price` 精确，不可达；未来单日多价需裁定 |
-| Q6 | 读档金额等式是否应覆盖全部批次？ | A §12.6 要求全局断言；但 A 契约夹具 T16/T22 的 `player_request` 金额未按 Q2 设置（60000 vs 10×2000/1470×2000），全局断言会击穿已 CLOSED 基线 | 只校验“`posted` 且有 `customer-refund:<id>` 交易”的批次 | 纯数据夹具/无交易凭据的 posted 批次不被读档拦截；见 R29–R31 |
-| Q7 | `posted` 批次是否必须存在对应 `Transaction`？ | 生产路径必然成对；但 A 的纯数据夹具允许 posted 无交易，强制校验会破坏基线 | 不强制；有凭据才校验金额 | 手改存档可伪造“已退款但无流水”，且 C 因 `status` 优先不会补入账，造成账实不符 |
+| Q6 | 读档金额等式是否应覆盖全部批次？ | A §12.6 要求全局断言；R1 时 A 夹具 T16 两条 `player_request`（10/5 件）金额写成 60,000，全局断言会击穿已 CLOSED 基线 | **全局断言**：所有 `posted` 批次均校验 `refundAmountCents === units × unitPrice`，不看凭据；A 夹具已按 `ERRATA-M2-001-A-T16` 勘误 | **已裁定** `DECISION-M2-C-Q06`；落点 §10.9.2 段 1、R30、§13.5 |
+| Q7 | `posted` 批次是否必须存在对应 `Transaction`？ | 强制会要求 A 的多条夹具补交易并改计数断言，成本高于收益 | **不强制**，但必须显式化：段 1 管批次内等式，段 2 有凭据才管账实；缺口由 R30（正向）与 §17 风险登记锁住 | **已裁定** `DECISION-M2-C-Q07`；落点 §10.9.2 段 2、R30/R31 |
 | Q8 | `player_request` 的开放条件、单次上限、频率、公司归属校验？ | 首发无 UI；命令层可被任意调用；文档只规定窗口与总量上限 | 仅校验窗口/总量/正整数；不校验玩家公司归属（由 M2-G 入口保证） | 命令层可被脚本滥用或对非玩家产品发起请求；需产品裁定 |
-| Q9 | 破产/解散公司是否仍需兑现 pending 退款？拒绝原因是否应升级为实体字段？ | 工资/租金对破产公司仍执行（OI-21 §6.3），退款未明确；`RefundBatch` 无 `rejectionReason`，当前靠事件 | 继续兑现所有公司；原因用事件承载 | 破产公司现金进一步为负；事件查询比字段读取更复杂，G 需读事件 |
+| Q9 | 破产/解散公司是否仍需兑现 pending 退款？拒绝原因是否应升级为实体字段？ | 工资/租金对破产公司仍执行（OI-21 §6.3），退款未明确；`RefundBatch` 无 `rejectionReason`，当前靠事件 | 继续兑现所有公司（允许负现金）；原因用事件承载 | 破产公司现金进一步为负；事件查询比字段复杂，G 需读事件。与 Q1-a 一致 |
+| **Q10** | 历史销售记录上的 `player_request` 用哪个窗口基准？ | `SalesRecord` 无窗口天数快照；若用当前 TUNING，调大到 30 后会让本已到期的历史记录被判"窗口内"，与 Q3 冲突 | **快照优先**：有 `auto_window` 批次（含 rejected）取其 `refundDayIndex` 最大值；无批次（`estimated=0`）回退当前 TUNING 并写 `windowBasis='current_tuning'` | **已裁定** `DECISION-M2-C-Q10`；落点 §10.2.4 判定表、`resolveRefundWindow`、R39 |
 
 ## 18. 变更记录
 
 | 版本 | 日期 | 变更 | 作者 |
 |---|---|---|---|
 | 1.0 | 2026-11-19 | 初稿：16 项结构；窗口规则、到期兑现、窗口拒绝、幂等重放、读档退款校验段、调度集成、32 条测试、9 条开放问题 | 设计代理 |
+| **1.2** | **2026-11-19** | **交付后回写实现级偏差（N-7/N-8/N-9）**：§10.4 `RefundServiceDeps` 增可选 `isCompanyRegistered` 探针并说明端口缺口；注明 `RefundRejectReason`/`RefundWindowBasis` 落 `@domain/enums` 的原因；§10.6.5 补 Q10 引用（`estimated=0` 也须按判定表，不得直接放行）；§10.6 结果类型 `outcome` 取值域补 `error` | 设计代理（主 AI 代行） |
+| **1.1** | **2026-11-19** | **按 `GDR-REVIEW-M2-001-C` R1 整改（REVISE_REQUIRED → 送复审）**：<br>① P1-1 补 R33–R42 共 10 条接口/运行期契约用例，并新增"错误码→测试映射"表（§10.4）；收窄删除不可达的 `REFUND_POSTING_FAILED`，使 6 个错误码全部有覆盖（§10.4）；<br>② P1-2 按 `DECISION-M2-C-Q06/Q07` 改为**全局段 + 有凭据段**两段校验（§10.9.2），引用 `ERRATA-M2-001-A-T16` 说明"不再休眠"；R30 改为无凭据也拒；<br>③ P1-3 按 `DECISION-M2-C-Q10` 新增 `resolveRefundWindow` 与窗口基准判定表（§10.2.4/§10.3），`RefundBatchRejected` 增 `windowBasis`（§10.6.4），补 R39；<br>④ P2-1 按 `DECISION-M2-C-Q01` 允许负现金 + 未注册公司 fail-fast（§10.5.1/§10.5.4/§16-9），R23 重写、新增 R40；<br>⑤ P2-2/P2-3/P2-4/P2-5：R36–R38 断言零副作用、新增 R41/R42、R14 补事件断言、§10.6.2 补成功路径事件与重算；<br>⑥ P3-1～P3-4：B 改 CLOSED、§8 P4 改引 §13.8、§8 增"到期兑现在 §10.5"注、§17 正文不再称"不阻断"；<br>⑦ 测试计数 32→42，验收口径增 V13/V14，交付物/交付说明同步更新 | 设计代理（主 AI 代行） |

@@ -14,8 +14,14 @@ export interface Product {
   audienceSegmentIds: string[]
   supportedPlatformIds: string[]
   launchDay: number              // 真实上市日（actualLaunchDay）
-  /** M1 不做真实定价；null 表示未定价 */
+  /** 上市价；null 表示未定价（上市时一律为 null，M2-D 由玩家首次定价写入） */
   launchPriceCents: number | null
+  /** M2-D：当前挂牌价（成交价 = 挂牌价 ×(1-折扣率/100)，四舍五入）；缺省取 launchPriceCents */
+  pricePerUnitCents?: number
+  /** M2-D：当前折扣百分比整数 0..50；0 = 显式取消折扣，缺省 ≡ 0 */
+  discountRatePercent?: number
+  /** M2-D：最近一次改价/折扣生效日（7 天冷却判据）；缺省视为从未变更 */
+  lastPriceChangeDay?: number
   /** 原始五维质量快照（生产阶段累积），不是最终总质量 */
   qualityProfile: QualityProfile
   defectLevel: number      // 0-100

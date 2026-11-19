@@ -19,6 +19,7 @@ import {
   isSegmentAvailable,
 } from '@content/queries'
 import type { Product } from '@domain/entities/product'
+import { effectivePriceCents } from '@domain/value-objects'
 import type { SalesRecord } from '@domain/entities/sales-record'
 import { makeSalesRecordId } from '@domain/entities/sales-record'
 import type { RefundBatch } from '@domain/entities/refund-batch'
@@ -227,19 +228,17 @@ export class MarketSimulationService {
     if (product.status !== 'active' || product.lifecycleStage === 'retired') return []
     if (product.launchDay > dayIndex) return []
 
-    const priceCents = product.launchPriceCents
-    if (priceCents === null || priceCents === undefined) {
+    // M2-D：唯一取价入口（挂牌价 × 折扣，含折扣取整）
+    const basePrice = product.pricePerUnitCents ?? product.launchPriceCents
+    const priceCents = effectivePriceCents(product)
+    if (priceCents === null) {
+      // 保留 B 批的两种告警语义：完全未定价 vs 定价非法（T17 依赖此区分）
+      const missing = basePrice === null || basePrice === undefined
       this.warn({
-        code: 'SALES_MISSING_INPUT',
-        message: 'launchPriceCents is missing; product skipped',
-        productId: product.id,
-      })
-      return []
-    }
-    if (!Number.isInteger(priceCents) || priceCents <= 0) {
-      this.warn({
-        code: 'SALES_INVALID_INPUT',
-        message: 'launchPriceCents must be a positive integer; product skipped',
+        code: missing ? 'SALES_MISSING_INPUT' : 'SALES_INVALID_INPUT',
+        message: missing
+          ? 'launchPriceCents is missing; product skipped'
+          : 'launchPriceCents must be a positive integer; product skipped',
         productId: product.id,
       })
       return []

@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 main HEAD **`23e4178`**（领先 origin/main **2** 个提交，未 push；以 `git rev-list --count origin/main..HEAD` 实时判据为准）。工作区含 M2 第一批未提交改动（M2-A **CLOSED** / M2-B **CLOSED** / M2-C v1.0 DRAFT 未过 gate；UI P1 整改与 V11 补测均 CLOSED）。**主 AI 因额度暂停（换 agent 出口）**，详见 `HANDOFF-M2-PAUSE-2026-11-19.md`。最新全量核验（真实退出码）：**41 文件 / 346 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A **CLOSED**、M2-B **CLOSED** |
+| 当前基线 | 本地 `main` HEAD **`d27dd5c53e946937616c1e62384506a19342d444`**（与 `origin/main` **0/0** 对齐；`git rev-list --left-right --count origin/main...HEAD` = `0 0`）。工作区含 M2 第一批**未 commit**改动（M2-A / M2-B / M2-C / **M2-D** 均 CLOSED）。最新全量核验（真实退出码，2026-11-19）：**49 文件 / 432 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → **M2-D 49/432**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A **CLOSED**、M2-B **CLOSED**、**M2-C CLOSED**、**M2-D CLOSED**（设计 R2 + 编码审核 PASS） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -20,7 +20,7 @@
 | M1（已交付） | 游戏公司经营垂直切片 | CLOSED | 100% |
 | M1.1（**已关闭**） | 稳定性修复 + A1-G21 设计裁定落地 + 自动化测试 + G-05 成本口径补齐 | **CLOSED**（Owner 2026-11-19 授权跳过真人试玩、当前阶段可关闭，书面决策 `DECISION-M1.1-CLOSE.md`） | **25/25 任务主表已清点**；14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（P1）已闭环；九项核查 9/9 满足（见 `STAGE-CHECK-M1.1.md` v1.0）；体验验证推迟到 M1.2 首批交付后 | **24/26 CLOSED**（含 1 项 Owner 决策留档 + 2 项 Owner 待办挂起） |
 | M1.2 | M1.2 首批：默认配置调参 + 现金下限/破产 + 砍范围 descope + 延期上市 delay launch；**第二批：UI 层落地**（破产/现金警告横幅、descope/延期弹窗、状态徽标、命令入口） | **首批 4 任务 CLOSED + 第二批 UI 层 CLOSED**（UI 层设计审核 REVISE_REQUIRED → v1.1 修订 → 实现全绿） | 5 设计规格 + 4 编码任务 + **1 UI 设计规格 + 1 UI 编码任务** 全 CLOSED；**32 文件 / 230 用例 / 0 skip / 全绿**；反证 5/5 锁住；本会话补 V3/V4/V5/V10/V14 覆盖测试 9 条并修 1 条边界用例；V11/V12/V13 UI 级覆盖待补（PLANNED） | 12/13 CLOSED（1 项覆盖补测 PLANNED） |
-| M2 | 商业化与销售系统 | 设计前置通过（七项已裁定，GDR R2 PASS_WITH_NOTES）；编码仍冻结，待 §3.2 收尾 + M1.1 关闭 | 0% |
+| M2 | 商业化与销售系统 | **M2-A/B/C/D 全部 CLOSED**（D 定价/折扣/生命周期）；E/F/G 待派发 | A/B/C 已完成：46 文件/388 用例全绿；M2-C 退款窗口含 42 条用例、6 个错误码、3 项反证 |
 
 **阶段目标（M1.1 收尾）**：完成 G-05 预算成本核算、D-01 暂停超时、pause_timeout UI、版本元数据一致性，形成可玩的研发经营闭环，通过体验验收与独立审核，由 Owner 确认关闭。
 
@@ -72,18 +72,24 @@
 | DESIGN-M2-001-A | M2-A 销售领域实体实现规格（SalesRecord / RefundBatch / unitPriceAtSaleCents / zod / 44 条测试） | M2 | 设计代理 | **CLOSED** | P1 | DESIGN-M2-UNBLOCK v1.2 + DESIGN-M2-DATA-001 | — | **设计审核 R2 PASS_WITH_NOTES**（P1=0；3 条 P2 已在 v1.3 收口） | Q1–Q3 已由 `DECISION-M2-A-Q1-Q3` 裁定并并入 v1.2 | 已置 READY（TASK-M2-001-A） |
 | TASK-M2-001-A | M2 销售领域实体编码任务 | M2 | 编码代理 | **CLOSED** | P1 | DESIGN-M2-001-A v1.3 | 38 文件/292 用例 | **编码审核 PASS_WITH_NOTES**（无 P1/P2；6 条 P3） | 12/13 字段一致、9 步 zod 校验、Q1–Q3 落地、schemaVersion=1；三处反证精准变红；P3：T20 批次留存未显式断言等 | 已交付 |
 | DESIGN-M2-001-B | M2-B 市场销售管线实现规格（8 步公式 / explainSales / 销售日 pending 批次 / 41 条测试） | M2 | 设计代理 | **CLOSED** | P1 | DESIGN-M2-001-A v1.3 + DECISION-M2-B-Q1-Q10 | — | **设计审核 R3 PASS_WITH_NOTES**（P1=0；P3×3：E11 措辞、未知 id 边界、ERRATA 待签发） | Q1–Q10 已裁定并入；平台→类别 14 条显式映射；B/C 边界=B 生成 pending、C 到期兑现 | 已置 READY（TASK-M2-001-B） |
-| TASK-M2-001-B | M2-B 市场销售管线编码任务 | M2 | 编码代理 | **IN_PROGRESS** | P1 | DESIGN-M2-001-B v1.2 | — | — | 41 条测试；platforms.json pc 抽成修正；无真实收入（夹具先行） | M2-B 编码已派发 |
+| TASK-M2-001-B | M2-B 市场销售管线编码任务 | M2 | 编码代理(已闭环) | **CLOSED** | P1 | DESIGN-M2-001-B v1.2 | d27dd5c（含 M2-B） | 基线核验确认落地（41 文件/346 用例全绿） | 41 条测试；platforms.json pc 抽成修正 | 已随 d27dd5c 提交 |
+| DESIGN-M2-001-C | M2-C 退款窗口兑现实现规格（窗口公式 / 到期兑现 / 窗口拒绝 / 幂等重放 / 读档两段校验 / 42 条测试） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-A v1.3 + B v1.2 + DECISION-M2-C | — | **R1 REVISE_REQUIRED → v1.1 → R2 PASS_WITH_NOTES**（P1=0；N-1~N-6 非阻塞） | Q1/Q6/Q7/Q10 已裁定并落地；A 夹具 T16 勘误 | 已置 READY 并完成编码 |
+| TASK-M2-001-C | M2-C 退款窗口兑现编码任务（8 纯函数 / RefundService / 2 事件 / 两段读档 / 调度与 GameWorld 集成） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-C v1.1（READY） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0；N-7~N-9 为实现级偏差登记） | 42 条用例全绿；反证 3/3 变红（段1休眠/负现金回退/忽略快照）；四命令全 0 | 待 Owner 决定 commit/push |
+| DESIGN-M2-001-D | M2-D 定价/折扣/生命周期实现规格（4 纯函数 / ProductPricingService / 3 可选字段 / 5 事件 / 6 错误码 / 36 例） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P1 | B v1.2 取价口径 + PLAN D-01~D-12 | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）→ v1.2（偏差回写）** | P1：退市语义矛盾 / 冷静期论证错误 / 定价不可达；D-N1~D-N3 已回写 | 已实现并交付 |
+| TASK-M2-001-D | M2-D 定价/折扣/生命周期编码任务（44 例 + 反证 4/4 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-D v1.2（CLOSED） | working tree（未 commit） | **编码审核 PASS**（P1=0/P2=0；D-N1~D-N3 偏差登记） | 44 例全绿；反证 4/4 变红（冷却/半价下限/只升不降/未定价退市）；四命令全 0（49/432，build 2.94s） | 待 Owner 决定 commit/push |
+
+| PLAN-M2-REMAINING-001 | M2 后续批次进度规划与设计裁定（D→E→F→G、12 项裁定、D 的具体细节、止损规则） | M2 | 设计负责人（主 AI 代行） | **CLOSED** | P1 | M2-A/B/C CLOSED | — | 设计自裁定（D-01~D-12，无需 Owner 追认；commit/push 仍归 Owner） | D 的具体细节已锁：阶段阈值 21/90/180/365、双价格字段、折扣冷静期 14 天 + 5%~50%、6 错误码、36 例密度 | 已生效；下一步产出 `DESIGN-M2-001-D-PRICING.md` v1.0 并过 R1 |
 
 ---
 
 ## 3. 状态分布统计（规范 §3 合法状态）
 
-> **口径**：以下为 §2 主表逐行清点结果（2026-11-19 M2 启动后，共 **43 行**），非估算。
+> **口径**：以下为 §2 主表逐行清点结果（2026-11-19 M2-C 交付后，共 **45 行**），非估算。
 
 | 状态 | 数量 | 任务 |
 |---|---|---|
-| CLOSED | **39** | 设计/角色规格 14（G05、EXPERIENCE、PAUSE-UI、GDR-001、GDR-REVIEW-M1.1、M2-UNBLOCK、M1.2-SUMMARY、OI-20-TUNING、OI-21-BANKRUPTCY、C-01-DESCOPE、C-02-DELAY-LAUNCH、M1.2-UI-LAYER、M2-001-A、**M2-001-B**）+ 编码任务 22（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1 + COVERAGE-FOLLOWUP 1 + PARITY-FIX 1 + M2-001-A 1）+ 阶段审核 1 + 元数据 1 + 阶段关闭决策 1 |
-| IN_PROGRESS | **1** | TASK-M2-001-B（M2-B 市场销售管线编码） |
+| CLOSED | **42** | 设计/角色规格 14（G05、EXPERIENCE、PAUSE-UI、GDR-001、GDR-REVIEW-M1.1、M2-UNBLOCK、M1.2-SUMMARY、OI-20-TUNING、OI-21-BANKRUPTCY、C-01-DESCOPE、C-02-DELAY-LAUNCH、M1.2-UI-LAYER、M2-001-A、**M2-001-B**）+ 编码任务 22（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1 + COVERAGE-FOLLOWUP 1 + PARITY-FIX 1 + M2-001-A 1）+ 阶段审核 1 + 元数据 1 + 阶段关闭决策 1 |
+| IN_PROGRESS | **0** | 无 |
 | READY | **0** | 无 |
 | PLANNED | 1 | AUDIT-DELTA-CLARIFY（Δ-01/Δ-04 口径澄清） |
 | DESIGN_BLOCKED | 2 | SEC-01（Owner 安全操作）、PLAYTEST-M1.1-EXEC（Owner 授权延后） |
@@ -96,8 +102,8 @@
 
 | 口径 | 值 | 说明 |
 |---|---|---|
-| 任务计数 | **39 / 43 = 91%** | CLOSED 39 项 / 主表 43 项（与 §3 逐行清点一致）；未闭环 4 项＝SEC-01、PLAYTEST-M1.1-EXEC（DESIGN_BLOCKED）、AUDIT-DELTA-CLARIFY（PLANNED/P2）、TASK-M2-001-B（IN_PROGRESS/P1） |
-| 编码任务计数 | **22 / 23 = 96%** | 22 项 `TASK-` 编码任务 CLOSED（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1 + COVERAGE-FOLLOWUP 1 + PARITY-FIX 1 + M2-001-A 1）；1 项进行中＝TASK-M2-001-B |
+| 任务计数 | **44 / 47 = 94%** | CLOSED 44 项 / 主表 47 项；未闭环 3 项＝SEC-01、PLAYTEST-M1.1-EXEC（DESIGN_BLOCKED）、AUDIT-DELTA-CLARIFY（PLANNED/P2） |
+| 编码任务计数 | **25 / 26 = 96%** | 24 项 `TASK-` 编码任务 CLOSED（M1.1 14 + M1.2 首批 4 + M1.2-UI-LAYER 1 + COVERAGE-FOLLOWUP 1 + PARITY-FIX 1 + M2-001-A 1 + M2-001-B 1 + M2-001-C 1 + **M2-001-D 1**）；1 项未闭环＝AUDIT-DELTA-CLARIFY（非编码） |
 | **阶段完成判断** | **M1.1 CLOSED；M1.2 首批 + 第二批 CLOSED；M2 第一批已启动** | M1.1：Owner 授权跳过真人试玩，九项核查 9/9。M1.2：首批审核 PASS；第二批 UI 层全绿，但 M2 启动前的 V12/V13 覆盖核验发现真实实现缺陷（错误码错配 + 预览公式偏离），已立 P1 整改任务并进入编码。M2：设计前置满足（七项裁定 + DATA-001），M2-A 编码已 CLOSED（38 文件/292 用例）；M2-B 规格经 R3 PASS_WITH_NOTES（41 条测试），编码进行中 |
 
 > **M1.2 启动前置**：M1.1 已关闭，按交接文件 §5.4 建议首批派发 OI-20（默认预算调参）+ OI-21（现金负数阻断）+ C-01（砍范围）+ C-02（延期上市）设计任务，须过设计闸门 + READY 闸门才能发布编码。

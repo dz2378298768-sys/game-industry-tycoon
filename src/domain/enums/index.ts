@@ -46,6 +46,16 @@ export type RefundSource = 'auto_window' | 'player_request'
 // ===== 退款批次状态（DESIGN-M2-UNBLOCK §1.4 三态）=====
 export type RefundStatus = 'pending' | 'posted' | 'rejected'
 
+// ===== 退款拒绝原因（DESIGN-M2-001-C §10.6.3；不新增实体字段，随事件 payload 持久化）=====
+export type RefundRejectReason =
+  | 'window_not_elapsed'
+  | 'over_limit'
+  | 'zero_units'
+  | 'zero_amount'
+
+// ===== 窗口基准来源（DESIGN-M2-001-C §10.2.4 / DECISION-M2-C-Q10）=====
+export type RefundWindowBasis = 'snapshot' | 'current_tuning' | 'not_applicable'
+
 // ===== 公司状态 =====
 export type CompanyStatus = 'active' | 'bankrupt' | 'dissolved'
 
@@ -110,3 +120,12 @@ export type Source =
   | '3d'
   | 'ui'
   | 'an'
+
+// ===== 定价/折扣/生命周期拒绝原因（DESIGN-M2-001-D §8）=====
+export type PricingRejectReason =
+  | 'PRICE_INVALID_AMOUNT'
+  | 'PRICE_COOLDOWN'
+  | 'PRICE_DISCOUNT_COOLDOWN'
+  | 'PRICE_DISCOUNT_RANGE'
+  | 'LIFECYCLE_IMMUTABLE'
+  | 'LIFECYCLE_NOT_ELAPSED'

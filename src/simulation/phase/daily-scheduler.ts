@@ -5,6 +5,8 @@ import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
 import type { FinanceService } from '@simulation/services/finance-service'
 import type { MarketSimulationService } from '@simulation/services/market-simulation-service'
+import type { RefundService } from '@simulation/services/refund-service'
+import type { ProductPricingService } from '@simulation/services/product-pricing-service'
 import { uuid } from '@domain/types'
 import {
   budgetExhaustedEventKey,
@@ -40,6 +42,10 @@ export interface DailySchedulerDeps {
   finance: FinanceService
   /** 销售阶段（M2-B）；未注入时跳过，保持 M1 行为不变 */
   sales?: MarketSimulationService
+  /** 退款阶段（M2-C）；未注入时跳过到期兑现，保持 M2-A/B 行为不变 */
+  refunds?: RefundService
+  /** 生命周期阶段（M2-D）；未注入时阶段不推进，保持既有行为不变 */
+  pricing?: ProductPricingService
 }
 
 const ZERO_WORK: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
@@ -69,6 +75,14 @@ export class DailyScheduler {
     // 销售阶段先于研发（08/04 Phase 4 → Phase 5）：当日研发完成上市的产品最早 D+1 销售
     if (this.deps.sales !== undefined) {
       state = this.deps.sales.simulateDailySales(state, dayIndex)
+    }
+    // 生命周期阶段只改 Product 元数据（DESIGN-M2-001-D §6.3），不碰批次/流水，故不破坏退款相邻性
+    if (this.deps.pricing !== undefined) {
+      state = this.deps.pricing.advanceLifecycles(state, dayIndex)
+    }
+    // 退款到期兑现紧随销售之后（DESIGN-M2-001-C §10.10.2）：保证当日 sales 已落账再判 remaining
+    if (this.deps.refunds !== undefined) {
+      state = this.deps.refunds.processDueRefunds(state, dayIndex).world
     }
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)

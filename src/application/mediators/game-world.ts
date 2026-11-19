@@ -8,6 +8,14 @@ import { MarketSimulationService } from '@simulation/services/market-simulation-
 import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
 import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
+import {
+  ProductPricingService,
+  type PricingResult,
+  type SetPriceCmd,
+  type ApplyDiscountCmd,
+  type RetireProductCmd,
+} from '@simulation/services/product-pricing-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
@@ -53,6 +61,8 @@ export class GameWorld {
   public projects: ProjectService
   public rng: RandomService
   public sales: MarketSimulationService
+  public refunds: RefundService
+  public pricing: ProductPricingService
   public scheduler: DailyScheduler
   private readonly salesInputs: MarketInputProvider
 
@@ -81,7 +91,24 @@ export class GameWorld {
       rng: this.rng,
       inputs: this.salesInputs,
     })
-    this.scheduler = new DailyScheduler({ finance: this.finance, sales: this.sales })
+    this.refunds = this.createRefundService()
+    this.pricing = new ProductPricingService()
+    this.scheduler = new DailyScheduler({
+      finance: this.finance,
+      sales: this.sales,
+      refunds: this.refunds,
+      pricing: this.pricing,
+    })
+  }
+
+  private createRefundService(): RefundService {
+    return new RefundService({
+      finance: this.finance,
+      // 当前 TUNING 只影响"无快照"的新请求（Q10 回退口径），历史批次一律按 refundDayIndex
+      refundWindowDays: TUNING.sales.refundWindowDays,
+      isCompanyRegistered: (companyId) =>
+        this.world.companies.some((c) => c.id === companyId),
+    })
   }
 
   private get dayIndex(): number {
@@ -612,6 +639,56 @@ export class GameWorld {
     return { success: true }
   }
 
+  // ----- Refund（M2-C） -----
+
+  /** 玩家退款请求：窗口判定、上限判定、即时入账（DESIGN-M2-001-C §10.6） */
+  requestPlayerRefund(cmd: PlayerRefundRequest): CommandOutcome<RefundRequestResult> {
+    try {
+      const result = this.refunds.requestPlayerRefund(this.world, cmd)
+      this.world = result.world
+      if (result.errorCode !== undefined) {
+        return { success: false, errorCode: result.errorCode, message: result.errorCode }
+      }
+      return { success: true, result }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error) {
+        const code = String((error as { code: unknown }).code)
+        return { success: false, errorCode: code, message: error.message }
+      }
+      throw error
+    }
+  }
+
+  // ----- Pricing / Lifecycle（M2-D） -----
+
+  /** 首次定价 / 改价（DESIGN-M2-001-D §6.1） */
+  setProductPrice(cmd: SetPriceCmd): CommandOutcome<PricingResult> {
+    return this.runPricing((world) => this.pricing.setPrice(world, cmd, this.dayIndex))
+  }
+
+  /** 折扣 / 取消折扣（§6.2） */
+  applyProductDiscount(cmd: ApplyDiscountCmd): CommandOutcome<PricingResult> {
+    return this.runPricing((world) => this.pricing.applyDiscount(world, cmd, this.dayIndex))
+  }
+
+  /** 手动退市（§6.4）；重复退市幂等成功 */
+  retireProduct(cmd: RetireProductCmd): CommandOutcome<PricingResult> {
+    return this.runPricing((world) => this.pricing.retire(world, cmd, this.dayIndex))
+  }
+
+  private runPricing(fn: (world: WorldState) => PricingResult): CommandOutcome<PricingResult> {
+    const result = fn(this.world)
+    this.world = result.world
+    if (!result.ok) {
+      return {
+        success: false,
+        errorCode: result.errorCode,
+        message: result.errorMessage ?? result.errorCode ?? '定价操作失败',
+      }
+    }
+    return { success: true, result }
+  }
+
   // ----- Simulation -----
 
   /** 唯一推进入口：日历推进 + 统一调度器 */
@@ -711,7 +788,14 @@ export class GameWorld {
       rng: this.rng,
       inputs: this.salesInputs,
     })
-    this.scheduler = new DailyScheduler({ finance: this.finance, sales: this.sales })
+    this.refunds = this.createRefundService()
+    this.pricing = new ProductPricingService()
+    this.scheduler = new DailyScheduler({
+      finance: this.finance,
+      sales: this.sales,
+      refunds: this.refunds,
+      pricing: this.pricing,
+    })
 
     this.projects.reset(state.projects)
     this.employees.reset(state.employees)

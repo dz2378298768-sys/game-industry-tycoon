@@ -1,6 +1,8 @@
 /**
  * DomainEvent —— 领域层事件
  */
+import type { RefundRejectReason, RefundWindowBasis } from '@domain/enums'
+
 export interface DomainEvent {
   id: string
   type: string
@@ -99,4 +101,153 @@ export function createCompanyBankruptedEvent(
     balanceAtBankruptcy,
   }
   return { id, type: COMPANY_BANKRUPTED_EVENT, day, payload }
+}
+
+/** 退款批次入账事件类型（DESIGN-M2-001-C §10.6.4 / 08/04 Phase 4.7） */
+export const REFUND_BATCH_POSTED_EVENT = 'RefundBatchPosted'
+
+/** 退款批次拒绝事件类型（DESIGN-M2-001-C §10.6.4） */
+export const REFUND_BATCH_REJECTED_EVENT = 'RefundBatchRejected'
+
+/** 入账事件载荷；amountCents 为绝对值（非负），与 RefundBatch.refundAmountCents 相同 */
+export type RefundBatchPostedPayload = {
+  refundBatchId: string
+  productId: string
+  salesRecordId: string
+  day: number
+  refundedUnits: number
+  amountCents: number
+}
+
+/**
+ * 拒绝事件载荷。
+ * windowBasis 只在 window_not_elapsed 时有意义（Q10：使"同一记录两种窗口基准"的口径差异可审计）。
+ */
+export type RefundBatchRejectedPayload = {
+  refundBatchId: string
+  productId: string
+  salesRecordId: string
+  day: number
+  refundedUnits: number
+  amountCents: number
+  reasonCode: RefundRejectReason
+  windowBasis: RefundWindowBasis
+}
+
+/** 构造退款入账事件。id 由调用方注入（固定 `refund-posted:${batch.id}`）。 */
+export function createRefundBatchPostedEvent(
+  id: string,
+  input: RefundBatchPostedPayload,
+): DomainEvent {
+  return {
+    id,
+    type: REFUND_BATCH_POSTED_EVENT,
+    day: input.day,
+    payload: { ...input },
+  }
+}
+
+/** 构造退款拒绝事件。id 由调用方注入（固定 `refund-rejected:${batch.id}`）。 */
+export function createRefundBatchRejectedEvent(
+  id: string,
+  input: RefundBatchRejectedPayload,
+): DomainEvent {
+  return {
+    id,
+    type: REFUND_BATCH_REJECTED_EVENT,
+    day: input.day,
+    payload: { ...input },
+  }
+}
+
+// ===== 定价 / 折扣 / 生命周期（DESIGN-M2-001-D §9）=====
+
+/** 首次定价事件类型；isFirstPricing 供 G 批做"已定价"提示（R2 N-1） */
+export const PRODUCT_PRICED_EVENT = 'ProductPriced'
+/** 改价事件类型 */
+export const PRODUCT_PRICE_CHANGED_EVENT = 'ProductPriceChanged'
+/** 折扣变更事件类型（含取消折扣：toRate=0） */
+export const PRODUCT_DISCOUNT_APPLIED_EVENT = 'ProductDiscountApplied'
+/** 生命周期阶段推进事件类型 */
+export const PRODUCT_LIFECYCLE_CHANGED_EVENT = 'ProductLifecycleChanged'
+/** 退市事件类型 */
+export const PRODUCT_RETIRED_EVENT = 'ProductRetired'
+
+export type ProductPricedPayload = {
+  productId: string
+  priceCents: number
+  isFirstPricing: true
+  day: number
+}
+
+export type ProductPriceChangedPayload = {
+  productId: string
+  fromCents: number
+  toCents: number
+  day: number
+}
+
+export type ProductDiscountAppliedPayload = {
+  productId: string
+  fromRate: number
+  toRate: number
+  effectivePriceCents: number
+  day: number
+}
+
+export type ProductLifecycleChangedPayload = {
+  productId: string
+  from: string
+  to: string
+  day: number
+}
+
+export type ProductRetiredPayload = {
+  productId: string
+  day: number
+  reason: 'manual' | 'auto_zero_sales'
+}
+
+/** 构造首次定价事件（id 固定 `product-priced:${productId}`）。 */
+export function createProductPricedEvent(id: string, input: ProductPricedPayload): DomainEvent {
+  return { id, type: PRODUCT_PRICED_EVENT, day: input.day, payload: { ...input } }
+}
+
+/** 构造改价事件（id 固定 `product-price-changed:${productId}:${day}`）。 */
+export function createProductPriceChangedEvent(
+  id: string,
+  input: ProductPriceChangedPayload,
+): DomainEvent {
+  return { id, type: PRODUCT_PRICE_CHANGED_EVENT, day: input.day, payload: { ...input } }
+}
+
+/** 构造折扣事件（id 固定 `product-discount:${productId}:${day}`）。 */
+export function createProductDiscountAppliedEvent(
+  id: string,
+  input: ProductDiscountAppliedPayload,
+): DomainEvent {
+  return {
+    id,
+    type: PRODUCT_DISCOUNT_APPLIED_EVENT,
+    day: input.day,
+    payload: { ...input },
+  }
+}
+
+/** 构造阶段推进事件（id 固定 `product-lifecycle:${productId}:${day}`）。 */
+export function createProductLifecycleChangedEvent(
+  id: string,
+  input: ProductLifecycleChangedPayload,
+): DomainEvent {
+  return {
+    id,
+    type: PRODUCT_LIFECYCLE_CHANGED_EVENT,
+    day: input.day,
+    payload: { ...input },
+  }
+}
+
+/** 构造退市事件（id 固定 `product-retired:${productId}`）。 */
+export function createProductRetiredEvent(id: string, input: ProductRetiredPayload): DomainEvent {
+  return { id, type: PRODUCT_RETIRED_EVENT, day: input.day, payload: { ...input } }
 }

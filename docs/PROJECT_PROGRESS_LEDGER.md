@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 main HEAD **`114b443`**（已 push，`git rev-list --count origin/main..HEAD` = **0**，与远程同步）；工作区含 **M1.2 首批 + 第二批（UI 层）未 commit 改动**（55 修改 + 27 新增）。四命令**真实退出码**核验（无管道假象）：**32 文件 / 230 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全绿。M1.1 阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED）、**S-1 已关闭**；**M1.2 首批 + 第二批已 CLOSED** |
+| 当前基线 | 本地 main HEAD **`82a96ed`**（**M1.2 首批 + 第二批已本地 commit、未 push**，`git rev-list --count origin/main..HEAD` = **1**）。四命令**真实退出码**核验（无管道假象）：**32 文件 / 230 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全绿。M1.1 阶段审核已出（技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED）、**S-1 已关闭**；**M1.2 首批 + 第二批已 CLOSED** |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 

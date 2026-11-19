@@ -12,7 +12,7 @@
 
 ## 0. 项目基线（接手必读，勿重复询问）
 
-- 仓库：`dz2378298768-sys/game-industry-tycoon`，分支 `main`；代码基线 working tree（M1.2 首批 4 任务 + 第二批 UI 层改动均在工作区未 commit）。已 push，本地与远程同步（`git rev-list --count origin/main..HEAD` = 0 为判据；**不要硬编码 HEAD SHA**，文档提交会让它变）。
+- 仓库：`dz2378298768-sys/game-industry-tycoon`，分支 `main`；代码基线 main（**M1.2 首批 + 第二批已本地 commit、未 push**；领先/同步状态以 `git rev-list --count origin/main..HEAD` 实时判据为准，**不要硬编码 HEAD SHA**，文档提交会让它变）。
 - 设计冻结版本：`2.1.7-final-freeze`；M1.1 已关闭、M1.2 首批 + 第二批 CLOSED、M2 冻结。
 - 工程基线（实测 2026-11-19，**真实退出码核验、无管道假象**：`cmd > /tmp/x.log 2>&1; echo EXIT:$?`，不依赖 `cmd | tail` 的退出码）：**32 测试文件 / 230 用例通过、0 skip、0 failed**，typecheck / `lint:check` / build 全绿（注意：本项目**没有** `npm run lint`，实际脚本是 `lint:check`）。
 - 已闭环编码任务（全部经独立审核 PASS 或 PASS_WITH_NOTES 并 CLOSED）：**M1.1 14 项**（001-A、D01-001、CANCEL-FIX、001-B、001-C、001-D、TERMINAL-CLEANUP、001-E、E-FIX、UI-001、UI-001-FIX、UI-001-FIX2、UI-001-FIX3、TERMINAL-RELEASE-001）+ **M1.2 首批 4 项**（OI-20 TUNING、OI-21 BANKRUPTCY、C-01 DESCOPE、C-02 DELAY-LAUNCH）+ **M1.2 第二批 1 项**（UI-LAYER：破产现金横幅 / descope & delay 弹窗 / game-store 守卫 / 错误码→toast 映射）= **19 项** `TASK-` 编码任务 + 1 项元数据任务。

@@ -290,7 +290,7 @@ Markdown 文件，命名 `DESIGN-<主题>-<版本>.md`，含：
 
 | 场景 | 贴哪几套 |
 |---|---|
-| 新主 AI 接手 | §1（自己）+ 读 `HANDOFF-2026-11-19.md` |
+| 新主 AI 接手 | 读 `AI-HANDOFF.md`（单文件自包含） |
 | 开始一轮设计 | §1 + §2 |
 | 设计交上来待审 | §3（不要把设计代理的自评一起给它） |
 | 设计过审要编码 | §1 + §4（附完整任务书） |
@@ -315,13 +315,13 @@ Owner 的权限不因你接手而改变：改冻结规格 spec/、阶段最终�
 
 ## 先做四件事（按顺序，不要跳）
 1. clone <仓库地址>，切到 main，读仓库根的 CODEBUDDY.md（常驻规则，会自动加载）
-2. 读 docs/HANDOFF-2026-11-19.md 的 §0 一页纸（5 分钟）与 §0.2（交接边界）
+2. 读 docs/AI-HANDOFF.md 全文（30 分钟；前 5 节读完即可开工）
 3. 跑通基线，确认环境是真的：
      npx vitest run --reporter=basic     → 应为 22 文件 / 173 用例 / 0 skip
      npm run typecheck && npm run lint:check && npm run build   → 三条退出码 0
      git rev-list --count origin/main..HEAD                     → 应为 0
    注意：本项目没有 npm run lint，脚本名是 lint:check。
-4. 读 docs/AI-TEAM-ARCHITECTURE.md（谁决定什么）与 docs/AI-DEVELOPMENT-WORKFLOW.md（一轮怎么跑）
+4. （可选）需要展开细则时再读 docs/AI-TEAM-ARCHITECTURE.md 与 docs/AI-DEVELOPMENT-WORKFLOW.md
 
 ## 当前状态（截至交接）
 - 代码基线 405f4c4，其后提交均为文档/元数据，无代码改动

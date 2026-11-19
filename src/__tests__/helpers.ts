@@ -94,6 +94,7 @@ export function makeWorld(parts: Partial<WorldState> = {}): WorldState {
     employees: [makeEmployee()],
     projects: [],
     products: [],
+    refundBatches: [],
     transactions: [],
     events: [],
     saveSeed: 42,

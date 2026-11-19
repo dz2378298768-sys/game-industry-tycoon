@@ -382,6 +382,7 @@ export class ProjectService {
       brandImpact: Math.round(finalQualityScore / 10),
       lifecycleStage: 'launch',
       awarenessByMarket: {},
+      salesByPeriod: [],
       status: 'active',
       version: 1,
       createdAt: dayIndex,

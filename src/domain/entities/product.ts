@@ -3,6 +3,7 @@ import type {
   ProductStatus,
 } from '@domain/enums'
 import type { QualityProfile } from '@domain/value-objects'
+import type { SalesRecord } from './sales-record'
 
 export interface Product {
   id: string
@@ -24,6 +25,8 @@ export interface Product {
   brandImpact: number
   lifecycleStage: ProductLifecycleStage
   awarenessByMarket: Record<string, number>
+  /** M2：按日销售记录（唯一销售记录来源）；新上市产品初始化为 [] */
+  salesByPeriod: SalesRecord[]
   status: ProductStatus
   version: number
   createdAt: number

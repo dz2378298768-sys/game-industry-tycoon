@@ -7,10 +7,10 @@
   { "id": "home_console_g3", "displayName": "Home Console G3", "displayNameZh": "家用游戏机 G3", "platformType": "home_console", "earliestAvailabilityYear": 1983, "platformFee": 0.30 },
   { "id": "home_console_g4", "displayName": "Home Console G4", "displayNameZh": "家用游戏机 G4", "platformType": "home_console", "earliestAvailabilityYear": 1994, "platformFee": 0.30 },
   { "id": "home_console_g5", "displayName": "Home Console G5", "displayNameZh": "家用游戏机 G5", "platformType": "home_console", "earliestAvailabilityYear": 2006, "platformFee": 0.30 },
-  { "id": "pc_pre_ibm", "displayName": "PC (pre-IBM)", "displayNameZh": "早期 PC", "platformType": "pc", "earliestAvailabilityYear": 1975, "platformFee": 0.10 },
-  { "id": "pc_ibm_compatible", "displayName": "PC (IBM Compatible)", "displayNameZh": "IBM 兼容 PC", "platformType": "pc", "earliestAvailabilityYear": 1981, "platformFee": 0.10 },
-  { "id": "pc_windows", "displayName": "PC Windows", "displayNameZh": "Windows PC", "platformType": "pc", "earliestAvailabilityYear": 1990, "platformFee": 0.12 },
-  { "id": "pc_online", "displayName": "PC Online", "displayNameZh": "在线 PC", "platformType": "online", "earliestAvailabilityYear": 2001, "platformFee": 0.30 },
+  { "id": "pc_pre_ibm", "displayName": "PC (pre-IBM)", "displayNameZh": "早期 PC", "platformType": "pc", "earliestAvailabilityYear": 1975, "platformFee": 0 },
+  { "id": "pc_ibm_compatible", "displayName": "PC (IBM Compatible)", "displayNameZh": "IBM 兼容 PC", "platformType": "pc", "earliestAvailabilityYear": 1981, "platformFee": 0 },
+  { "id": "pc_windows", "displayName": "PC Windows", "displayNameZh": "Windows PC", "platformType": "pc", "earliestAvailabilityYear": 1990, "platformFee": 0 },
+  { "id": "pc_online", "displayName": "PC Online", "displayNameZh": "在线 PC", "platformType": "online", "earliestAvailabilityYear": 2001, "platformFee": 0 },
   { "id": "mobile_g1", "displayName": "Mobile G1", "displayNameZh": "移动设备 G1", "platformType": "mobile", "earliestAvailabilityYear": 2008, "platformFee": 0.30 },
   { "id": "digital_download", "displayName": "Digital Download", "displayNameZh": "数字下载", "platformType": "pc", "earliestAvailabilityYear": 2003, "platformFee": 0.30 }
 ]

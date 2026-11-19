@@ -4,6 +4,9 @@ import { FinanceService } from '@simulation/services/finance-service'
 import { EmployeeService } from '@simulation/services/employee-service'
 import { ProjectService } from '@simulation/services/project-service'
 import { RandomService } from '@simulation/services/random-service'
+import { MarketSimulationService } from '@simulation/services/market-simulation-service'
+import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
+import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
@@ -49,13 +52,16 @@ export class GameWorld {
   public employees: EmployeeService
   public projects: ProjectService
   public rng: RandomService
+  public sales: MarketSimulationService
   public scheduler: DailyScheduler
+  private readonly salesInputs: MarketInputProvider
 
-  constructor(seed = 42) {
+  constructor(seed = 42, salesInputs: MarketInputProvider = NULL_MARKET_INPUT_PROVIDER) {
     this.world = createEmptyWorld(seed)
     this.calendar = new GameCalendar(0)
     this.rng = new RandomService(seed)
     this.finance = new FinanceService()
+    this.salesInputs = salesInputs
     this.employees = new EmployeeService({
       getAssignmentsByCompany: (companyId) => {
         const all: TeamAssignment[] = []
@@ -70,7 +76,12 @@ export class GameWorld {
       isPlatformAvailable,
       getCompanyStatus: (companyId) => this.world.companies.find((c) => c.id === companyId)?.status ?? null,
     })
-    this.scheduler = new DailyScheduler({ finance: this.finance })
+    this.sales = new MarketSimulationService({
+      finance: this.finance,
+      rng: this.rng,
+      inputs: this.salesInputs,
+    })
+    this.scheduler = new DailyScheduler({ finance: this.finance, sales: this.sales })
   }
 
   private get dayIndex(): number {
@@ -694,8 +705,13 @@ export class GameWorld {
       company.cashBalanceCents = this.finance.getCashBalance(company.id)
     }
 
-    // 重建 scheduler（finance 实例已替换）
-    this.scheduler = new DailyScheduler({ finance: this.finance })
+    // 重建销售服务与 scheduler（finance/rng 实例已替换）；解释缓存随新实例清空
+    this.sales = new MarketSimulationService({
+      finance: this.finance,
+      rng: this.rng,
+      inputs: this.salesInputs,
+    })
+    this.scheduler = new DailyScheduler({ finance: this.finance, sales: this.sales })
 
     this.projects.reset(state.projects)
     this.employees.reset(state.employees)

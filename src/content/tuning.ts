@@ -21,7 +21,7 @@ export interface FatigueThresholdMultiplier {
 
 export const TUNING = {
   dataStatus: 'TUNING' as const,
-  version: 2,
+  version: 3,
 
   company: {
     /** 单位：美分。公司初始现金，只能由 FinanceService 的初始化交易入账一次。 */
@@ -117,6 +117,74 @@ export const TUNING = {
     cashWarningThresholdCents: 400_000,
     /** 单位：美分。L2 破产线：现金低于此值触发公司 status='bankrupt'（DESIGN-OI-21 §2.1）。 */
     cashBankruptThresholdCents: 0,
+  },
+
+  /**
+   * 销售管线（TASK-M2-001-B，DESIGN-M2-001-B-SALES-PIPELINE v1.2 §8.1）。
+   * 所有数值仅此处定义；公式层禁止读取 TUNING，必须由调用方注入本快照。
+   */
+  sales: {
+    /** 单位：比例。类别兴趣系数（仅内容缺失时 fallback，Q4）。 */
+    categoryInterest: 0.5,
+    /** 单位：比例。自然考虑集基准。 */
+    baseConsideration: 0.5,
+    /** 单位：比例。基础购买转化率。 */
+    basePurchaseConversion: 0.05,
+    /** 单位：比例。涨价弹性（涨 10% → 转化 −12%）。 */
+    priceElasticityUp: 0.12,
+    /** 单位：比例。降价弹性（跌 10% → 转化 +8%）。 */
+    priceElasticityDown: 0.08,
+    /** 单位：倍率。由质量带来的考虑提升的允许区间。 */
+    considerationLiftRange: { min: 0.5, max: 2.0 },
+    /** 单位：倍率。媒体评分提升的允许区间。 */
+    reviewLiftRange: { min: 0.5, max: 1.8 },
+    /** 单位：倍率。购买转化提升的允许区间。 */
+    purchaseConversionLiftRange: { min: 0.2, max: 2.0 },
+    /** 单位：比例。购买转化率的最终允许区间。 */
+    purchaseConversionRange: { min: 0.01, max: 0.5 },
+    /** 单位：倍率。营销响应乘数上限（1+lift；数学不可达，防御性，D-02）。 */
+    marketingResponseMultiplierMax: 2.0,
+    /** 单位：美分。营销响应尺度（按生命周期阶段）。0 支出 → 提升 0。 */
+    marketingResponseScaleCents: {
+      launch: 50_000,
+      growth: 100_000,
+      mature: 200_000,
+      decline: 300_000,
+      long_tail: 300_000,
+    },
+    /** 单位：比例。认知度读取上限（写入值保留）。 */
+    awarenessCap: 0.6,
+    /** 单位：倍率。随机扰动高斯采样的标准差；最终扰动 = clamp(1 + 采样值)。 */
+    randomPerturbationStddev: 0.05,
+    /** 单位：倍率。随机扰动允许区间。 */
+    randomPerturbationRange: { min: 0.8, max: 1.2 },
+    /** 单位：概率。小市场整数保底：rawUnits>0 但 floor=0 时的补 1 单位概率。0 = 关闭（Q7）。 */
+    smallMarketFloorChance: 0,
+    /** 单位：比例。基础预期退款率（DATA-001 §2 权威）。 */
+    refundRate: 0.03,
+    /** 单位：比例。按缺陷等级修正后的预期退款率允许区间。 */
+    refundRateRange: { min: 0.02, max: 0.35 },
+    /** 单位：天。销售日之后第几天执行退款（pending 批次窗口）。 */
+    refundWindowDays: 14,
+    /** 单位：比例。平台 id 未知（不在显式 14 条映射内）时的抽成兜底。 */
+    platformFeeRateFallback: 0.3,
+    /** 单位：比例。平台记录缺失/非法时按类别使用的默认抽成。 */
+    platformFeeRateByCategory: {
+      arcade: 0.5,
+      console: 0.35,
+      pc: 0,
+      digital: 0.3,
+    },
+    /** 单位：权重。质量偏好默认权重（segment/genre 未声明时使用）。 */
+    qualityPrefWeightDefault: {
+      gameplay: 0.35,
+      technical: 0.30,
+      content: 0.15,
+      art: 0.10,
+      innovation: 0.10,
+    },
+    /** 单位：0-100 分。质量画像缺失/非法时的质量分兜底（Q4 仅缺 profile 时）。 */
+    qualityScoreFallback: 50,
   },
 } as const
 

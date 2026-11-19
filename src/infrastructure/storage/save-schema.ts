@@ -1,6 +1,9 @@
 import { z } from 'zod'
 import type { WorldState } from '@simulation/services/world-state'
 import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
+import { makeSalesRecordId } from '@domain/entities/sales-record'
+import type { SalesRecord } from '@domain/entities/sales-record'
+import { makeRefundBatchId } from '@domain/entities/refund-batch'
 
 /** 当前存档结构版本 */
 export const SAVE_SCHEMA_VERSION = 1
@@ -131,6 +134,66 @@ const projectSchema = z
   })
   .passthrough()
 
+// ===== M2-A：销售领域实体（DESIGN-M2-001-A §10.8.1/§10.8.2）=====
+
+const salesRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    productId: z.string().min(1),
+    dayIndex: z.number().int().nonnegative(),
+    marketId: z.string().min(1),
+    platformId: z.string().min(1),
+    grossUnits: z.number().int().positive(),
+    unitPriceAtSaleCents: z.number().int().nonnegative(),
+    grossRevenueCents: z.number().int().nonnegative(),
+    platformFeeCents: z.number().int().nonnegative(),
+    netSalesRevenueCents: z.number().int().nonnegative(),
+    estimatedRefundUnits: z.number().int().nonnegative(),
+    actualRefundUnits: z.number().int().nonnegative(),
+  })
+  .superRefine((r, ctx) => {
+    if (r.estimatedRefundUnits > r.grossUnits) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['estimatedRefundUnits'], message: 'estimatedRefundUnits 不得超过 grossUnits' })
+    }
+    if (r.actualRefundUnits > r.grossUnits) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['actualRefundUnits'], message: 'actualRefundUnits 不得超过 grossUnits' })
+    }
+    if (r.platformFeeCents > r.grossRevenueCents) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['platformFeeCents'], message: 'platformFeeCents 不得超过 grossRevenueCents' })
+    }
+    if (r.netSalesRevenueCents !== r.grossRevenueCents - r.platformFeeCents) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['netSalesRevenueCents'], message: 'netSalesRevenueCents 必须等于 grossRevenueCents - platformFeeCents' })
+    }
+    if (r.unitPriceAtSaleCents !== Math.round(r.grossRevenueCents / r.grossUnits)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unitPriceAtSaleCents'], message: 'unitPriceAtSaleCents 必须等于 round(grossRevenueCents / grossUnits)' })
+    }
+  })
+
+const refundBatchSchema = z
+  .object({
+    id: z.string().regex(/^RB-.+-\d+-\d+-[1-9]\d*$/, 'id 必须为 RB-<productId>-<saleDay>-<refundDay>-<seq≥1>'),
+    productId: z.string().min(1),
+    salesRecordId: z.string().min(1),
+    marketId: z.string().min(1),
+    platformId: z.string().min(1),
+    saleDayIndex: z.number().int().nonnegative(),
+    refundDayIndex: z.number().int().nonnegative(),
+    refundedUnits: z.number().int().positive(),
+    refundAmountCents: z.number().int().nonnegative(),
+    source: z.enum(['auto_window', 'player_request']),
+    status: z.enum(['pending', 'posted', 'rejected']),
+    firstRefundRequestId: z.string().min(1).optional(),
+    idempotencyKey: z.string().min(1),
+  })
+  .superRefine((b, ctx) => {
+    if (b.refundDayIndex < b.saleDayIndex) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['refundDayIndex'], message: 'refundDayIndex 不得早于 saleDayIndex' })
+    }
+    if (b.idempotencyKey !== `customer-refund:${b.id}`) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['idempotencyKey'], message: 'idempotencyKey 必须等于 customer-refund:<id>' })
+    }
+  })
+
 const productSchema = z
   .object({
     id: z.string().min(1),
@@ -141,6 +204,8 @@ const productSchema = z
     launchPriceCents: z.number().int().nullable(),
     defectLevel: z.number().min(0).max(100),
     status: z.enum(['active', 'retired']),
+    /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
+    salesByPeriod: z.array(salesRecordSchema).default([]),
   })
   .passthrough()
 
@@ -168,6 +233,8 @@ export const worldStateSchema = z
     employees: z.array(employeeSchema),
     projects: z.array(projectSchema),
     products: z.array(productSchema),
+    /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
+    refundBatches: z.array(refundBatchSchema).default([]),
     transactions: z.array(transactionSchema),
   })
   .passthrough()
@@ -237,6 +304,8 @@ export function parseSave(raw: unknown): ParseSaveResult {
     ['员工', state.employees.map((e) => e.id)],
     ['项目', state.projects.map((p) => p.id)],
     ['产品', state.products.map((p) => p.id)],
+    ['销售记录', state.products.flatMap((p) => p.salesByPeriod.map((r) => r.id))],
+    ['退款批次', state.refundBatches.map((b) => b.id)],
     ['交易', state.transactions.map((t) => t.id)],
   ] as const) {
     const dup = duplicateId(ids)
@@ -271,10 +340,138 @@ export function parseSave(raw: unknown): ParseSaveResult {
     if (!projectIds.has(pr.sourceProjectId)) {
       return { ok: false, errorCode: 'SAVE_BROKEN_REF', errorMessage: `产品 ${pr.id} 引用了不存在的项目` }
     }
+    for (const r of pr.salesByPeriod) {
+      if (r.productId !== pr.id) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_BROKEN_REF',
+          errorMessage: `销售记录 ${r.id} 的产品归属（${r.productId}）与所属产品 ${pr.id} 不一致`,
+        }
+      }
+      if (r.id !== makeSalesRecordId(r.productId, r.dayIndex, r.marketId, r.platformId)) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_ID_MISMATCH',
+          errorMessage: `销售记录 ID ${r.id} 与实体字段的规范化编码不一致`,
+        }
+      }
+    }
   }
   for (const t of state.transactions) {
     if (!companyIds.has(t.companyId)) {
       return { ok: false, errorCode: 'SAVE_BROKEN_REF', errorMessage: `交易 ${t.id} 引用了不存在的公司` }
+    }
+  }
+
+  // ===== M2-A 跨实体校验（DESIGN-M2-001-A §10.8.4 第 3–9 步）=====
+  // 销售记录索引：重复 ID 已在上方统一拦截。
+  const salesRecordById = new Map<string, SalesRecord>()
+  for (const p of state.products) {
+    for (const r of p.salesByPeriod) salesRecordById.set(r.id, r)
+  }
+
+  const autoNonRejectedCount = new Map<string, number>()
+  const nonRejectedUnitsByRecord = new Map<string, number>()
+  const postedUnitsByRecord = new Map<string, number>()
+
+  for (const b of state.refundBatches) {
+    // 第 4 步：批次 ID 规范化（seq 为 id 最后一段；格式本身已由 zod 保证）。
+    const seqText = b.id.slice(b.id.lastIndexOf('-') + 1)
+    const seq = Number(seqText)
+    if (!Number.isInteger(seq) || seq < 1) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_SCHEMA_INVALID',
+        errorMessage: `退款批次 ID ${b.id} 的 seq 段非法`,
+      }
+    }
+    if (b.id !== makeRefundBatchId(b.productId, b.saleDayIndex, b.refundDayIndex, seq)) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_ID_MISMATCH',
+        errorMessage: `退款批次 ID ${b.id} 与实体字段的规范化编码不一致`,
+      }
+    }
+
+    // 第 5 步：引用完整性与元组一致性。
+    const record = salesRecordById.get(b.salesRecordId)
+    if (!record) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_BROKEN_REF',
+        errorMessage: `退款批次 ${b.id} 引用了不存在的销售记录 ${b.salesRecordId}`,
+      }
+    }
+    if (
+      b.productId !== record.productId ||
+      b.saleDayIndex !== record.dayIndex ||
+      b.marketId !== record.marketId ||
+      b.platformId !== record.platformId
+    ) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_BROKEN_REF',
+        errorMessage: `退款批次 ${b.id} 的产品/日期/市场/平台与销售记录不一致`,
+      }
+    }
+
+    // 第 6 步：auto_window 严格等于预测值。
+    if (b.source === 'auto_window' && b.refundedUnits !== record.estimatedRefundUnits) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_REFUND_INCONSISTENT',
+        errorMessage: `自动退款批次 ${b.id} 的退款件数（${b.refundedUnits}）不等于预测值（${record.estimatedRefundUnits}）`,
+      }
+    }
+
+    // 第 7 步：每条销售记录至多一条非 rejected 的 auto_window 批次。
+    if (b.source === 'auto_window' && b.status !== 'rejected') {
+      const count = (autoNonRejectedCount.get(b.salesRecordId) ?? 0) + 1
+      if (count > 1) {
+        return {
+          ok: false,
+          errorCode: 'SAVE_REFUND_INCONSISTENT',
+          errorMessage: `销售记录 ${b.salesRecordId} 存在多条非 rejected 的自动退款批次`,
+        }
+      }
+      autoNonRejectedCount.set(b.salesRecordId, count)
+    }
+
+    if (b.status !== 'rejected') {
+      nonRejectedUnitsByRecord.set(
+        b.salesRecordId,
+        (nonRejectedUnitsByRecord.get(b.salesRecordId) ?? 0) + b.refundedUnits,
+      )
+    }
+    if (b.status === 'posted') {
+      postedUnitsByRecord.set(
+        b.salesRecordId,
+        (postedUnitsByRecord.get(b.salesRecordId) ?? 0) + b.refundedUnits,
+      )
+    }
+  }
+
+  // 第 8 步：Σ 非 rejected 退款量不得超过毛销量。
+  for (const record of state.products.flatMap((p) => p.salesByPeriod)) {
+    const total = nonRejectedUnitsByRecord.get(record.id) ?? 0
+    if (total > record.grossUnits) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_REFUND_OVER_LIMIT',
+        errorMessage: `销售记录 ${record.id} 的累计退款量（${total}）超过毛销量（${record.grossUnits}）`,
+      }
+    }
+  }
+
+  // 第 9 步：posted 累加必须等于 actualRefundUnits。
+  for (const record of state.products.flatMap((p) => p.salesByPeriod)) {
+    const posted = postedUnitsByRecord.get(record.id) ?? 0
+    if (posted !== record.actualRefundUnits) {
+      return {
+        ok: false,
+        errorCode: 'SAVE_REFUND_INCONSISTENT',
+        errorMessage: `销售记录 ${record.id} 的已入账退款量（${posted}）与 actualRefundUnits（${record.actualRefundUnits}）不一致`,
+      }
     }
   }
 

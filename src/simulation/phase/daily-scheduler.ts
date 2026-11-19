@@ -4,6 +4,7 @@ import type { Project } from '@domain/entities/project'
 import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
 import type { FinanceService } from '@simulation/services/finance-service'
+import type { MarketSimulationService } from '@simulation/services/market-simulation-service'
 import { uuid } from '@domain/types'
 import {
   budgetExhaustedEventKey,
@@ -37,6 +38,8 @@ import { cityRentMultiplier } from '@content/queries'
 
 export interface DailySchedulerDeps {
   finance: FinanceService
+  /** 销售阶段（M2-B）；未注入时跳过，保持 M1 行为不变 */
+  sales?: MarketSimulationService
 }
 
 const ZERO_WORK: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
@@ -63,6 +66,10 @@ export class DailyScheduler {
     let state: WorldState = { ...world, currentDayIndex: dayIndex }
     // 先累计暂停天数/触发超时取消，再推进研发：被取消的项目当日即不再产出
     state = this.applyPauseTimeout(state, dayIndex)
+    // 销售阶段先于研发（08/04 Phase 4 → Phase 5）：当日研发完成上市的产品最早 D+1 销售
+    if (this.deps.sales !== undefined) {
+      state = this.deps.sales.simulateDailySales(state, dayIndex)
+    }
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)
     state = this.applyMonthlySettlement(state, dayIndex)

@@ -8,7 +8,7 @@ import { makeCompany, makeEmployee, makeUiProject } from './fixtures'
 const employee = makeEmployee({ salaryMonthlyCents: 100_000 })
 
 describe('DIALOG-DELAY（DESIGN-C-02 §3 / V23~V24）', () => {
-  it('品牌预览：惩罚区间 0.1–0.3 与固定 0.7 实际扣减', () => {
+  it('品牌预览：按延期点数扣减（30 天扣 1 点），不展示转化率损失', () => {
     const company = makeCompany({ brand: 60, cashBalanceCents: 1_000_000, monthlyFixedExpenseCents: 300_000 })
     render(
       <DelayLaunchDialog
@@ -21,9 +21,9 @@ describe('DIALOG-DELAY（DESIGN-C-02 §3 / V23~V24）', () => {
     )
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByText(/\+30/))
-    expect(dialog.textContent).toContain('品牌 60 → 18')
-    expect(dialog.textContent).toContain('转化率损失 0.1–0.3')
-    expect(dialog.textContent).toContain('（实际扣减 42）')
+    expect(dialog.textContent).toContain('品牌 60 → 59')
+    expect(dialog.textContent).not.toContain('转化率损失')
+    expect(dialog.textContent).toContain('（实际扣减 1）')
   })
 
   it('现金预览：固定成本 × 月数，明确标注估算值并给出延期后现金', () => {
@@ -40,9 +40,9 @@ describe('DIALOG-DELAY（DESIGN-C-02 §3 / V23~V24）', () => {
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByText(/\+30/))
     expect(dialog.textContent).toContain('约 1 个月固定成本')
-    expect(dialog.textContent).toContain('$3,000')
+    expect(dialog.textContent).toContain('$3,100')
     expect(dialog.textContent).toContain('（估算值）')
-    expect(dialog.textContent).toContain('延期后现金 $7,000')
+    expect(dialog.textContent).toContain('延期后现金 $6,900')
   })
 
   it('延期后现金可能为负：使用负数样式', () => {
@@ -57,7 +57,7 @@ describe('DIALOG-DELAY（DESIGN-C-02 §3 / V23~V24）', () => {
       />,
     )
     fireEvent.click(screen.getByText(/\+30/))
-    expect(container.textContent).toContain('延期后现金 -$2,000')
+    expect(container.textContent).toContain('延期后现金 -$2,100')
     expect(container.querySelector('.negative')).not.toBeNull()
   })
 
@@ -99,14 +99,14 @@ describe('DIALOG-DELAY（DESIGN-C-02 §3 / V23~V24）', () => {
     expect(onConfirm).toHaveBeenCalledWith(60)
   })
 
-  it('纯函数：惩罚系数与现金预测不随选择档位漂移（固定 0.7 扣减）', () => {
+  it('纯函数：惩罚点数与现金预测不随选择档位漂移（按 §2.5 点位扣减）', () => {
     const company = makeCompany({ brand: 80, cashBalanceCents: 1_000_000, monthlyFixedExpenseCents: 300_000 })
     const preview = computeDelayPreview(makeUiProject(), company, [employee], 30)
-    expect(preview.brandPenalty).toBe(0.7)
-    expect(preview.applyPenalty).toBe(56)
-    expect(preview.newBrand).toBe(24)
+    expect(preview.brandPenalty).toBe(1)
+    expect(preview.applyPenalty).toBe(1)
+    expect(preview.newBrand).toBe(79)
     expect(preview.extraMonths).toBe(1)
-    expect(preview.extraBurnCents).toBe(300_000)
-    expect(preview.predictedCashCents).toBe(700_000)
+    expect(preview.extraBurnCents).toBe(310_000)
+    expect(preview.predictedCashCents).toBe(690_000)
   })
 })

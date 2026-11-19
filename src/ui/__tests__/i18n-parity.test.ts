@@ -24,4 +24,9 @@ describe('i18n 键一致性（DESIGN-UI-LAYER §8 V14）', () => {
       expect((zv ?? '').length).toBeGreaterThan(0)
     }
   })
+
+  it('已删除与延期点数语义冲突的"转化率损失"键（双语均不存在）', () => {
+    expect(zhDict['finance.delay.brand.penalty']).toBeUndefined()
+    expect(enDict['finance.delay.brand.penalty']).toBeUndefined()
+  })
 })

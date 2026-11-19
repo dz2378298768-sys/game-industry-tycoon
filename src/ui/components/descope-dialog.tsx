@@ -123,7 +123,7 @@ export const DescopeDialog: React.FC<Props> = ({
             )}
           </p>
           <p className="muted" style={{ margin: '4px 0' }}>
-            {t('project.descope.preview.quality').replace('{level}', String(preview.qualityCeiling.gameplay))}
+            {t('project.descope.preview.quality').replace('{level}', String(preview.qualityCeiling))}
           </p>
           {preview.qaReset && (
             <p className="muted" style={{ margin: '4px 0' }}>

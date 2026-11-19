@@ -13,9 +13,9 @@ export function selectMaxLaunchDay(project: Project): number {
   return Math.round(base * 1.5)
 }
 
-/** 品牌惩罚 = 0.6 + 0.1×(days/30)，30 天 → 0.70（保留 2 位小数） */
+/** 品牌惩罚（点数）：max(1, round(days/30))，30/60/90 → 1/2/3 */
 export function computeBrandPenalty(days: number): number {
-  return Math.round((0.6 + 0.1 * (days / 30)) * 100) / 100
+  return Math.max(1, Math.round(days / 30))
 }
 
 export interface DelayPreview {
@@ -24,7 +24,7 @@ export interface DelayPreview {
   newLaunchDay: number
   maxLaunchDay: number
   brandPenalty: number
-  /** = brand × brandPenalty；幂等，不随选中档位变化 */
+  /** 实际扣减点数：仅 active 公司扣减，破产期为 0 */
   applyPenalty: number
   newBrand: number
   extraMonths: number
@@ -34,7 +34,7 @@ export interface DelayPreview {
 
 /**
  * 延期上市实时预览（DESIGN-C-02 §3 / DESIGN-UI-LAYER §2.5）。
- * applyPenalty 固定用 0.7 档（不吃选择偏差）；现金预测标注"估算值"由 UI 负责。
+ * 品牌扣减按延期点数（仅 active 公司）；额外消耗 =（在职月薪 + 月租）× 延期月数。
  */
 export function computeDelayPreview(
   project: Project,
@@ -45,16 +45,17 @@ export function computeDelayPreview(
   const salary = employees
     .filter((e) => e.companyId === company.id && e.status === 'hired')
     .reduce((sum, e) => sum + e.salaryMonthlyCents, 0)
-  const rent =
+  const rent = Math.round(
     TUNING.company.baseMonthlyRentCents *
-    (getCity(company.cityId)?.officeRentMultiplier ?? 1) *
-    Math.max(1, company.officeLevel)
-  const monthlyBurn =
-    company.monthlyFixedExpenseCents > 0 ? company.monthlyFixedExpenseCents : salary + rent
-  const extraMonths = days / 30
-  const extraBurnCents = Math.round(monthlyBurn * extraMonths)
+      (getCity(company.cityId)?.officeRentMultiplier ?? 1) *
+      Math.max(1, company.officeLevel),
+  )
+  const extraMonths = Math.ceil(days / 30)
+  const extraBurnCents = (salary + rent) * extraMonths
   const brandPenalty = computeBrandPenalty(days)
-  const applyPenalty = Math.round(company.brand * 0.7 * 100) / 100
+  const applyBrand = company.status === 'active'
+  const applyPenalty = applyBrand ? brandPenalty : 0
+  const newBrand = applyBrand ? Math.max(0, company.brand - brandPenalty) : company.brand
 
   return {
     days,
@@ -63,7 +64,7 @@ export function computeDelayPreview(
     maxLaunchDay: selectMaxLaunchDay(project),
     brandPenalty,
     applyPenalty,
-    newBrand: Math.max(0, Math.round((company.brand - applyPenalty) * 100) / 100),
+    newBrand,
     extraMonths,
     extraBurnCents,
     predictedCashCents: company.cashBalanceCents - extraBurnCents,

@@ -1,5 +1,6 @@
 import type { Discipline } from '@domain/enums'
 import type { Project } from '@domain/entities/project'
+import { TUNING } from '@content/tuning'
 
 export type QualityKey = 'gameplay' | 'technical' | 'content' | 'art' | 'innovation'
 
@@ -13,8 +14,8 @@ export interface DescopePreview {
   newQaTotal: number
   newQaRemaining: number
   newQuality: Record<QualityKey, number>
-  /** 砍范围前五维质量上限（先乘后取整，恒 ≥ newQuality 每项） */
-  qualityCeiling: Record<QualityKey, number>
+  /** 砍范围后五维质量目标的均值（`round(mean(newQuality))`，DESIGN-UI-LAYER §2.4 L162） */
+  qualityCeiling: number
   totalCut: number
   /** 无日产出（任一 d/p/a 为 0）或 QA 阶段时为 null（展示 `—`） */
   savedDays: number | null
@@ -37,23 +38,23 @@ export function computeDescopePreview(
   const newTotal = {} as Record<Discipline, number>
   const newRemaining = {} as Record<Discipline, number>
   for (const d of DISCIPLINES) {
-    newTotal[d] = Math.ceil(project.workTotalByDiscipline[d] * (1 - ratio))
-    newRemaining[d] = Math.min(
-      project.workRemainingByDiscipline[d],
-      Math.max(0, newTotal[d] - (project.workTotalByDiscipline[d] - project.workRemainingByDiscipline[d])),
-    )
+    newTotal[d] = Math.max(10, Math.round(project.workTotalByDiscipline[d] * (1 - ratio)))
+    newRemaining[d] = Math.round(project.workRemainingByDiscipline[d] * (1 - ratio))
   }
-  const newQaTotal = Math.ceil((project.workTotalByDiscipline.qa ?? 0) * (1 - ratio))
-  const newQaRemaining = Math.min(project.workRemainingByDiscipline.qa ?? 0, newQaTotal)
+  const totalProd = newTotal.design + newTotal.programming + newTotal.art
+  const newQaTotal = Math.max(
+    TUNING.project.minQaWorkPoints,
+    Math.round(totalProd * TUNING.project.qaWorkRatio),
+  )
+  const newQaRemaining = newQaTotal
 
   const newQuality = {} as Record<QualityKey, number>
-  const qualityCeiling = {} as Record<QualityKey, number>
   for (const k of QUALITY_KEYS) {
-    const target = project.qualityTargets[k] ?? 0
-    const estimate = project.qualityEstimate[k] ?? 0
-    qualityCeiling[k] = Math.floor(target * (1 - ratio))
-    newQuality[k] = Math.min(estimate, qualityCeiling[k])
+    newQuality[k] = Math.max(30, Math.round((project.qualityTargets[k] ?? 0) * (1 - ratio * 0.5)))
   }
+  const qualityCeiling = Math.round(
+    QUALITY_KEYS.reduce((sum, k) => sum + newQuality[k], 0) / QUALITY_KEYS.length,
+  )
 
   const inQa = project.phase === 'QA' || project.phase === 'READY_TO_LAUNCH'
   let savedDays: number | null = null
@@ -73,7 +74,7 @@ export function computeDescopePreview(
     newQaRemaining,
     newQuality,
     qualityCeiling,
-    totalCut: project.scopeCutRatio ?? 0,
+    totalCut: (project.scopeCutRatio ?? 0) + ratio,
     savedDays,
     savedBudgetCents,
     qaReset: inQa,

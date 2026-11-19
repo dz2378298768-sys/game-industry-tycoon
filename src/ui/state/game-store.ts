@@ -16,20 +16,36 @@ interface Message { id: string; text: string; type: 'info' | 'error' | 'success'
 interface ActionResult { success: boolean; message?: string | undefined }
 interface BudgetActionResult extends ActionResult { errorCode?: string | undefined; idempotent?: boolean | undefined }
 
-/** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2） */
+/** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2 / §9.1，按领域实际字符串逐字匹配） */
 const ERROR_I18N: Record<string, string> = {
-  FIN_COMPANY_BANKRUPT: 'error.finCompanyBankrupt',
   NO_COMPANY: 'error.noCompany',
-  PRJ_TERMINAL: 'error.projectTerminal',
+  FIN_COMPANY_BANKRUPT: 'error.finCompanyBankrupt',
   PRJ_COMPANY_INACTIVE: 'error.prjCompanyInactive',
+  EMP_CAPACITY_FULL: 'error.capacityFull',
+  FIN_DISTRESS: 'error.financialDistress',
+  EMP_INVALID_SALARY: 'error.invalidSalary',
+  EMP_INVALID_SKILL: 'error.invalidSkill',
+  FIN_INSUFFICIENT_CASH: 'error.insufficientCash',
+  EMP_NOT_FOUND: 'error.employeeNotFound',
+  EMP_ALREADY_TERMINATED: 'error.employeeAlreadyTerminated',
+  PRJ_PLATFORM_UNAVAILABLE: 'error.platformUnavailable',
+  PRJ_SEGMENT_UNAVAILABLE: 'error.segmentUnavailable',
+  PRJ_TERMINAL: 'error.projectTerminal',
   PRJ_NOT_FOUND: 'error.projectNotFound',
   PRJ_WRONG_PHASE: 'error.prjWrongPhase',
-  PRJ_DESCOPE_CAP_EXCEEDED: 'error.descopeCapExceeded',
-  PRJ_DESCOPE_TERMINAL: 'error.projectTerminal',
-  PRJ_LAUNCH_DELAY_TERMINAL: 'error.projectTerminal',
-  PRJ_DELAY_CAP_EXCEEDED: 'error.delayCapExceeded',
-  PRJ_INVALID_DELAY_DAYS: 'error.invalidDelayDays',
   BGT_INVALID_AMOUNT: 'error.bgtInvalidAmount',
+  PRJ_LAUNCH_TOO_EARLY: 'error.cannotLaunchEarly',
+  PRJ_MAX_DESCIPE_REACHED: 'error.prjMaxDescopeReached',
+  PRJ_SCOPE_TERMINAL: 'error.prjScopeTerminal',
+  PRJ_INVALID_CUT_RATIO: 'error.prjInvalidCutRatio',
+  PRJ_INVALID_DELAY_DAYS: 'error.prjInvalidDelayDays',
+  PRJ_LAUNCH_DELAY_TERMINAL: 'error.prjLaunchDelayTerminal',
+  PRJ_LAUNCH_DELAY_EXCEEDS_MAX: 'error.prjLaunchDelayExceedsMax',
+  PRJ_NOT_READY: 'error.prjNotReady',
+  PRJ_PAUSED: 'error.prjPaused',
+  PRJ_QA_INCOMPLETE: 'error.prjQaIncomplete',
+  PRJ_PRODUCT_EXISTS: 'error.prjProductExists',
+  PRJ_INVALID_TRANSITION: 'error.prjInvalidTransition',
 }
 
 /** 错误码优先映射 i18n；无错误码时回退领域文案，再回退通用文案 */
@@ -258,8 +274,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         get().toast(message, 'error')
         return { success: false, errorCode: result.errorCode, message }
       }
-      get().toast(t('project.descope.success'), 'success')
-      return { success: true, message: t('project.descope.success') }
+      const updated = gw.world.projects.find((p) => p.id === projectId)
+      const pct = Math.round(cutRatio * 100)
+      const total = Math.round((updated?.scopeCutRatio ?? 0) * 100)
+      const message = t('project.descope.success')
+        .replace('{pct}', String(pct))
+        .replace('{total}', String(total))
+      get().toast(message, 'success')
+      return { success: true, message }
     } catch (error) {
       if (error instanceof EntityNotFoundError) {
         const message = t('error.projectNotFound')
@@ -273,6 +295,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   delayLaunch(projectId, extraDays) {
     const gw = get().game
     if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const brandBefore = gw.world.companies.find((c) => c.isPlayer)?.brand ?? 0
     try {
       const result = gw.delayLaunch(projectId, extraDays)
       get().refresh()
@@ -281,8 +304,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
         get().toast(message, 'error')
         return { success: false, errorCode: result.errorCode, message }
       }
-      get().toast(t('project.delay.success'), 'success')
-      return { success: true, message: t('project.delay.success') }
+      const brandAfter = (get().company ?? gw.world.companies.find((c) => c.isPlayer))?.brand ?? brandBefore
+      const penalty = brandBefore - brandAfter
+      const updated = gw.world.projects.find((p) => p.id === projectId)
+      const day = formatDay(updated?.plannedLaunchDay ?? 0)
+      let message = t(penalty > 0 ? 'project.delay.success' : 'project.delay.successNoBrand').replace('{day}', day)
+      if (penalty > 0) message = message.replace('{penalty}', String(penalty))
+      get().toast(message, 'success')
+      return { success: true, message }
     } catch (error) {
       if (error instanceof EntityNotFoundError) {
         const message = t('error.projectNotFound')

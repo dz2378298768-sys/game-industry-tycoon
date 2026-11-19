@@ -40,6 +40,12 @@ export type TransactionCategory =
   | 'advance'
   | 'severance'
 
+// ===== 退款来源 =====
+export type RefundSource = 'auto_window' | 'player_request'
+
+// ===== 退款批次状态（DESIGN-M2-UNBLOCK §1.4 三态）=====
+export type RefundStatus = 'pending' | 'posted' | 'rejected'
+
 // ===== 公司状态 =====
 export type CompanyStatus = 'active' | 'bankrupt' | 'dissolved'
 

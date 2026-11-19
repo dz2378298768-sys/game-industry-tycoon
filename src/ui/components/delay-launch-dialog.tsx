@@ -21,7 +21,7 @@ interface Props {
 /**
  * DIALOG-DELAY（DESIGN-C-02 §3 / DESIGN-UI-LAYER §2.5）：
  * 三档位逐档禁用（≤ original×1.5）、品牌与现金实时预览、累计/上限提示、内联二次确认；
- * 现金为估算值（固定成本），品牌实际扣减固定 0.7 档。
+ * 现金为估算值（固定成本），品牌扣减按延期点数（仅 active 公司）。
  */
 export const DelayLaunchDialog: React.FC<Props> = ({
   project,
@@ -115,8 +115,6 @@ export const DelayLaunchDialog: React.FC<Props> = ({
             {t('finance.delay.brand.impact')
               .replace('{now}', String(company.brand))
               .replace('{after}', String(preview.newBrand))}
-            {' · '}
-            {t('finance.delay.brand.penalty').replace('{min}', '0.1').replace('{max}', '0.3')}
             {' '}
             {t('finance.delay.brand.apply').replace('{apply}', String(preview.applyPenalty))}
           </p>

@@ -48,4 +48,4 @@ G-N1 17 例（规格 15，补 2 例）；G-N2 导出 `ERROR_I18N` 供断言；G-
 
 ## 6. 下一步
 
-M2 全批 CLOSED 后进入 M3（按 ROADMAP）；PLAYTEST 仍 DESIGN_BLOCKED；SEC-01 未闭环。
+M2 批次 A~G 全 CLOSED，但**阶段出口被验证阻断**：见 `M2-EXIT-VERIFICATION.md`（生产 0 销量、两定位 18.01%<25%、同 seed 不可复现）。先落地 V-01~V-05 再复验，不进 M3。

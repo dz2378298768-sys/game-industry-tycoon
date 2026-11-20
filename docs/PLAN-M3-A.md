@@ -16,7 +16,8 @@
 
 - 交付：`docs/DELIVERY-M3-A3.md`；审核：`docs/GDR-REVIEW-M3-A3-CODE.md`（PASS_WITH_NOTES，P1=0）。
 - A03 通过：存档克隆续跑一年差异 0；决策日志已随档（A2 的 N-1 关闭）。
-- 十年长跑未执行：退款批次全表扫描导致超线性（1200 天 5.8s），与 8 种子×56 年矩阵一并转入 M3-C，前置项为退款批次清理/索引。
+- 十年长跑已在 `M3-C0` 性能批后执行通过：1970→1980 同 seed 双世界指纹相等（3652 天/世界 223s，分两进程避免 OOM）；默认套件仍不包含十年。
+- `M3-C0` 交付：`docs/DELIVERY-M3-PERF-001.md`、`docs/GDR-REVIEW-M3-PERF-001-CODE.md`。
 
 ## 依赖
 

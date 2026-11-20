@@ -39,7 +39,10 @@ export class RefundServiceError extends Error {
 }
 
 export interface RefundServiceDeps {
-  finance: Pick<FinanceService, 'postTransaction' | 'hasTransaction' | 'getAllTransactions'>
+  finance: Pick<
+    FinanceService,
+    'postTransaction' | 'hasTransaction' | 'getAllTransactions'
+  > & { getTransactionByKey?: FinanceService['getTransactionByKey'] }
   /**
    * 当前 TUNING 的窗口天数；**仅用于无快照的 player_request**（Q10 回退口径）。
    * 历史批次一律按 `batch.refundDayIndex`，绝不按此值复算。
@@ -102,7 +105,34 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 export class RefundService {
+  /** salesRecordId → 已入账退款件数（避免每次入账都全表扫描） */
+  private postedUnitsByRecord = new Map<string, number>()
+  private countedBatchIds = new Set<string>()
+  private indexSeeded = false
+
   constructor(private readonly deps: RefundServiceDeps) {}
+
+  private seedPostedUnits(world: WorldState): void {
+    if (this.indexSeeded) return
+    for (const b of world.refundBatches) {
+      if (b.status !== 'posted' || this.countedBatchIds.has(b.id)) continue
+      this.countedBatchIds.add(b.id)
+      this.postedUnitsByRecord.set(
+        b.salesRecordId,
+        (this.postedUnitsByRecord.get(b.salesRecordId) ?? 0) + b.refundedUnits,
+      )
+    }
+    this.indexSeeded = true
+  }
+
+  private countPosted(batch: RefundBatch): void {
+    if (this.countedBatchIds.has(batch.id)) return
+    this.countedBatchIds.add(batch.id)
+    this.postedUnitsByRecord.set(
+      batch.salesRecordId,
+      (this.postedUnitsByRecord.get(batch.salesRecordId) ?? 0) + batch.refundedUnits,
+    )
+  }
 
   // ---------- 到期兑现（F2–F5） ----------
 
@@ -115,23 +145,165 @@ export class RefundService {
     // 阶段 1：预检（无任何资金副作用）。全部通过后才进入入账。
     const checked = this.precheckAll(world, due)
 
-    // 阶段 2：逐条入账
-    let state = world
+    // 阶段 2：一次性复制工作副本，逐条就地入账（避免每条批次都整表复制）。
+    const draft: WorldState = {
+      ...world,
+      refundBatches: world.refundBatches.map((b) => ({ ...b })),
+      products: world.products.map((p) => ({
+        ...p,
+        salesByPeriod: p.salesByPeriod.map((r) => ({ ...r })),
+      })),
+      events: [...world.events],
+      transactions: [...world.transactions],
+    }
+    const batchById = new Map(draft.refundBatches.map((b) => [b.id, b]))
+    this.seedPostedUnits(world)
     const postedBatchIds: string[] = []
     const rejectedBatchIds: string[] = []
     const failed: RefundFailedItem[] = []
 
     for (const item of checked) {
-      const outcome = this.postOne(state, item, dayIndex)
-      state = outcome.world
-      if (outcome.posted) postedBatchIds.push(item.batch.id)
-      if (outcome.rejected) rejectedBatchIds.push(item.batch.id)
+      const batch = batchById.get(item.batch.id)
+      const product = draft.products.find((p) => p.id === item.batch.productId)
+      if (batch === undefined || product === undefined) {
+        throw new RefundServiceError(
+          'REFUND_BROKEN_REF',
+          `refund batch ${item.batch.id} lost during draft copy`,
+        )
+      }
+      const record = product.salesByPeriod.find((r) => r.id === batch.salesRecordId)
+      if (record === undefined) {
+        throw new RefundServiceError(
+          'REFUND_BROKEN_REF',
+          `refund batch ${batch.id} points to missing sales record`,
+        )
+      }
+      const outcome = this.postOneMutable(draft, batch, record, product, dayIndex)
+      if (outcome.posted) postedBatchIds.push(batch.id)
+      if (outcome.rejected) rejectedBatchIds.push(batch.id)
       if (outcome.failure !== undefined) {
-        failed.push({ batchId: item.batch.id, errorCode: outcome.failure })
+        failed.push({ batchId: batch.id, errorCode: outcome.failure })
       }
     }
 
-    return { world: state, postedBatchIds, rejectedBatchIds, failed }
+    return { world: draft, postedBatchIds, rejectedBatchIds, failed }
+  }
+
+  private postOneMutable(
+    draft: WorldState,
+    batch: RefundBatch,
+    record: SalesRecord,
+    product: Product,
+    dayIndex: number,
+  ): { posted: boolean; rejected: boolean; failure?: string | undefined } {
+    if (batch.refundedUnits <= 0) {
+      this.rejectMutable(draft, batch, 'zero_units', 'not_applicable', dayIndex)
+      return { posted: false, rejected: true }
+    }
+    if (batch.refundAmountCents <= 0) {
+      this.rejectMutable(draft, batch, 'zero_amount', 'not_applicable', dayIndex)
+      return { posted: false, rejected: true }
+    }
+
+    const postedUnits = this.postedUnitsByRecord.get(record.id) ?? 0
+    if (batch.refundedUnits > record.grossUnits - postedUnits) {
+      this.rejectMutable(draft, batch, 'over_limit', 'not_applicable', dayIndex)
+      return { posted: false, rejected: true }
+    }
+
+    const key = refundBatchIdempotencyKey(batch.id)
+    const existing = this.findRefundTransaction(draft, key)
+    if (existing !== undefined) {
+      this.assertExistingTransaction(existing, batch)
+      this.countPosted(batch)
+      this.markPostedMutable(draft, batch, record, dayIndex)
+      return { posted: true, rejected: false }
+    }
+
+    const posted = this.deps.finance.postTransaction(
+      {
+        idempotencyKey: key,
+        companyId: product.companyId,
+        day: dayIndex,
+        category: 'customer_refund',
+        amountCents: -batch.refundAmountCents,
+        referenceId: batch.productId,
+        description: `Refund batch ${batch.id}: ${batch.refundedUnits} units`,
+      },
+      { allowNegativeBalance: true },
+    )
+    if (posted.success) {
+      this.countPosted(batch)
+      this.markPostedMutable(draft, batch, record, dayIndex)
+      return { posted: true, rejected: false }
+    }
+    if (posted.errorCode === 'FIN_COMPANY_NOT_REGISTERED') {
+      throw new RefundServiceError(
+        'REFUND_BROKEN_REF',
+        `company ${product.companyId} is not registered in FinanceService`,
+      )
+    }
+    return { posted: false, rejected: false, failure: posted.errorCode ?? 'FIN_UNKNOWN' }
+  }
+
+  private markPostedMutable(
+    draft: WorldState,
+    batch: RefundBatch,
+    record: SalesRecord,
+    dayIndex: number,
+  ): void {
+    batch.status = 'posted'
+    record.actualRefundUnits = this.postedUnitsByRecord.get(record.id) ?? 0
+    const eventId = `refund-posted:${batch.id}`
+    if (this.eventIds === null) this.eventIds = new Set(draft.events.map((e) => e.id))
+    if (!this.eventIds.has(eventId)) {
+      this.eventIds.add(eventId)
+      draft.events.push(
+        createRefundBatchPostedEvent(eventId, {
+          refundBatchId: batch.id,
+          productId: batch.productId,
+          salesRecordId: batch.salesRecordId,
+          day: dayIndex,
+          refundedUnits: batch.refundedUnits,
+          amountCents: batch.refundAmountCents,
+        }),
+      )
+    }
+    const txKey = refundBatchIdempotencyKey(batch.id)
+    if (this.appendedTxKeys === null) this.appendedTxKeys = new Set(draft.transactions.map((t) => t.idempotencyKey))
+    if (!this.appendedTxKeys.has(txKey)) {
+      const tx = this.deps.finance.getTransactionByKey?.(txKey)
+      if (tx !== undefined) {
+        this.appendedTxKeys.add(txKey)
+        draft.transactions.push(tx)
+      }
+    }
+  }
+
+  private rejectMutable(
+    draft: WorldState,
+    batch: RefundBatch,
+    reasonCode: RefundRejectReason,
+    windowBasis: RefundWindowBasis,
+    dayIndex: number,
+  ): void {
+    batch.status = 'rejected'
+    const eventId = `refund-rejected:${batch.id}`
+    if (this.eventIds === null) this.eventIds = new Set(draft.events.map((e) => e.id))
+    if (this.eventIds.has(eventId)) return
+    this.eventIds.add(eventId)
+    draft.events.push(
+      createRefundBatchRejectedEvent(eventId, {
+        refundBatchId: batch.id,
+        productId: batch.productId,
+        salesRecordId: batch.salesRecordId,
+        day: dayIndex,
+        refundedUnits: batch.refundedUnits,
+        amountCents: batch.refundAmountCents,
+        reasonCode,
+        windowBasis,
+      }),
+    )
   }
 
   private precheckAll(world: WorldState, due: readonly RefundBatch[]): CheckedBatch[] {
@@ -223,7 +395,8 @@ export class RefundService {
       }
     }
 
-    const postedUnits = sumRefundedUnits(world.refundBatches, record.id, 'posted')
+    this.seedPostedUnits(world)
+    const postedUnits = this.postedUnitsByRecord.get(record.id) ?? 0
     const remaining = record.grossUnits - postedUnits
     if (batch.refundedUnits > remaining) {
       return {
@@ -238,6 +411,7 @@ export class RefundService {
 
     if (existing !== undefined) {
       this.assertExistingTransaction(existing, batch)
+      this.countPosted(batch)
       return { world: this.markPosted(world, batch, record, dayIndex), posted: true, rejected: false }
     }
 
@@ -255,6 +429,7 @@ export class RefundService {
     )
 
     if (posted.success) {
+      this.countPosted(batch)
       return { world: this.markPosted(world, batch, record, dayIndex), posted: true, rejected: false }
     }
 
@@ -270,11 +445,11 @@ export class RefundService {
 
   /** 第二/第三判据：幂等索引或持久化流水命中 */
   private findRefundTransaction(world: WorldState, key: string): Transaction | undefined {
-    if (this.deps.finance.hasTransaction(key)) {
-      return this.deps.finance
-        .getAllTransactions()
-        .find((t) => t.idempotencyKey === key)
+    // 生产 FinanceService 有全量幂等索引：undefined 即"确实不存在"，不再全表扫描证明缺席。
+    if (this.deps.finance.getTransactionByKey !== undefined) {
+      return this.deps.finance.getTransactionByKey(key)
     }
+    // 兼容测试注入的轻量 mock（无索引），保留旧路径
     return world.transactions.find(
       (t) => t.idempotencyKey === key && t.category === 'customer_refund',
     ) ?? this.deps.finance
@@ -308,9 +483,10 @@ export class RefundService {
     const refundBatches = world.refundBatches.map((b) =>
       b.id === batch.id ? { ...b, status: 'posted' as const } : b,
     )
-    const products = this.withActualUnits(world, record.id, refundBatches)
+    const products = this.withActualUnits(world, record.id)
     const eventId = `refund-posted:${batch.id}`
-    const events = world.events.some((e) => e.id === eventId)
+    if (this.eventIds === null) this.eventIds = new Set(world.events.map((e) => e.id))
+    const events = this.eventIds.has(eventId)
       ? world.events
       : [
           ...world.events,
@@ -323,6 +499,7 @@ export class RefundService {
             amountCents: batch.refundAmountCents,
           }),
         ]
+    this.eventIds.add(eventId)
     const transactions = this.withTransaction(world, batch)
     return { ...world, refundBatches, products, events, transactions }
   }
@@ -357,12 +534,8 @@ export class RefundService {
   }
 
   /** 按 `Σposted` 重算，不做增量累加（§10.5.3） */
-  private withActualUnits(
-    world: WorldState,
-    salesRecordId: string,
-    refundBatches: readonly RefundBatch[],
-  ): Product[] {
-    const actual = sumRefundedUnits(refundBatches, salesRecordId, 'posted')
+  private withActualUnits(world: WorldState, salesRecordId: string): Product[] {
+    const actual = this.postedUnitsByRecord.get(salesRecordId) ?? 0
     return world.products.map((p) => {
       if (!p.salesByPeriod.some((r) => r.id === salesRecordId)) return p
       return {
@@ -375,11 +548,19 @@ export class RefundService {
   }
 
   /** world.transactions 与 Finance 流水保持一致（新增退款交易时追加） */
+  private appendedTxKeys: Set<string> | null = null
+  private eventIds: Set<string> | null = null
+
   private withTransaction(world: WorldState, batch: RefundBatch): Transaction[] {
     const key = refundBatchIdempotencyKey(batch.id)
-    if (world.transactions.some((t) => t.idempotencyKey === key)) return world.transactions
-    const tx = this.deps.finance.getAllTransactions().find((t) => t.idempotencyKey === key)
-    return tx === undefined ? world.transactions : [...world.transactions, tx]
+    if (this.appendedTxKeys === null) {
+      this.appendedTxKeys = new Set(world.transactions.map((t) => t.idempotencyKey))
+    }
+    if (this.appendedTxKeys.has(key)) return world.transactions
+    const tx = this.deps.finance.getTransactionByKey?.(key)
+    if (tx === undefined) return world.transactions
+    this.appendedTxKeys.add(key)
+    return [...world.transactions, tx]
   }
 
   // ---------- 玩家退款请求（F6） ----------

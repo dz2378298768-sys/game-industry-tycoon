@@ -38,6 +38,10 @@ export class FinanceService {
   private balanceByCompany = new Map<string, number>()
   /** 幂等键 → transaction id */
   private idempotencyIndex = new Map<string, string>()
+  /** transaction id → transaction（O(1) 取回，避免按 id 全表扫描） */
+  private transactionById = new Map<string, Transaction>()
+  /** 幂等键 → transaction（不随 30 天保留策略清理，供退款等跨期幂等判定） */
+  private transactionByKey = new Map<string, Transaction>()
   /** 幂等键 → day，用于清理 */
   private idempotencyDay = new Map<string, number>()
 
@@ -66,7 +70,7 @@ export class FinanceService {
 
     const existingId = this.idempotencyIndex.get(cmd.idempotencyKey)
     if (existingId) {
-      const found = this.transactions.find((t) => t.id === existingId)
+      const found = this.transactionById.get(existingId)
       if (found) {
         return { success: true, result: found, idempotent: true }
       }
@@ -94,6 +98,8 @@ export class FinanceService {
       ...(cmd.referenceId !== undefined ? { referenceId: cmd.referenceId } : {}),
     }
     this.transactions.push(tx)
+    this.transactionById.set(tx.id, tx)
+    this.transactionByKey.set(tx.idempotencyKey, tx)
     this.balanceByCompany.set(cmd.companyId, newBalance)
     this.idempotencyIndex.set(cmd.idempotencyKey, tx.id)
     this.idempotencyDay.set(cmd.idempotencyKey, cmd.day)
@@ -105,18 +111,28 @@ export class FinanceService {
     cmds: PostTransactionCmd[],
     options: PostTransactionOptions = {},
   ): CommandResult<Transaction[]> {
-    const prevTxs = [...this.transactions]
+    // 增量回滚：只记录起始长度与余额快照，失败时截断并删除本批新增的索引项。
+    // 不再整表复制 transactions / 幂等索引（十万级流水下这是每日 O(n) 的主要开销）。
+    const startLen = this.transactions.length
     const prevBal = new Map(this.balanceByCompany)
-    const prevIdx = new Map(this.idempotencyIndex)
-    const prevDay = new Map(this.idempotencyDay)
+    const prevIdxSize = this.idempotencyIndex.size
+    const prunedBefore = prevIdxSize >= 1024
     const results: Transaction[] = []
     for (const cmd of cmds) {
       const r = this.postTransaction(cmd, options)
       if (!r.success || !r.result) {
-        this.transactions = prevTxs
+        for (let i = startLen; i < this.transactions.length; i++) {
+          const tx = this.transactions[i]
+          if (tx === undefined) continue
+          this.transactionById.delete(tx.id)
+          this.transactionByKey.delete(tx.idempotencyKey)
+          this.idempotencyIndex.delete(tx.idempotencyKey)
+          this.idempotencyDay.delete(tx.idempotencyKey)
+        }
+        this.transactions.length = startLen
         this.balanceByCompany = prevBal
-        this.idempotencyIndex = prevIdx
-        this.idempotencyDay = prevDay
+        // 保留策略在本批内最多清理一次旧键；为保持回滚严格性，失败时重建索引
+        this.rebuildIdempotencyIndex(prunedBefore)
         return fail(
           r.errorCode ?? 'FIN_BULK_POST_FAILED',
           r.errorMessage ?? `Bulk transaction failed after ${results.length}`,
@@ -150,6 +166,8 @@ export class FinanceService {
       reversedBy: target.id,
     }
     this.transactions.push(rev)
+    this.transactionById.set(rev.id, rev)
+    this.transactionByKey.set(rev.idempotencyKey, rev)
     this.balanceByCompany.set(target.companyId, rev.balanceAfterCents)
     target.status = 'reversed'
     target.reversedBy = rev.id
@@ -186,6 +204,11 @@ export class FinanceService {
     return this.idempotencyIndex.has(idempotencyKey)
   }
 
+  /** 按幂等键取交易（跨期可靠，不受 30 天索引清理影响） */
+  getTransactionByKey(idempotencyKey: string): Transaction | undefined {
+    return this.transactionByKey.get(idempotencyKey)
+  }
+
   /**
    * 从存档交易重放余额。仅用于读档，不做余额检查。
    * 返回重放后的余额表，供调用方做一致性校验。
@@ -195,15 +218,29 @@ export class FinanceService {
     this.balanceByCompany = new Map()
     this.idempotencyIndex = new Map()
     this.idempotencyDay = new Map()
+    this.transactionById = new Map()
+    this.transactionByKey = new Map()
     for (const id of companyIds) this.balanceByCompany.set(id, 0)
     for (const tx of transactions) {
       const prev = this.getBalance(tx.companyId)
       const next = prev + tx.amountCents
       this.transactions.push({ ...tx, balanceAfterCents: next })
+      this.transactionById.set(tx.id, { ...tx, balanceAfterCents: next })
+      this.transactionByKey.set(tx.idempotencyKey, { ...tx, balanceAfterCents: next })
       this.balanceByCompany.set(tx.companyId, next)
       this.idempotencyIndex.set(tx.idempotencyKey, tx.id)
     }
     return new Map(this.balanceByCompany)
+  }
+
+  private rebuildIdempotencyIndex(onlyIfPruned: boolean): void {
+    if (!onlyIfPruned) return
+    this.idempotencyIndex = new Map()
+    this.idempotencyDay = new Map()
+    for (const t of this.transactions) {
+      this.idempotencyIndex.set(t.idempotencyKey, t.id)
+      this.idempotencyDay.set(t.idempotencyKey, t.day)
+    }
   }
 
   private getBalance(companyId: string): number {

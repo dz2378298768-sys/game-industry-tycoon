@@ -8,8 +8,10 @@ import { MarketSimulationService } from '@simulation/services/market-simulation-
 import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
 import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
+import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { createProductLifecycleChangedEvent } from '@domain/events'
-import { seedDueAiCompanies } from '@content/ai-companies'
+import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
+import { planAiMonth, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
@@ -722,6 +724,7 @@ export class GameWorld {
     if (!this.aiCompetitionEnabled) return
     const { companies, seeded } = seedDueAiCompanies(this.world.companies, dayIndex)
     if (seeded.length === 0) return
+    const staff: Employee[] = []
     for (const company of seeded) {
       this.finance.registerCompany(company.id)
       this.finance.postTransaction({
@@ -732,8 +735,141 @@ export class GameWorld {
         amountCents: company.cashBalanceCents,
         description: `${company.name} 初始资本`,
       })
+      const spec = findAiSpec(company.id)
+      if (spec !== undefined) staff.push(...createAiStaff(company, spec, dayIndex))
     }
-    this.world = { ...this.world, companies }
+    this.world = { ...this.world, companies, employees: [...this.world.employees, ...staff] }
+  }
+
+  /** AI 决策日志（内存态，FIFO 24 个月；A02/A03 审计用） */
+  private aiDecisionLog: AiPlan[] = []
+
+  getAiDecisions(): readonly AiPlan[] {
+    return [...this.aiDecisionLog]
+  }
+
+  private aiBudget(company: Company): number {
+    const persona = company.persona ?? 'indie'
+    const ratio = TUNING.ai.persona[persona].budgetRatioCap
+    return Math.round(Math.min(this.finance.getCashBalance(company.id) * ratio, 5_000_000))
+  }
+
+  private buildAiView(company: Company): AiCompanyView {
+    const activeProject = this.world.projects.find(
+      (p) => p.companyId === company.id && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED',
+    )
+    return {
+      id: company.id,
+      persona: company.persona ?? 'indie',
+      status: company.status,
+      cashCents: this.finance.getCashBalance(company.id),
+      monthlyFixedExpenseCents: company.monthlyFixedExpenseCents,
+      brand: company.brand,
+      project:
+        activeProject === undefined
+          ? null
+          : {
+              id: activeProject.id,
+              phase: activeProject.phase,
+              isPaused: activeProject.isPaused,
+              plannedLaunchDay: activeProject.plannedLaunchDay,
+            },
+      products: this.world.products
+        .filter((p) => p.companyId === company.id)
+        .map((p) => ({
+          id: p.id,
+          priceCents: p.pricePerUnitCents ?? p.launchPriceCents,
+          status: p.status,
+          launchDay: p.launchDay,
+        })),
+    }
+  }
+
+  private assignAiTeam(companyId: string, projectId: string): void {
+    const staff = this.world.employees.filter((e) => e.companyId === companyId && e.status === 'hired')
+    if (staff.length === 0) return
+    this.withProjects(() => {
+      this.projects.reassignTeam({
+        projectId,
+        assignments: staff.map((e) => ({
+          employeeId: e.id,
+          projectId,
+          allocationRatio: 1,
+          roleOnProject: 'generalist' as const,
+        })),
+        allAssignmentsInCompany: this.world.projects.flatMap((p) => p.teamAssignments),
+      })
+    })
+  }
+
+  private runAiMonthly(dayIndex: number): void {
+    if (!this.aiCompetitionEnabled) return
+    const aiCompanies = this.world.companies
+      .filter((c) => !c.isPlayer && c.status !== 'dissolved')
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
+    for (const company of aiCompanies) {
+      const plan = planAiMonth(this.buildAiView(company), dayIndex)
+      switch (plan.chosen) {
+        case 'START_PROJECT': {
+          const budget = this.aiBudget(company)
+          if (budget <= 0) break
+          const created = this.withProjects(() =>
+            this.projects.create({
+              name: `${company.name} 新作`,
+              companyId: company.id,
+              genreId: 'action',
+              audienceSegmentIds: ['arcade_enthusiasts'],
+              targetPlatformIds: ['arcade_pre_1975'],
+              budgetTotalCapCents: budget,
+              plannedStartDay: dayIndex,
+              plannedLaunchDay: dayIndex + 120,
+            }),
+          )
+          if (created.success && created.result) this.assignAiTeam(company.id, created.result.id)
+          break
+        }
+        case 'ADVANCE_PHASE': {
+          if (plan.params.projectId !== undefined) {
+            this.withProjects(() => this.projects.advancePhaseGeneric(plan.params.projectId!, dayIndex))
+          }
+          break
+        }
+        case 'LAUNCH': {
+          if (plan.params.projectId !== undefined) {
+            const launched = this.withProjects(() => this.projects.launch(plan.params.projectId!, dayIndex))
+            if (launched.success && launched.result) {
+              this.world.products.push(launched.result.product)
+              const product = this.world.products.find((p) => p.sourceProjectId === plan.params.projectId)
+              if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
+                product.awarenessByMarket = seedInitialAwareness(company.brand, dayIndex)
+              }
+              company.brand = Math.max(0, Math.min(100, company.brand + launched.result.product.brandImpact))
+            }
+          }
+          break
+        }
+        case 'SET_PRICE': {
+          if (plan.params.productId !== undefined && plan.params.priceCents !== undefined) {
+            const priced = this.pricing.setPrice(
+              this.world,
+              { productId: plan.params.productId, priceCents: plan.params.priceCents },
+              dayIndex,
+            )
+            if (priced.ok) this.world = priced.world
+          }
+          break
+        }
+        default:
+          break
+      }
+      this.aiDecisionLog.push(plan)
+    }
+
+    // FIFO 24 个月：按日切 30 天近似，保留最近 24 个窗口
+    const window = 30
+    const keepFrom = dayIndex - TUNING.ai.decisionRecordMonths * window
+    this.aiDecisionLog = this.aiDecisionLog.filter((r) => r.day >= keepFrom)
   }
 
   advanceSimulation(days: number): { totalDays: number; events: DomainEvent[] } {
@@ -745,6 +881,10 @@ export class GameWorld {
       const beforeEvents = this.world.events.length
       try {
         this.seedAiCompanies(this.calendar.currentDayIndex)
+        if (this.aiCompetitionEnabled) {
+          const g = dayIndexToGregorian(this.calendar.currentDayIndex)
+          if (g.day === 1) this.runAiMonthly(this.calendar.currentDayIndex)
+        }
         this.world = this.scheduler.executeDay(this.world, this.calendar.currentDayIndex)
       } catch (error) {
         // 单日结算失败：日历回退到本批起点，避免“日期前进但世界未推进”造成的跳日；

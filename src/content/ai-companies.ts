@@ -9,6 +9,8 @@
 import aiCompaniesRaw from './ai-companies.json'
 import { TUNING } from '@content/tuning'
 import { createNewCompany, type Company } from '@domain/entities/company'
+import type { Employee } from '@domain/entities/employee'
+import type { EmployeeRole } from '@domain/enums'
 import type { CompanyPersona } from '@domain/enums'
 import { citySalaryMultiplier } from '@content/queries'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
@@ -77,4 +79,45 @@ export function seedDueAiCompanies(
   }
   if (seeded.length === 0) return { companies: [...companies], seeded }
   return { companies: [...companies, ...seeded], seeded }
+}
+
+
+const AI_ROLES: readonly EmployeeRole[] = ['designer', 'programmer', 'artist', 'qa', 'producer']
+
+/**
+ * AI 初始团队：按画像人数生成，角色轮转，技能 3。
+ * 这些员工是真实实体，与玩家共用项目工作量与薪资结算，不做额外加成。
+ */
+export function createAiStaff(company: Company, spec: AiCompanySpec, dayIndex: number): Employee[] {
+  const profile = TUNING.ai.persona[spec.persona]
+  const salary = Math.round(
+    TUNING.employee.defaultStartingSalaryCents * citySalaryMultiplier(company.cityId),
+  )
+  return Array.from({ length: profile.teamSize }, (_, index) => {
+    const role = AI_ROLES[index % AI_ROLES.length]!
+    return {
+      id: `ai-emp-${company.id}-${index + 1}`,
+      companyId: company.id,
+      name: `${company.name} 员工 ${index + 1}`,
+      role,
+      primarySkill: role === 'artist' ? 'graphics' : role === 'programmer' ? 'systems' : 'gameplay',
+      skillLevel: 3,
+      salaryMonthlyCents: salary,
+      contractStartDay: dayIndex,
+      contractEndDay: null,
+      morale: TUNING.employee.moraleBaseline,
+      fatigue: 0,
+      experience: 0,
+      status: 'hired',
+      hireDay: dayIndex,
+      version: 1,
+      createdAt: dayIndex,
+      updatedAt: dayIndex,
+    }
+  })
+}
+
+/** 按公司 id 反查内容 spec（公司 id 规则 `ai-<spec.id>`） */
+export function findAiSpec(companyId: string): AiCompanySpec | undefined {
+  return AI_COMPANIES.find((spec) => aiCompanyId(spec) === companyId)
 }

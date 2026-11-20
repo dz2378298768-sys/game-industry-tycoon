@@ -278,6 +278,14 @@ export const worldStateSchema = z
     marketingCampaigns: z.array(marketingCampaignSchema).default([]),
     publishingContracts: z.array(publishingContractSchema).default([]),
     transactions: z.array(transactionSchema),
+    /** M3-A3：旧档缺省 []；AI 决策日志随档，供克隆对照与审计；不升版本 */
+    aiDecisionLog: z
+      .array(
+        z
+          .object({ companyId: z.string().min(1), day: z.number().int().nonnegative() })
+          .passthrough(),
+      )
+      .default([]),
   })
   .passthrough()
 

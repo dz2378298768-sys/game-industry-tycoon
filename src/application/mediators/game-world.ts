@@ -990,6 +990,7 @@ export class GameWorld {
       currentDayIndex: this.calendar.currentDayIndex,
       // 财务流水以 FinanceService 为准（唯一现金记账处）
       transactions: this.finance.getAllTransactions(),
+      aiDecisionLog: [...this.aiDecisionLog],
       // DESIGN-G05 §7.3：写入预算权威公式快照，供读档一致性校验。
       // 快照在此处按权威公式即时重算，避免领域对象中的旧快照被写入存档。
       projects: this.world.projects.map((p) => ({
@@ -1024,6 +1025,7 @@ export class GameWorld {
       }
     }
     this.world = state
+    this.aiDecisionLog = (state.aiDecisionLog ?? []) as AiPlan[]
     this.calendar = new GameCalendar(state.currentDayIndex)
     this.rng = new RandomService(state.saveSeed)
     this.rng.setCurrentDayIndex(state.currentDayIndex)

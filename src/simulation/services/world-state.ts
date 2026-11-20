@@ -25,6 +25,8 @@ export interface WorldState {
   simulationAlgorithmVersion: string
   currentDayIndex: number
   schemaVersion: number
+  /** M3-A2/A3：AI 决策日志（最近 24 个月，随档持久化，供克隆对照与审计） */
+  aiDecisionLog?: unknown[]
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {

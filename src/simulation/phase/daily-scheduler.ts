@@ -1,5 +1,6 @@
 import type { CancellationReason, Discipline, ProjectPhase } from '@domain/enums'
 import type { Employee } from '@domain/entities/employee'
+import type { Company } from '@domain/entities/company'
 import type { Project } from '@domain/entities/project'
 import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
@@ -16,6 +17,7 @@ import {
   createPauseTimeoutCancelledEvent,
   createCompanyBankruptedEvent,
   createCompanyRecoveredEvent,
+  createCompanyDissolvedEvent,
 } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
@@ -106,6 +108,8 @@ export class DailyScheduler {
     state = this.syncCompanyCash(state)
     // 破产检查：公司现金为负时触发 status='bankrupt'（DESIGN-OI-21 §2.3）
     state = this.applyBankruptcyCheck(state, dayIndex)
+    // 终局：破产满 360 天仍未恢复 → dissolved（仅月末判定，DECISION-M3-P0-ENDGAME-002 §D1）
+    state = this.applyDissolutionCheck(state, dayIndex)
     return state
   }
 
@@ -315,6 +319,8 @@ export class DailyScheduler {
     const updatedProjects = new Map<string, Project>()
 
     for (const company of state.companies) {
+      // 已解散公司不再产生任何固定支出（DECISION-M3-P0-ENDGAME-002 §D2）
+      if (company.status === 'dissolved') continue
       // 破产公司仍需继续支付工资和租金（DESIGN-OI-21 §6.3：固定结算不受破产状态影响）
 
       for (const emp of state.employees) {
@@ -518,6 +524,7 @@ export class DailyScheduler {
         return {
           ...c,
           status: 'bankrupt' as const,
+          bankruptSinceDay: dayIndex,
           version: c.version + 1,
           updatedAt: dayIndex,
         }
@@ -525,12 +532,14 @@ export class DailyScheduler {
       if (c.status === 'bankrupt' && balance >= recoverAt) {
         changed = true
         events.push(createCompanyRecoveredEvent(uuid(), c.id, dayIndex, balance))
-        return {
+        const revived: Company = {
           ...c,
           status: 'active' as const,
           version: c.version + 1,
           updatedAt: dayIndex,
         }
+        delete revived.bankruptSinceDay
+        return revived
       }
       return c
     })
@@ -539,6 +548,87 @@ export class DailyScheduler {
     return {
       ...state,
       companies,
+      events: [...state.events, ...events],
+    }
+  }
+  /**
+   * 终局检查（DECISION-M3-P0-ENDGAME-002）：
+   *
+   * - 仅月末执行一次，且在所有结算与破产检查之后。
+   * - 条件：status==='bankrupt' 且 bankruptSinceDay + 360 ≤ 当日，且余额仍 < 恢复线。
+   * - 清算：产品 retired、合同 terminated、项目 CANCELLED、员工 fired（不付遣散费），不新增交易。
+   * - 终态：status='dissolved'，写 CompanyDissolved；再次执行不重复触发。
+   */
+  private applyDissolutionCheck(state: WorldState, dayIndex: number): WorldState {
+    const g = dayIndexToGregorian(dayIndex)
+    if (g.day !== daysInMonth(g.year, g.month)) return state
+    const graceDays = TUNING.ai.dissolutionGraceDays
+    const recoverAt = TUNING.finance.cashRecoveryThresholdCents
+
+    const doomed = new Set<string>()
+    const events: DomainEvent[] = []
+    const companies = state.companies.map((c) => {
+      if (c.status !== 'bankrupt') return c
+      const since = c.bankruptSinceDay ?? dayIndex
+      const balance = this.deps.finance.getCashBalance(c.id)
+      if (dayIndex - since < graceDays || balance >= recoverAt) return c
+      doomed.add(c.id)
+      events.push(
+        createCompanyDissolvedEvent(
+          uuid(),
+          c.id,
+          dayIndex,
+          balance,
+          dayIndex - c.foundingDay,
+        ),
+      )
+      const dissolved: Company = {
+        ...c,
+        status: 'dissolved' as const,
+        version: c.version + 1,
+        updatedAt: dayIndex,
+      }
+      delete dissolved.bankruptSinceDay
+      return dissolved
+    })
+
+    if (doomed.size === 0) return state
+
+    const doomedProducts = new Set(
+      state.products.filter((p) => doomed.has(p.companyId)).map((p) => p.id),
+    )
+    const products = state.products.map((p) =>
+      doomed.has(p.companyId) ? { ...p, status: 'retired' as const, version: p.version + 1, updatedAt: dayIndex } : p,
+    )
+    const contracts = state.publishingContracts.map((c) =>
+      doomedProducts.has(c.productId) && c.status === 'active'
+        ? { ...c, status: 'terminated' as const, version: c.version + 1, updatedAt: dayIndex }
+        : c,
+    )
+    const projects = state.projects.map((p) =>
+      doomed.has(p.companyId) && p.phase !== 'CANCELLED'
+        ? {
+            ...p,
+            phase: 'CANCELLED' as const,
+            cancellationReason: 'company_dissolved' as const,
+            version: p.version + 1,
+            updatedAt: dayIndex,
+          }
+        : p,
+    )
+    const employees = state.employees.map((e) =>
+      doomed.has(e.companyId) && e.status === 'hired'
+        ? { ...e, status: 'fired' as const, version: e.version + 1, updatedAt: dayIndex }
+        : e,
+    )
+
+    return {
+      ...state,
+      companies,
+      products,
+      publishingContracts: contracts,
+      projects,
+      employees,
       events: [...state.events, ...events],
     }
   }

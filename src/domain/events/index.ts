@@ -103,6 +103,34 @@ export function createCompanyBankruptedEvent(
   return { id, type: COMPANY_BANKRUPTED_EVENT, day, payload }
 }
 
+/** 公司解散事件类型（DECISION-M3-P0-ENDGAME-002 §D5） */
+export const COMPANY_DISSOLVED_EVENT = 'CompanyDissolved'
+
+export type CompanyDissolvedPayload = {
+  companyId: string
+  day: number
+  reason: 'bankruptcy_timeout'
+  cashAtDissolution: number
+  lifetimeDays: number
+}
+
+export function createCompanyDissolvedEvent(
+  id: string,
+  companyId: string,
+  day: number,
+  cashAtDissolution: number,
+  lifetimeDays: number,
+): DomainEvent {
+  const payload: CompanyDissolvedPayload = {
+    companyId,
+    day,
+    reason: 'bankruptcy_timeout',
+    cashAtDissolution,
+    lifetimeDays,
+  }
+  return { id, type: COMPANY_DISSOLVED_EVENT, day, payload }
+}
+
 /** 公司自救恢复事件类型（DECISION-M3-P0-BANKRUPTCY-CLOSURE-001 §3.2） */
 export const COMPANY_RECOVERED_EVENT = 'CompanyRecovered'
 

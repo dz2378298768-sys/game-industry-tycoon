@@ -9,6 +9,7 @@ import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
 import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
 import { createProductLifecycleChangedEvent } from '@domain/events'
+import { seedDueAiCompanies } from '@content/ai-companies'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
@@ -73,7 +74,15 @@ export class GameWorld {
   public scheduler: DailyScheduler
   private readonly salesInputs: MarketInputProvider
 
-  constructor(seed = 42, salesInputs: MarketInputProvider = NULL_MARKET_INPUT_PROVIDER) {
+  /** AI 竞争开关：默认关闭，M3-A2 决策器接入后由生产工厂显式开启（避免既有 Tests 世界被 AI 公司污染） */
+  private readonly aiCompetitionEnabled: boolean
+
+  constructor(
+    seed = 42,
+    salesInputs: MarketInputProvider = NULL_MARKET_INPUT_PROVIDER,
+    options: { aiCompetition?: boolean } = {},
+  ) {
+    this.aiCompetitionEnabled = options.aiCompetition === true
     this.world = createEmptyWorld(seed)
     this.calendar = new GameCalendar(0)
     this.rng = new RandomService(seed)
@@ -708,6 +717,25 @@ export class GameWorld {
   // ----- Simulation -----
 
   /** 唯一推进入口：日历推进 + 统一调度器 */
+  /** 按当日入场表补齐 AI 公司；幂等，且为每家补一笔初始资本流水（AI 与玩家同账本） */
+  private seedAiCompanies(dayIndex: number): void {
+    if (!this.aiCompetitionEnabled) return
+    const { companies, seeded } = seedDueAiCompanies(this.world.companies, dayIndex)
+    if (seeded.length === 0) return
+    for (const company of seeded) {
+      this.finance.registerCompany(company.id)
+      this.finance.postTransaction({
+        idempotencyKey: `ai-capital:${company.id}`,
+        companyId: company.id,
+        day: dayIndex,
+        category: 'advance',
+        amountCents: company.cashBalanceCents,
+        description: `${company.name} 初始资本`,
+      })
+    }
+    this.world = { ...this.world, companies }
+  }
+
   advanceSimulation(days: number): { totalDays: number; events: DomainEvent[] } {
     const events: DomainEvent[] = []
     const startDay = this.calendar.currentDayIndex
@@ -716,6 +744,7 @@ export class GameWorld {
       this.rng.setCurrentDayIndex(this.calendar.currentDayIndex)
       const beforeEvents = this.world.events.length
       try {
+        this.seedAiCompanies(this.calendar.currentDayIndex)
         this.world = this.scheduler.executeDay(this.world, this.calendar.currentDayIndex)
       } catch (error) {
         // 单日结算失败：日历回退到本批起点，避免“日期前进但世界未推进”造成的跳日；
@@ -847,6 +876,12 @@ export class GameWorld {
           reason: 'awareness_backfill',
         }),
       ]
+    }
+    // ENDGAME-002 §D6：旧档破产但无起算日 → 读档当日回填，宽限从读档起算，不得立即解散
+    for (const company of state.companies) {
+      if (company.status === 'bankrupt' && company.bankruptSinceDay === undefined) {
+        company.bankruptSinceDay = state.currentDayIndex
+      }
     }
     this.world = state
     this.calendar = new GameCalendar(state.currentDayIndex)

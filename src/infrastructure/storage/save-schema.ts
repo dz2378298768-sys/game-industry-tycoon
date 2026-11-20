@@ -69,6 +69,8 @@ const companySchema = z
     cashBalanceCents: z.number().int(),
     status: z.enum(['active', 'bankrupt', 'dissolved']),
     isPlayer: z.boolean(),
+    persona: z.enum(['indie', 'genre_specialist', 'integrated_dev_publisher']).optional(),
+    bankruptSinceDay: z.number().int().nonnegative().optional(),
   })
   .passthrough()
 

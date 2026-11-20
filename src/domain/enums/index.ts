@@ -59,6 +59,9 @@ export type RefundWindowBasis = 'snapshot' | 'current_tuning' | 'not_applicable'
 // ===== 公司状态 =====
 export type CompanyStatus = 'active' | 'bankrupt' | 'dissolved'
 
+/** AI 公司画像（spec/08/03 §2.1） */
+export type CompanyPersona = 'indie' | 'genre_specialist' | 'integrated_dev_publisher'
+
 // ===== 成长阶段 =====
 export type GrowthStage =
   | 'startup'
@@ -75,6 +78,7 @@ export type CancellationReason =
   | 'market_window_missed'
   | 'player_decision'
   | 'pause_timeout'
+  | 'company_dissolved'
 
 // ===== 项目内角色 =====
 export type ProjectRole = 'lead' | 'senior' | 'generalist' | 'junior'

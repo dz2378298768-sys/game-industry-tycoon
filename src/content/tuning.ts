@@ -110,6 +110,51 @@ export const TUNING = {
     repairRatio: 0.7,
   },
 
+  /**
+   * AI 竞争（DECISION-M3-P0-AI-003 §2/§5，DECISION-M3-P0-ENDGAME-002 §D1）。
+   * 画像只影响评分权重、预算上限与起始规模；不得进入销量/质量/现金结算路径。
+   * 所有数值为设计初值，待 M5 校准。
+   */
+  ai: {
+    /** 破产起算到解散的宽限天数（360 天，非 12 自然月，避免闰年口径漂移） */
+    dissolutionGraceDays: 360,
+    /** 动作最低分：低于此值选择 DO_NOTHING */
+    minActionScore: 0.05,
+    /** 画像战略偏置上限（±10%） */
+    strategicBonusCap: 0.1,
+    /** 决策记录保留月份（FIFO） */
+    decisionRecordMonths: 24,
+    persona: {
+      indie: {
+        startingCashCents: 8_000_000,
+        teamSize: 4,
+        brand: 8,
+        budgetRatioCap: 0.35,
+        marketingRatio: 0.06,
+        riskAversion: 0.65,
+        cooperative: 0.5,
+      },
+      genre_specialist: {
+        startingCashCents: 25_000_000,
+        teamSize: 8,
+        brand: 15,
+        budgetRatioCap: 0.45,
+        marketingRatio: 0.12,
+        riskAversion: 0.45,
+        cooperative: 0.6,
+      },
+      integrated_dev_publisher: {
+        startingCashCents: 90_000_000,
+        teamSize: 15,
+        brand: 25,
+        budgetRatioCap: 0.55,
+        marketingRatio: 0.18,
+        riskAversion: 0.3,
+        cooperative: 0.75,
+      },
+    },
+  },
+
   finance: {
     /** 单位：比例。预算使用超过该比例时产生警告（不强制取消）。 */
     budgetOverrunWarnAt: 1.0,

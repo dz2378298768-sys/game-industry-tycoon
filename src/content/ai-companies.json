@@ -1,0 +1,170 @@
+[
+  {
+    "id": "lunar_lark",
+    "name": "月雀工作室",
+    "persona": "indie",
+    "cityId": "san_francisco",
+    "entryYear": 1970
+  },
+  {
+    "id": "pixel_forge",
+    "name": "像素锻炉",
+    "persona": "indie",
+    "cityId": "seattle",
+    "entryYear": 1972
+  },
+  {
+    "id": "tiny_giant",
+    "name": "小小巨人",
+    "persona": "indie",
+    "cityId": "los_angeles",
+    "entryYear": 1974
+  },
+  {
+    "id": "bit_bloom",
+    "name": "比特花期",
+    "persona": "indie",
+    "cityId": "new_york",
+    "entryYear": 1976
+  },
+  {
+    "id": "neon_drift",
+    "name": "霓虹漂流",
+    "persona": "indie",
+    "cityId": "tokyo",
+    "entryYear": 1978
+  },
+  {
+    "id": "arcade_kings",
+    "name": "街机之王",
+    "persona": "genre_specialist",
+    "cityId": "tokyo",
+    "entryYear": 1970
+  },
+  {
+    "id": "action_works",
+    "name": "动作工坊",
+    "persona": "genre_specialist",
+    "cityId": "san_francisco",
+    "entryYear": 1971
+  },
+  {
+    "id": "strategy_lab",
+    "name": "策略实验室",
+    "persona": "genre_specialist",
+    "cityId": "london",
+    "entryYear": 1973
+  },
+  {
+    "id": "roleplay_house",
+    "name": "角色扮演屋",
+    "persona": "genre_specialist",
+    "cityId": "seattle",
+    "entryYear": 1975
+  },
+  {
+    "id": "sports_arena",
+    "name": "竞技场",
+    "persona": "genre_specialist",
+    "cityId": "los_angeles",
+    "entryYear": 1977
+  },
+  {
+    "id": "puzzle_mill",
+    "name": "解谜磨坊",
+    "persona": "genre_specialist",
+    "cityId": "new_york",
+    "entryYear": 1979
+  },
+  {
+    "id": "horror_veil",
+    "name": "恐怖帷幕",
+    "persona": "genre_specialist",
+    "cityId": "london",
+    "entryYear": 1981
+  },
+  {
+    "id": "sim_city_co",
+    "name": "模拟城市公司",
+    "persona": "genre_specialist",
+    "cityId": "sao_paulo",
+    "entryYear": 1983
+  },
+  {
+    "id": "north_star",
+    "name": "北极星互动",
+    "persona": "integrated_dev_publisher",
+    "cityId": "new_york",
+    "entryYear": 1970
+  },
+  {
+    "id": "titan_games",
+    "name": "泰坦游戏",
+    "persona": "integrated_dev_publisher",
+    "cityId": "los_angeles",
+    "entryYear": 1972
+  },
+  {
+    "id": "orion_media",
+    "name": "猎户座传媒",
+    "persona": "integrated_dev_publisher",
+    "cityId": "san_francisco",
+    "entryYear": 1974
+  },
+  {
+    "id": "sakura_publishing",
+    "name": "樱发行",
+    "persona": "integrated_dev_publisher",
+    "cityId": "tokyo",
+    "entryYear": 1976
+  },
+  {
+    "id": "royal_lion",
+    "name": "皇家狮",
+    "persona": "integrated_dev_publisher",
+    "cityId": "london",
+    "entryYear": 1978
+  },
+  {
+    "id": "seoul_star",
+    "name": "首尔之星",
+    "persona": "integrated_dev_publisher",
+    "cityId": "seoul",
+    "entryYear": 1980
+  },
+  {
+    "id": "andes_soft",
+    "name": "安第斯软件",
+    "persona": "integrated_dev_publisher",
+    "cityId": "sao_paulo",
+    "entryYear": 1982
+  },
+  {
+    "id": "delta_systems",
+    "name": "三角洲系统",
+    "persona": "indie",
+    "cityId": "seattle",
+    "entryYear": 1984
+  },
+  {
+    "id": "cobalt_arts",
+    "name": "钴蓝艺术",
+    "persona": "genre_specialist",
+    "cityId": "san_francisco",
+    "entryYear": 1986
+  },
+  {
+    "id": "meridian",
+    "name": "子午线",
+    "persona": "integrated_dev_publisher",
+    "cityId": "new_york",
+    "entryYear": 1988
+  },
+  {
+    "id": "redwood",
+    "name": "红杉互动",
+    "persona": "indie",
+    "cityId": "los_angeles",
+    "entryYear": 1990
+  }
+]

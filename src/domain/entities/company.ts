@@ -1,4 +1,4 @@
-import type { GrowthStage, CompanyStatus } from '@domain/enums'
+import type { GrowthStage, CompanyStatus, CompanyPersona } from '@domain/enums'
 
 export interface Company {
   id: string
@@ -12,7 +12,11 @@ export interface Company {
   cashBalanceCents: number         // 整数分
   growthStage: GrowthStage
   isPlayer: boolean
+  /** 仅 AI 公司：独立工作室 / 类型专精 / 综合研发发行（DECISION-M3-P0-AI-003 §2） */
+  persona?: CompanyPersona
   status: CompanyStatus
+  /** 破产起算日：破产时写入，恢复时清除；旧档缺失按读档日回填（ENDGAME-002 §D6） */
+  bankruptSinceDay?: number
   monthlyFixedExpenseCents: number // TUNING: salary+rent 月合计
   officeLevel: number
   version: number

@@ -12,7 +12,7 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   const {
     products, refundBatches, marketingCampaigns, publishingContracts,
     setProductPrice, applyProductDiscount, retireProduct, setMarketingBudget,
-    signRevenueShare, signMilestone, toast, dayIndex,
+    signRevenueShare, signMilestone, signContractTemplate, toast, dayIndex,
   } = store
   const product = products.find((p) => p.id === productId)
 
@@ -23,6 +23,12 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   const [durationDays, setDurationDays] = React.useState('0')
   const [thresholdYuan, setThresholdYuan] = React.useState('')
   const [payoutYuan, setPayoutYuan] = React.useState('')
+  const [tpl, setTpl] = React.useState<'channel' | 'co_marketing' | 'advance'>('channel')
+  const [partnerId, setPartnerId] = React.useState('pub-global')
+  const [prepayYuan, setPrepayYuan] = React.useState('')
+  const [commitmentYuan, setCommitmentYuan] = React.useState('')
+  const [quality, setQuality] = React.useState('60')
+  const [deliveryDay, setDeliveryDay] = React.useState('')
 
   /** Hook 必须在任何 early return 之前调用（rules-of-hooks），产品缺失时返回空表。 */
   const salesByDay = React.useMemo(() => {
@@ -86,6 +92,22 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
     if (threshold === null || payout === null) return toast(t('error.contractThresholdOutOfRange'), 'error')
     const days = Number(durationDays || '0')
     const r = signMilestone(product.id, threshold, payout, days === 0 ? null : days)
+    toast(r.message ?? '', r.success ? 'success' : 'error')
+  }
+
+  const submitTemplate = () => {
+    const days = Number(durationDays || '0')
+    const r = signContractTemplate({
+      productId: product.id,
+      template: tpl,
+      ratePercent: Number(ratePercent),
+      durationDays: days === 0 ? null : days,
+      partnerId: partnerId.trim(),
+      ...(tpl === 'advance' ? { prepaymentCents: parseYuan(prepayYuan) ?? 0 } : {}),
+      ...(tpl === 'co_marketing' ? { marketingCommitmentCents: parseYuan(commitmentYuan) ?? 0 } : {}),
+      ...(tpl === 'advance' ? { qualityThreshold: Number(quality) || 60 } : {}),
+      ...(tpl === 'advance' && deliveryDay !== '' ? { deliveryDay: Number(deliveryDay) } : {}),
+    })
     toast(r.message ?? '', r.success ? 'success' : 'error')
   }
 
@@ -170,19 +192,34 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
           <button className="btn btn-small" onClick={submitRevenue}>{t('contract.signRevenue')}</button>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          <select value={tpl} onChange={(e) => setTpl(e.target.value as typeof tpl)}>
+            <option value="channel">{t('contract.template.channel')}</option>
+            <option value="co_marketing">{t('contract.template.co_marketing')}</option>
+            <option value="advance">{t('contract.template.advance')}</option>
+          </select>
+          <input placeholder={t('contract.partnerId')} value={partnerId} onChange={(e) => setPartnerId(e.target.value)} style={{ width: 130 }} />
+          {tpl === 'advance' ? <input placeholder={t('contract.prepay')} value={prepayYuan} onChange={(e) => setPrepayYuan(e.target.value)} style={{ width: 130 }} /> : null}
+          {tpl === 'co_marketing' ? <input placeholder={t('contract.commitment')} value={commitmentYuan} onChange={(e) => setCommitmentYuan(e.target.value)} style={{ width: 130 }} /> : null}
+          {tpl === 'advance' ? <input placeholder={t('contract.quality')} value={quality} onChange={(e) => setQuality(e.target.value)} style={{ width: 90 }} /> : null}
+          {tpl === 'advance' ? <input placeholder={t('contract.deliveryDay')} value={deliveryDay} onChange={(e) => setDeliveryDay(e.target.value)} style={{ width: 100 }} /> : null}
+          <button className="btn btn-small" onClick={submitTemplate}>{t('contract.signTemplate')}</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           <input placeholder={t('contract.threshold')} value={thresholdYuan} onChange={(e) => setThresholdYuan(e.target.value)} style={{ width: 140 }} />
           <input placeholder={t('contract.payout')} value={payoutYuan} onChange={(e) => setPayoutYuan(e.target.value)} style={{ width: 110 }} />
           <button className="btn btn-small" onClick={submitMilestone}>{t('contract.signMilestone')}</button>
         </div>
         {publishingContracts.filter((c) => c.productId === product.id).length === 0 ? <div>{t('contract.empty')}</div> : (
           <table className="table">
-            <thead><tr><th>{t('products.col.name')}</th><th>{t('contract.rate')}</th><th>{t('contract.settled')}</th><th>{t('contract.status')}</th></tr></thead>
+            <thead><tr><th>{t('products.col.name')}</th><th>{t('contract.template')}</th><th>{t('contract.rate')}</th><th>{t('contract.settled')}</th><th>{t('contract.recouped')}</th><th>{t('contract.status')}</th></tr></thead>
             <tbody>
               {publishingContracts.filter((c) => c.productId === product.id).map((c) => (
                 <tr key={c.id}>
                   <td>{t(`contract.type.${c.type}`)}</td>
+                  <td>{c.template === undefined ? '—' : t(`contract.template.${c.template}`)}</td>
                   <td>{c.type === 'revenue_share' ? `${c.ratePercent}%` : `${formatMoney(c.thresholdNetRevenueCents ?? 0)} → ${formatMoney(c.payoutCents ?? 0)}`}</td>
                   <td>{formatMoney(c.settledCents)}</td>
+                  <td>{c.prepaymentCents === undefined ? '—' : `${formatMoney(c.recoupedCents ?? 0)} / ${formatMoney(c.prepaymentCents)}`}</td>
                   <td>{t(`contract.status.${c.status}`)}</td>
                 </tr>
               ))}

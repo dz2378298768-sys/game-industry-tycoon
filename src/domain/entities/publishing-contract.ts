@@ -15,6 +15,20 @@ export interface PublishingContract {
   durationDays: number | null
   status: 'active' | 'completed' | 'terminated'
   settledCents: number
+  /** M3-B 三模板（全部可选，旧档按 type 推断） */
+  template?: 'channel' | 'co_marketing' | 'advance'
+  partnerId?: string
+  marketScope?: string[]
+  platformScope?: string[]
+  prepaymentCents?: number
+  recoupRatePercent?: number
+  recoupedCents?: number
+  marketingCommitmentCents?: number
+  marketingInjectedCents?: number
+  qualityThreshold?: number
+  deliveryDay?: number
+  controlLevel?: 'full' | 'shared' | 'none'
+  terminationClause?: 'mutual' | 'quality_breach' | 'delivery_breach' | 'dissolved'
   version: number
   createdAt: number
   updatedAt: number

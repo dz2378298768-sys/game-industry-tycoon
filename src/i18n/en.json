@@ -498,5 +498,16 @@
   "error.contractRateOutOfRange": "Revenue share must be 5%–30%.",
   "error.contractThresholdOutOfRange": "Threshold, payout or duration is out of range.",
   "error.contractAlreadyActive": "This product already has an active contract of that type.",
-  "error.contractNotFound": "Contract not found."
+  "error.contractNotFound": "Contract not found.",
+  "contract.template": "Template",
+  "contract.template.channel": "Channel",
+  "contract.template.co_marketing": "Co-marketing",
+  "contract.template.advance": "Advance",
+  "contract.partnerId": "Publisher ID",
+  "contract.prepay": "Prepay (yuan)",
+  "contract.commitment": "Marketing commitment (yuan/yr)",
+  "contract.quality": "Quality threshold",
+  "contract.deliveryDay": "Delivery day",
+  "contract.signTemplate": "Sign template",
+  "contract.recouped": "Recouped / prepay"
 }

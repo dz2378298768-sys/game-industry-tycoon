@@ -256,6 +256,21 @@ const publishingContractSchema = z
     durationDays: z.number().int().min(30).max(365).nullable(),
     status: z.enum(['active', 'completed', 'terminated']),
     settledCents: z.number().int(),
+    template: z.enum(['channel', 'co_marketing', 'advance']).optional(),
+    partnerId: z.string().min(1).optional(),
+    marketScope: z.array(z.string().min(1)).optional(),
+    platformScope: z.array(z.string().min(1)).optional(),
+    prepaymentCents: z.number().int().positive().optional(),
+    recoupRatePercent: z.number().int().min(1).max(100).optional(),
+    recoupedCents: z.number().int().nonnegative().optional(),
+    marketingCommitmentCents: z.number().int().positive().optional(),
+    marketingInjectedCents: z.number().int().nonnegative().optional(),
+    qualityThreshold: z.number().min(0).max(100).optional(),
+    deliveryDay: z.number().int().nonnegative().optional(),
+    controlLevel: z.enum(['full', 'shared', 'none']).optional(),
+    terminationClause: z
+      .enum(['mutual', 'quality_breach', 'delivery_breach', 'dissolved'])
+      .optional(),
     version: z.number().int().nonnegative(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
@@ -338,6 +353,12 @@ export function parseSave(raw: unknown): ParseSaveResult {
       ok: false,
       errorCode: 'SAVE_VERSION_UNSUPPORTED',
       errorMessage: `不支持的存档版本 ${data.schemaVersion}，当前仅支持 ${SAVE_SCHEMA_VERSION}。`,
+    }
+  }
+  // M3-B C08：旧档无 template → 按原 type 推断（revenue_share/milestone 均归 channel），结算口径不变
+  for (const contract of data.publishingContracts) {
+    if (contract.template === undefined) {
+      contract.template = contract.type === 'milestone' ? 'channel' : 'channel'
     }
   }
   if (data.simulationAlgorithmVersion !== SUPPORTED_ALGORITHM_VERSION) {

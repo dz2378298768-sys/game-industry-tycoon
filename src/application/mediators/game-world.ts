@@ -982,6 +982,27 @@ export class GameWorld {
     return { success: true, message: '里程碑合同已签署', result: r.contract }
   }
 
+  signContractTemplate(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    marketScope?: string[]
+    platformScope?: string[]
+    prepaymentCents?: number
+    recoupRatePercent?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+    controlLevel?: 'full' | 'shared' | 'none'
+  }): { success: boolean; errorCode?: string | undefined; message: string; result?: unknown } {
+    const r = this.contracts.signTemplate(this.world, cmd, this.dayIndex)
+    if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '签约失败' }
+    this.world = { ...r.world, transactions: this.finance.getAllTransactions() }
+    return { success: true, message: '合同已签署', result: r.contract }
+  }
+
   // ----- Persistence -----
 
   serialize(): WorldState {

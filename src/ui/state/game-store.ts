@@ -116,6 +116,17 @@ interface GameStore {
   setMarketingBudget(productId: string, channel: 'social' | 'expo' | 'ads', dailyBudgetCents: number): BudgetActionResult
   signRevenueShare(productId: string, ratePercent: number, durationDays: number | null): BudgetActionResult
   signMilestone(productId: string, thresholdNetRevenueCents: number, payoutCents: number, durationDays: number | null): BudgetActionResult
+  signContractTemplate(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    prepaymentCents?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+  }): BudgetActionResult
   advanceDays(days: number): void
   setSpeed(speed: CalendarSpeed): void
   refresh(): void
@@ -406,6 +417,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const gw = get().game
     if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
     const r = gw.signMilestoneContract({ productId, thresholdNetRevenueCents, payoutCents, durationDays })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  signContractTemplate(cmd) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signContractTemplate(cmd)
     get().refresh()
     return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
   },

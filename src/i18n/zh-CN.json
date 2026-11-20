@@ -498,5 +498,16 @@
   "error.contractRateOutOfRange": "分成比例须在 5%–30%。",
   "error.contractThresholdOutOfRange": "门槛或奖金/期限超出允许范围。",
   "error.contractAlreadyActive": "该产品已有同类型生效合同。",
-  "error.contractNotFound": "合同不存在。"
+  "error.contractNotFound": "合同不存在。",
+  "contract.template": "模板",
+  "contract.template.channel": "渠道分成",
+  "contract.template.co_marketing": "联合营销",
+  "contract.template.advance": "预付款",
+  "contract.partnerId": "发行商 ID",
+  "contract.prepay": "预付款（元）",
+  "contract.commitment": "营销承诺（元，全年）",
+  "contract.quality": "质量门槛",
+  "contract.deliveryDay": "交付日（天序号）",
+  "contract.signTemplate": "签模板合同",
+  "contract.recouped": "已回收/预付款"
 }

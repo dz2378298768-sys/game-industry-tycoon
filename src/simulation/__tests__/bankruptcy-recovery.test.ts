@@ -14,6 +14,7 @@ import { createGameWorld } from '@application/factories/create-game-world'
 import { GameWorld } from '@application/mediators/game-world'
 import { TUNING } from '@content/tuning'
 import { makeCompany } from '../../__tests__/helpers'
+import { BANKRUPT_RECOVERY_HINT_CENTS } from '@ui/components/company-alerts'
 
 const COMPANY_ID = 'company-1'
 
@@ -123,6 +124,10 @@ describe('M3-P0-1 破产自救恢复', () => {
     })
     console.log('[K03] hired:', hired.success, 'reason:', hired.errorCode ?? 'ok')
     expect(hired.success).toBe(true)
+  })
+
+  it('K05 展示与引擎同源：横幅恢复线不得另写常量', () => {
+    expect(BANKRUPT_RECOVERY_HINT_CENTS).toBe(TUNING.finance.cashRecoveryThresholdCents)
   })
 
   it('K04 恢复事件幂等：恢复后连续推进只产生一条', () => {

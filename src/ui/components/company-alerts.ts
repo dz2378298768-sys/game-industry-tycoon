@@ -12,8 +12,8 @@ export interface CompanyBanner {
   amountCents: number
 }
 
-/** M2 破产恢复线（展示常量，M2 上线后改读 tuning，DESIGN-UI-LAYER §7.2 A8） */
-export const BANKRUPT_RECOVERY_HINT_CENTS = 500_000
+/** 破产自救恢复线：必须与引擎同一来源（TUNING），不得在本文件另写常量（M3-P0-1 修正） */
+export const BANKRUPT_RECOVERY_HINT_CENTS = TUNING.finance.cashRecoveryThresholdCents
 
 /** 现金等级归一：dissolved > bankrupt > warning > safe（不写回，每次渲染求值） */
 export function selectCashLevel(company: Company | null | undefined): CashLevel {

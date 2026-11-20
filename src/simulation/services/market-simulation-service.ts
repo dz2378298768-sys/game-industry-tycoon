@@ -142,7 +142,10 @@ export class MarketSimulationService {
     const transactions = this.buildTransactions(sortedProducts, recordsByProduct)
 
     if (transactions.length > 0) {
-      const posted = this.deps.finance.bulkPostTransactions(transactions)
+      // 销售是必得收入：余额已为负时也必须入账，不得因余额检查中止整日结算（M2-I）
+      const posted = this.deps.finance.bulkPostTransactions(transactions, {
+        allowNegativeBalance: true,
+      })
       if (!posted.success) {
         throw new SalesError(
           'SALES_POSTING_FAILED',

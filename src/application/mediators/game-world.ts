@@ -710,11 +710,22 @@ export class GameWorld {
   /** 唯一推进入口：日历推进 + 统一调度器 */
   advanceSimulation(days: number): { totalDays: number; events: DomainEvent[] } {
     const events: DomainEvent[] = []
+    const startDay = this.calendar.currentDayIndex
     for (let i = 0; i < days; i++) {
       this.calendar.advanceDay()
       this.rng.setCurrentDayIndex(this.calendar.currentDayIndex)
       const beforeEvents = this.world.events.length
-      this.world = this.scheduler.executeDay(this.world, this.calendar.currentDayIndex)
+      try {
+        this.world = this.scheduler.executeDay(this.world, this.calendar.currentDayIndex)
+      } catch (error) {
+        // 单日结算失败：日历回退到本批起点，避免“日期前进但世界未推进”造成的跳日；
+        // 错误继续上抛，由 UI 边界转成可见提示（M2-I）。
+        this.calendar.rewindTo(startDay)
+        this.rng.setCurrentDayIndex(startDay)
+        this.projects.reset(this.world.projects)
+        this.employees.reset(this.world.employees)
+        throw error
+      }
       if (this.world.events.length > beforeEvents) {
         events.push(...this.world.events.slice(beforeEvents))
       }

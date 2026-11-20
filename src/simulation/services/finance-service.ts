@@ -16,7 +16,8 @@ export interface PostTransactionCmd {
 export interface PostTransactionOptions {
   /**
    * 允许余额变为负数。
-   * 仅用于不可拒绝的固定结算（工资、租金、解雇补偿），以及读档重放。
+   * 仅用于不可拒绝的固定结算（工资、租金、解雇补偿、退款、合同冲减）、
+   * 必得收入（销售入账），以及读档重放。
    * 招聘、建项目等自主支出必须使用默认值 false。
    */
   allowNegativeBalance?: boolean
@@ -100,14 +101,17 @@ export class FinanceService {
     return ok(tx)
   }
 
-  bulkPostTransactions(cmds: PostTransactionCmd[]): CommandResult<Transaction[]> {
+  bulkPostTransactions(
+    cmds: PostTransactionCmd[],
+    options: PostTransactionOptions = {},
+  ): CommandResult<Transaction[]> {
     const prevTxs = [...this.transactions]
     const prevBal = new Map(this.balanceByCompany)
     const prevIdx = new Map(this.idempotencyIndex)
     const prevDay = new Map(this.idempotencyDay)
     const results: Transaction[] = []
     for (const cmd of cmds) {
-      const r = this.postTransaction(cmd)
+      const r = this.postTransaction(cmd, options)
       if (!r.success || !r.result) {
         this.transactions = prevTxs
         this.balanceByCompany = prevBal

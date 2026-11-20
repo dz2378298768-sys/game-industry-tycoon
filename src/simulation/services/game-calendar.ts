@@ -35,6 +35,11 @@ export class GameCalendar {
     return dayIndexToGregorian(this._currentDayIndex)
   }
 
+  /** 回退到指定日（用于单日结算失败时的边界保护，M2-I） */
+  rewindTo(dayIndex: number): void {
+    this._currentDayIndex = dayIndex
+  }
+
   setSpeed(speed: CalendarSpeed): void {
     this._speed = speed
   }

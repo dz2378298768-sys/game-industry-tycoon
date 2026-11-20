@@ -422,7 +422,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   advanceDays(days) {
     const gw = get().game
     if (!gw) return
-    gw.advanceSimulation(days)
+    try {
+      gw.advanceSimulation(days)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      get().toast(message, 'error')
+      get().refresh()
+      return
+    }
     get().refresh()
   },
 

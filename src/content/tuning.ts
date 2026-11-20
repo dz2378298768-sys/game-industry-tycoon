@@ -117,6 +117,12 @@ export const TUNING = {
     cashWarningThresholdCents: 400_000,
     /** 单位：美分。L2 破产线：现金低于此值触发公司 status='bankrupt'（DESIGN-OI-21 §2.1）。 */
     cashBankruptThresholdCents: 0,
+    /**
+     * 单位：美分。自救恢复线：bankrupt 公司现金回到此值（≥ L1 警告线）时恢复 active。
+     * 取 $4,000 而非 $5,000：与 L1 同线形成滞回区间（0 ~ $4,000 不反复切换），
+     * 并修订 DESIGN-OI-21 §2.4 的 $5,000 口径（见 DECISION-M3-P0-BANKRUPTCY-CLOSURE-001 §3）。
+     */
+    cashRecoveryThresholdCents: 400_000,
   },
 
   /**

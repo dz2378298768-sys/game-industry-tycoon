@@ -7,7 +7,7 @@
 | 状态 | APPROVED（设计师维护中） |
 | 维护人 | 设计负责人 |
 | 依据规范 | PROJECT-DEVELOPMENT-WORKFLOW-001 §3（任务生命周期）、§6（进度管理机制） |
-| 当前基线 | 本地 `main` HEAD **`aa1241c`**（M2-H 已推送，`origin/main` 0/0）。最新全量核验（真实退出码，2026-11-20）：**54 文件 / 522 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → M2-F 51/491 → M2-G 52/508 → 出口验证 53/513 → M2-H 53/517 → **M2-I 54/522**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A/B/C/D/E/F **CLOSED**、**M2-G CLOSED**（UI + i18n） |
+| 当前基线 | 本地 `main` HEAD **`aa1241c`**（M2-H 已推送，`origin/main` 0/0）。最新全量核验（真实退出码，2026-11-20）：**55 文件 / 526 用例 / 0 skip / 0 failed**，typecheck / lint:check / build 全 0（增量链：41/346 → M2-C 46/388 → M2-D 49/432 → M2-E 50/458 → M2-F 51/491 → M2-G 52/508 → 出口验证 53/513 → M2-H 53/517 → M2-I 54/522 → **M3-P0-1 55/526**）。M1.1 **CLOSED**、M1.2 首批+第二批 **CLOSED**、M2-A/B/C/D/E/F **CLOSED**、**M2-G CLOSED**（UI + i18n） |
 | 更新日期 | 2026-11-19 |
 | 说明 | 本台账按规范 §6 字段建立，任务状态严格取自规范 §3 的 10 个合法状态 |
 
@@ -86,6 +86,7 @@
 | TASK-M2-001-G | M2-G UI + i18n 编码任务（17 例 + 反证 3 项 + N-1~N-3 约束） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P1 | DESIGN-M2-001-G v1.1（READY） | `117cc44` | **编码审核 PASS**（P1=0/P2=0；G-N1~G-N4 偏差登记） | 17 例全绿；反证 3/3 变红（pending 计入/按件数×单价/删错误码映射）；四命令全 0（52/508，build 2.99s） | 已推送 |
 | VERIFY-M2-EXIT-001 | M2 阶段出口验证（v1 阻断 → v2 通过） | M2 | 设计者（主 AI 代行） | **PASS（v2）** | P0 | ROADMAP M2 出口条件 | — | v1：生产 0 销量 / 18.01% / 不可复现（BLOCKED）；v2：生产 5,096 件 / **36.37%** / 同 seed 相等（PASS） | v1 裁定 V-01~V-05 已由 M2-H 落地；v2 为验收结论 | v2 已交付 |
 | DESIGN-M2-001-H | M2 出口阻断修复规格（content 输入表 / 初始认知度 / 回填 / 稳定键 / 校准纪律） | M2 | 设计代理（主 AI 代行） | **CLOSED** | P0 | `M2-EXIT-VERIFICATION-001` v1 + ROADMAP | — | **R1 REVISE_REQUIRED（P1×3）→ v1.1 → R2 PASS_WITH_NOTES（P1=0）** | P1：内容表来源 / 旧档僵尸产品 / 校准无门槛 | 已实现并交付 |
+| M3-P0-1 | 破产闭环：恢复线 $4,000（滞回）+ `CompanyRecovered` 事件，破产不再永久化 | M3 | 设计者（主 AI 代行） | **CLOSED** | P1 | M3 存活测试前置；OI-21 §2.4 未实现 | `DECISION-M3-P0-BANKRUPTCY-CLOSURE-001` | K01–K04 全绿；反证 3/4 红（K02 保持绿证明滞回）；四命令 0（55/526） | 已推送 |
 | DESIGN-M2-001-I | M2-I 负余额结算加固规格（必得收入不拒付 / 日历不跳日 / UI 兜底 / 破产与事务化另立） | M2 | 设计者（主 AI 代行） | **CLOSED** | P2 | 交叉验证 F 组缺陷 | `docs/` | **R1 REVISE_REQUIRED（P1×2/P2×2）→ v1.1 → R2 PASS_WITH_NOTES** | P1：只加选项会造隐性透支且无可见出口；批量选项默认放开会污染其他调用点 | 已实现，54/522 |
 | TASK-M2-001-I | M2-I 编码任务（I01–I05 + 反证 3 项） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P2 | DESIGN-M2-001-I v1.1 | 工作树 | **编码审核 PASS**（P1=0/P2=0；I-N1~I-N3） | I01/I03 复现原缺陷并修复；反证 3/3；四命令 0（54/522） | 已推送 |
 | TASK-M2-001-H | M2-H 修复编码任务（H01–H11 + 反证 4 项） | M2 | 编码代理（主 AI 代行） | **CLOSED** | P0 | DESIGN-M2-001-H v1.1（READY） | working tree | **编码审核 PASS**（P1=0/P2=0；H-N1~H-N3） | 9 例全绿；反证 4/4（provider null / 去认知度 / 键回退 / 两段同配置）；四命令全 0（53/517） | 待推送 |

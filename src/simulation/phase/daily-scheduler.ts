@@ -15,6 +15,7 @@ import {
   createBudgetExhaustedEvent,
   createPauseTimeoutCancelledEvent,
   createCompanyBankruptedEvent,
+  createCompanyRecoveredEvent,
 } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
@@ -493,37 +494,45 @@ export class DailyScheduler {
   }
 
   /**
-   * 破产检查（DESIGN-OI-21 §2.3）：
+   * 破产检查与自救恢复（DESIGN-OI-21 §2.3/§2.4，修订见 DECISION-M3-P0-BANKRUPTCY-CLOSURE-001）：
    *
    * - 唯一检查时点：每日调度末尾、syncCompanyCash 之后执行一次。
-   * - 判据：balance < TUNING.finance.cashBankruptThresholdCents（默认 0）。
-   * - 效果：company.status 从 'active' → 'bankrupt'，记录领域事件 CompanyBankrupted。
-   * - 幂等：仅对 status==='active' 的公司执行，已 bankrupt/dissolved 的跳过。
+   * - 破产判据：status==='active' 且 balance < cashBankruptThresholdCents（默认 0）
+   *   → status='bankrupt' + CompanyBankrupted。
+   * - 恢复判据：status==='bankrupt' 且 balance >= cashRecoveryThresholdCents（$4,000）
+   *   → status='active' + CompanyRecovered；0 ~ $4,000 为滞回区间，不来回切换。
+   * - 幂等：只对对应前置状态的公司在同一日内触发一次，已终态（dissolved）不参与。
    */
   private applyBankruptcyCheck(state: WorldState, dayIndex: number): WorldState {
-    const threshold = TUNING.finance.cashBankruptThresholdCents
+    const bankruptAt = TUNING.finance.cashBankruptThresholdCents
+    const recoverAt = TUNING.finance.cashRecoveryThresholdCents
     const events: DomainEvent[] = []
     let changed = false
 
     const companies = state.companies.map((c) => {
-      if (c.status !== 'active') return c
+      if (c.status === 'dissolved') return c
       const balance = this.deps.finance.getCashBalance(c.id)
-      if (balance >= threshold) return c
-      changed = true
-      events.push(
-        createCompanyBankruptedEvent(
-          uuid(),
-          c.id,
-          dayIndex,
-          balance,
-        ),
-      )
-      return {
-        ...c,
-        status: 'bankrupt' as const,
-        version: c.version + 1,
-        updatedAt: dayIndex,
+      if (c.status === 'active' && balance < bankruptAt) {
+        changed = true
+        events.push(createCompanyBankruptedEvent(uuid(), c.id, dayIndex, balance))
+        return {
+          ...c,
+          status: 'bankrupt' as const,
+          version: c.version + 1,
+          updatedAt: dayIndex,
+        }
       }
+      if (c.status === 'bankrupt' && balance >= recoverAt) {
+        changed = true
+        events.push(createCompanyRecoveredEvent(uuid(), c.id, dayIndex, balance))
+        return {
+          ...c,
+          status: 'active' as const,
+          version: c.version + 1,
+          updatedAt: dayIndex,
+        }
+      }
+      return c
     })
 
     if (!changed) return state

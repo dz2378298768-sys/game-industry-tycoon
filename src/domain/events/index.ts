@@ -103,6 +103,27 @@ export function createCompanyBankruptedEvent(
   return { id, type: COMPANY_BANKRUPTED_EVENT, day, payload }
 }
 
+/** 公司自救恢复事件类型（DECISION-M3-P0-BANKRUPTCY-CLOSURE-001 §3.2） */
+export const COMPANY_RECOVERED_EVENT = 'CompanyRecovered'
+
+/** 自救恢复载荷；balanceAtRecovery 为恢复时现金余额 */
+export type CompanyRecoveredPayload = {
+  companyId: string
+  day: number
+  balanceAtRecovery: number
+}
+
+/** 构造公司自救恢复事件。 */
+export function createCompanyRecoveredEvent(
+  id: string,
+  companyId: string,
+  day: number,
+  balanceAtRecovery: number,
+): DomainEvent {
+  const payload: CompanyRecoveredPayload = { companyId, day, balanceAtRecovery }
+  return { id, type: COMPANY_RECOVERED_EVENT, day, payload }
+}
+
 /** 退款批次入账事件类型（DESIGN-M2-001-C §10.6.4 / 08/04 Phase 4.7） */
 export const REFUND_BATCH_POSTED_EVENT = 'RefundBatchPosted'
 

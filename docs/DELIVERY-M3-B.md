@@ -2,7 +2,7 @@
 
 - 结论：**PASS（C01–C06、C08 全绿 + C03 反证锁定）**；C07（签署前 12 个月悲观估算）**转 M3-B2**
 - 上游：`DECISION-M3-P0-CONTRACT-004` v1.1（DECIDED）；基线 `8a322d5`（59 文件 / 545 用例）
-- 本批后：**60 文件 / 552 用例**
+- 本批后：**60 文件 / 555 用例**（B1 552 + B2 3 条）
 
 ## 1. 做了什么
 
@@ -42,12 +42,24 @@
 
 反证（C03）：把 `shareBase = max(0, base - recoup)` 改成 `shareBase = base` → **C03 红**（现金 5,200,000 ≠ 5,000,000）；`cp` 还原后 `diff -q` 一致。
 
-四命令真实退出码：typecheck **0**、lint:check **0**、test **0（60 文件 / 552 用例）**、build **0**。
+四命令真实退出码：typecheck **0**、lint:check **0**、test **0（60 文件 / 555 用例，1303.94s）**、build **0**。
 
-## 4. 已知偏差与未完成
+## 4. M3-B2（同日补齐）
 
-1. **C07 未实现**：签署前 12 个月悲观估算（受众 −30%、竞品 +30%、退款率 +5pp）需要历史窗口口径，规格未给；转 M3-B2，不阻塞三模板结算。
-2. **partnerId 未接内容表**：R2 NOTE 要求 partnerId 只能来自内容表，但仓库目前没有发行商内容表；当前为自由输入 + 非空校验，内容表与校验留 M3-B2。
+| 项 | 内容 | 证据 |
+|---|---|---|
+| B2-1 | **C07 签署前估算**：`contract-estimate.ts`，窗口最近 90 天、基准日均净销售 ×365、最差净收入 −50%、按模板算到手与回收月数 | C07 同口径历史 90 天 × 365 天平推，偏差 0% |
+| B2-2 | **发行商内容表**：`src/content/publishers.json` 8 家 + `publishers.ts`；`partnerId` 必须在表内且模板受支持 | C09：未知发行商 `CONTRACT_PARTNER_UNKNOWN`、Rhein Media 不支持 advance → `CONTRACT_PARTNER_TEMPLATE_UNSUPPORTED` |
+| B2-3 | **交付/质量违约账面同步**：追回额同时累加 `recoupedCents`，账面「已回收」与实际回收一致 | C05 断言 `recoupedCents = 3,000,000` |
+| B2-4 | **`controlLevel` 落地**：`advance` 默认 `full`；生效期内玩家改价/折扣/营销被 `CONTRACT_CONTROL_LOCKED` 拦截 | C10：`hasFullControl` 命中 active+full，`shared` 不命中 |
+| B2-5 | **UI 补齐**：发行商下拉（内容表）、市场/平台范围输入、试算按钮与四项估算展示 | `product-detail.tsx` |
+
+B2 新增 3 条用例（C07/C09/C10），本批共 10 条。
+
+## 5. 已知偏差与未完成
+
+1. **悲观估算用「净收入 −50%」而非三参数逐项重算**：§5 同时给了「受众 −30%、竞品 +30%、退款率 +5pp」与展示项「净收入 −50%」；当前取后者作为可复现口径，三参数未进入销售公式。属口径收窄，需在规格 v1.2 明确。
+2. **C07 只验证基准估算**：最差情形未与实际对照（实际只跑基准世界）；偏差 0% 来自平坦历史，真实波动产品的 ±20% 边界未覆盖。
 3. **co_marketing 不计营销支出**：只注入认知度与 `marketingInjectedCents`，不写 `marketingCampaigns`、不扣现金（规格 C02 要求）；「营销支出」统计口径未纳入，待确认。
-4. **模板推断 milestone 也归 channel**：旧档 `milestone` 合同 `template` 写 `channel`，但 `milestone` 走独立分支，结算不受影响。
-5. **UI 为最小入口**：未做签署前预览/估算，未做范围（market/platform）选择；仅覆盖模板、partnerId、预付款、承诺、质量、交付日。
+4. **控制权只拦玩家入口**：`setProductPrice` / `applyProductDiscount` / `setMarketingBudget` 已拦；AI 走 `pricing` 服务直调，不受玩家合同约束（AI 也不会签玩家的合同），未做跨入口审计。
+5. **模板推断 milestone 也归 channel**：旧档 `milestone` 合同 `template` 写 `channel`，但 `milestone` 走独立分支，结算不受影响。

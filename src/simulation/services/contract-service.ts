@@ -14,6 +14,7 @@ import {
 import { awarenessDeltaCents, splitBudgetAcrossMarkets } from '@domain/value-objects'
 import { marketingScaleKeyOf } from './sales-formulas'
 import { TUNING } from '@content/tuning'
+import { getPublisherSpec } from '@content/publishers'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import {
   CONTRACT_DURATION_MAX,
@@ -37,6 +38,9 @@ export type ContractErrorCode =
   | 'CONTRACT_NOT_FOUND'
   | 'CONTRACT_TEMPLATE_INVALID'
   | 'CONTRACT_FIELD_OUT_OF_RANGE'
+  | 'CONTRACT_PARTNER_UNKNOWN'
+  | 'CONTRACT_PARTNER_TEMPLATE_UNSUPPORTED'
+  | 'CONTRACT_CONTROL_LOCKED'
 
 export interface SignRevenueShareCmd {
   productId: string
@@ -238,8 +242,8 @@ export function signMilestoneContract(
   }
 }
 
-function isInScope(
-  contract: PublishingContract,
+export function isInScope(
+  contract: Pick<PublishingContract, 'marketScope' | 'platformScope'>,
   record: { marketId: string; platformId: string },
 ): boolean {
   const markets = contract.marketScope
@@ -269,6 +273,13 @@ export function signTemplateContract(
   }
   if (typeof cmd.partnerId !== 'string' || cmd.partnerId.trim().length === 0) {
     return { ok: false, world, errorCode: 'CONTRACT_FIELD_OUT_OF_RANGE', errorMessage: 'partnerId 必填' }
+  }
+  const publisher = getPublisherSpec(cmd.partnerId)
+  if (publisher === undefined) {
+    return { ok: false, world, errorCode: 'CONTRACT_PARTNER_UNKNOWN', errorMessage: '发行商不在内容表' }
+  }
+  if (!publisher.specialties.includes(cmd.template)) {
+    return { ok: false, world, errorCode: 'CONTRACT_PARTNER_TEMPLATE_UNSUPPORTED', errorMessage: '该发行商不支持此模板' }
   }
   const invalid = validateCommon(world, cmd.productId, cmd.durationDays, 'revenue_share')
   if (invalid !== null) return invalid
@@ -668,6 +679,7 @@ export function settleContracts(world: WorldState, day: number, finance: Finance
                   status: 'terminated',
                   terminationClause: 'quality_breach',
                   settledCents: c.settledCents - clawback,
+                  recoupedCents: (c.recoupedCents ?? 0) + clawback,
                   updatedAt: day,
                 }
               : c,
@@ -720,6 +732,7 @@ export function settleContracts(world: WorldState, day: number, finance: Finance
               ...c,
               status: 'terminated',
               terminationClause: 'delivery_breach',
+              recoupedCents: (c.recoupedCents ?? 0) + clawback,
               updatedAt: day,
             }
           : c,

@@ -509,5 +509,13 @@
   "contract.quality": "Quality threshold",
   "contract.deliveryDay": "Delivery day",
   "contract.signTemplate": "Sign template",
-  "contract.recouped": "Recouped / prepay"
+  "contract.recouped": "Recouped / prepay",
+  "contract.estimate": "Estimate 12 months",
+  "contract.estimateDone": "Estimate generated",
+  "contract.projectedNet": "Projected net",
+  "contract.projectedProceeds": "Projected proceeds",
+  "contract.worstNet": "Worst-case net",
+  "contract.worstProceeds": "Worst-case proceeds",
+  "contract.marketScope": "Market scope (comma)",
+  "contract.platformScope": "Platform scope (comma)"
 }

@@ -509,5 +509,13 @@
   "contract.quality": "质量门槛",
   "contract.deliveryDay": "交付日（天序号）",
   "contract.signTemplate": "签模板合同",
-  "contract.recouped": "已回收/预付款"
+  "contract.recouped": "已回收/预付款",
+  "contract.estimate": "试算 12 个月",
+  "contract.estimateDone": "已生成估算",
+  "contract.projectedNet": "预计净收入",
+  "contract.projectedProceeds": "预计到手",
+  "contract.worstNet": "最差净收入",
+  "contract.worstProceeds": "最差到手",
+  "contract.marketScope": "市场范围（逗号分隔）",
+  "contract.platformScope": "平台范围（逗号分隔）"
 }

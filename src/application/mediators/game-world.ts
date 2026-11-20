@@ -23,6 +23,7 @@ import {
 } from '@simulation/services/product-pricing-service'
 import { MarketingService } from '@simulation/services/marketing-service'
 import type { MarketingChannel } from '@domain/value-objects/marketing-response'
+import { hasFullControl, estimateContractProceeds, type ContractEstimate } from '@simulation/services/contract-estimate'
 import { ContractService } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
@@ -690,11 +691,25 @@ export class GameWorld {
 
   /** 首次定价 / 改价（DESIGN-M2-001-D §6.1） */
   setProductPrice(cmd: SetPriceCmd): CommandOutcome<PricingResult> {
+    const blocked = this.controlLock(cmd.productId)
+    if (blocked !== null) return blocked
     return this.runPricing((world) => this.pricing.setPrice(world, cmd, this.dayIndex))
+  }
+
+  /** 发行商 `controlLevel:'full'` 生效期内，玩家不能改价、折扣或改营销。 */
+  private controlLock(productId: string): CommandOutcome<PricingResult> | null {
+    if (!hasFullControl(this.world, productId)) return null
+    return {
+      success: false,
+      errorCode: 'CONTRACT_CONTROL_LOCKED',
+      message: '发行商持有全控制权：合同生效期内不能改价/折扣/营销',
+    }
   }
 
   /** 折扣 / 取消折扣（§6.2） */
   applyProductDiscount(cmd: ApplyDiscountCmd): CommandOutcome<PricingResult> {
+    const blocked = this.controlLock(cmd.productId)
+    if (blocked !== null) return blocked
     return this.runPricing((world) => this.pricing.applyDiscount(world, cmd, this.dayIndex))
   }
 
@@ -953,6 +968,9 @@ export class GameWorld {
     channel: MarketingChannel
     dailyBudgetCents: number
   }): { success: boolean; errorCode?: string | undefined; message: string; result?: unknown } {
+    if (hasFullControl(this.world, cmd.productId)) {
+      return { success: false, errorCode: 'CONTRACT_CONTROL_LOCKED', message: '发行商持有全控制权：合同生效期内不能改营销' }
+    }
     const r = this.marketing.setBudget(this.world, cmd, this.dayIndex)
     if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '营销设置失败' }
     this.world = r.world
@@ -1001,6 +1019,24 @@ export class GameWorld {
     if (!r.ok) return { success: false, errorCode: r.errorCode, message: r.errorMessage ?? '签约失败' }
     this.world = { ...r.world, transactions: this.finance.getAllTransactions() }
     return { success: true, message: '合同已签署', result: r.contract }
+  }
+
+  estimateContract(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    marketScope?: string[]
+    platformScope?: string[]
+    prepaymentCents?: number
+    recoupRatePercent?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+    controlLevel?: 'full' | 'shared' | 'none'
+  }): ContractEstimate {
+    return estimateContractProceeds(this.world, cmd, this.dayIndex)
   }
 
   // ----- Persistence -----

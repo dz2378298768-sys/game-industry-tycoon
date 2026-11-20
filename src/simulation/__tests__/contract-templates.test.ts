@@ -9,6 +9,8 @@ import type { WorldState } from '@simulation/services/world-state'
 import type { RefundBatch } from '@domain/entities/refund-batch'
 import { refundBatchIdempotencyKey } from '@domain/entities/refund-batch'
 import { parseSave } from '@infrastructure/storage/save-schema'
+import { estimateContractProceeds, hasFullControl } from '@simulation/services/contract-estimate'
+import { isKnownPublisher } from '@content/publishers'
 import { makeRecord, makeWorld, D_PRODUCT_ID, D_COMPANY_ID } from './m2d-pricing-fixtures'
 import { makeProject } from '../../__tests__/helpers'
 
@@ -46,7 +48,7 @@ describe('M3-B 合同三模板', () => {
         template: 'channel',
         ratePercent: 20,
         durationDays: null,
-        partnerId: 'pub-japan',
+        partnerId: 'nippon-soft',
         marketScope: ['japan'],
         platformScope: ['arcade_pre_1975'],
       },
@@ -68,7 +70,7 @@ describe('M3-B 合同三模板', () => {
         template: 'co_marketing',
         ratePercent: 25,
         durationDays: null,
-        partnerId: 'pub-global',
+        partnerId: 'global-star',
         marketingCommitmentCents: 12_000_000,
       },
       0,
@@ -94,7 +96,7 @@ describe('M3-B 合同三模板', () => {
         template: 'advance',
         ratePercent: 20,
         durationDays: null,
-        partnerId: 'pub-advance',
+        partnerId: 'sunrise-publishing',
         prepaymentCents: 5_000_000,
         recoupRatePercent: 100,
       },
@@ -129,7 +131,7 @@ describe('M3-B 合同三模板', () => {
         template: 'advance',
         ratePercent: 20,
         durationDays: null,
-        partnerId: 'pub-q',
+        partnerId: 'sunrise-publishing',
         prepaymentCents: 4_000_000,
         qualityThreshold: 60,
       },
@@ -170,7 +172,7 @@ describe('M3-B 合同三模板', () => {
         template: 'advance',
         ratePercent: 20,
         durationDays: null,
-        partnerId: 'pub-d',
+        partnerId: 'sunrise-publishing',
         prepaymentCents: 10_000_000,
         deliveryDay: 1,
       },
@@ -181,6 +183,7 @@ describe('M3-B 合同三模板', () => {
     expect(contractOf(terminated.world).status).toBe('terminated')
     expect(contractOf(terminated.world).terminationClause).toBe('delivery_breach')
     expect(finance.getCashBalance(D_COMPANY_ID)).toBe(10_000_000 - 3_000_000)
+    expect(contractOf(terminated.world).recoupedCents).toBe(3_000_000)
   })
 
   it('C06 跨日退款在回收期先冲减未回收余额，不重复计入玩家分成', () => {
@@ -207,7 +210,7 @@ describe('M3-B 合同三模板', () => {
         template: 'advance',
         ratePercent: 20,
         durationDays: null,
-        partnerId: 'pub-r',
+        partnerId: 'sunrise-publishing',
         prepaymentCents: 5_000_000,
       },
       11,
@@ -250,5 +253,89 @@ describe('M3-B 合同三模板', () => {
     expect(parsed.ok).toBe(true)
     if (!parsed.ok) return
     expect(parsed.state.publishingContracts[0]!.template).toBe('channel')
+  })
+
+  it('C07 签署前模拟：同口径历史窗口估算与实际 12 个月偏差 ≤ 20%', () => {
+    const history = Array.from({ length: 90 }, (_, i) => ({
+      ...makeRecord(i + 1),
+      marketId: 'japan',
+      netSalesRevenueCents: 1_000_000,
+    }))
+    const base = makeWorld()
+    const world: WorldState = {
+      ...base,
+      companies: base.companies.map((c) => ({ ...c, cashBalanceCents: 0 })),
+      products: base.products.map((p) => ({ ...p, salesByPeriod: history })),
+    }
+    const { svc } = setup(world)
+    const cmd = {
+      productId: D_PRODUCT_ID,
+      template: 'channel' as const,
+      ratePercent: 20,
+      durationDays: null,
+      partnerId: 'global-star',
+    }
+    const estimate = estimateContractProceeds(world, cmd, 91)
+    expect(estimate.projectedNetCents).toBe(365 * 1_000_000)
+    expect(estimate.worstNetCents).toBe(Math.round(365 * 1_000_000 * 0.5))
+    const signed = svc.signTemplate(world, cmd, 91)
+    expect(signed.ok).toBe(true)
+    let cur = signed.world
+    for (let d = 91; d <= 455; d += 1) {
+      cur = {
+        ...cur,
+        products: cur.products.map((p) => ({
+          ...p,
+          salesByPeriod: [...p.salesByPeriod, { ...makeRecord(d), marketId: 'japan', netSalesRevenueCents: 1_000_000 }],
+        })),
+      }
+      cur = svc.settle(cur, d).world
+    }
+    const actualNet = 365 * 1_000_000
+    const deviation = Math.abs(actualNet - estimate.projectedNetCents) / actualNet
+    expect(deviation).toBeLessThanOrEqual(0.2)
+    expect(contractOf(cur).settledCents).toBe(Math.round(actualNet * 0.2))
+  })
+
+  it('C09 partnerId 必须来自内容表，且模板需被该发行商支持', () => {
+    expect(isKnownPublisher('global-star')).toBe(true)
+    const { world, svc } = setup()
+    const unknown = svc.signTemplate(world, {
+      productId: D_PRODUCT_ID,
+      template: 'channel',
+      ratePercent: 20,
+      durationDays: null,
+      partnerId: 'not-a-publisher',
+    }, 1)
+    expect(unknown.ok).toBe(false)
+    expect(unknown.errorCode).toBe('CONTRACT_PARTNER_UNKNOWN')
+    const unsupported = svc.signTemplate(world, {
+      productId: D_PRODUCT_ID,
+      template: 'advance',
+      ratePercent: 20,
+      durationDays: null,
+      partnerId: 'rhein-media',
+      prepaymentCents: 1_000_000,
+    }, 1)
+    expect(unsupported.ok).toBe(false)
+    expect(unsupported.errorCode).toBe('CONTRACT_PARTNER_TEMPLATE_UNSUPPORTED')
+  })
+
+  it('C10 controlLevel=full 的 advance 生效期内锁定改价/营销', () => {
+    const { world } = setup()
+    const activeAdvance: WorldState = {
+      ...world,
+      publishingContracts: [{
+        id: 'CT-lock', productId: D_PRODUCT_ID, type: 'revenue_share', template: 'advance',
+        partnerId: 'sunrise-publishing', ratePercent: 20, signedDay: 1, durationDays: null,
+        status: 'active', settledCents: 0, controlLevel: 'full', version: 1, createdAt: 1, updatedAt: 1,
+      }],
+    }
+    expect(hasFullControl(activeAdvance, D_PRODUCT_ID)).toBe(true)
+    const shared: WorldState = {
+      ...activeAdvance,
+      publishingContracts: activeAdvance.publishingContracts.map((c) => ({ ...c, controlLevel: 'shared' })),
+    }
+    expect(hasFullControl(shared, D_PRODUCT_ID)).toBe(false)
   })
 })

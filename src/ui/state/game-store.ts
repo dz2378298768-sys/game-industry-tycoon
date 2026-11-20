@@ -116,6 +116,20 @@ interface GameStore {
   setMarketingBudget(productId: string, channel: 'social' | 'expo' | 'ads', dailyBudgetCents: number): BudgetActionResult
   signRevenueShare(productId: string, ratePercent: number, durationDays: number | null): BudgetActionResult
   signMilestone(productId: string, thresholdNetRevenueCents: number, payoutCents: number, durationDays: number | null): BudgetActionResult
+  estimateContract(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    marketScope?: string[]
+    platformScope?: string[]
+    prepaymentCents?: number
+    recoupRatePercent?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+  }): import('@simulation/services/contract-estimate').ContractEstimate | null
   signContractTemplate(cmd: {
     productId: string
     template: 'channel' | 'co_marketing' | 'advance'
@@ -419,6 +433,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const r = gw.signMilestoneContract({ productId, thresholdNetRevenueCents, payoutCents, durationDays })
     get().refresh()
     return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  estimateContract(cmd) {
+    const gw = get().game
+    if (!gw) return null
+    return gw.estimateContract(cmd)
   },
 
   signContractTemplate(cmd) {

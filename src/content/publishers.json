@@ -1,0 +1,95 @@
+[
+  {
+    "id": "global-star",
+    "name": "Global Star",
+    "markets": [
+      "north_america",
+      "europe",
+      "japan"
+    ],
+    "specialties": [
+      "channel",
+      "co_marketing",
+      "advance"
+    ]
+  },
+  {
+    "id": "nippon-soft",
+    "name": "Nippon Soft",
+    "markets": [
+      "japan"
+    ],
+    "specialties": [
+      "channel",
+      "advance"
+    ]
+  },
+  {
+    "id": "aurora-interactive",
+    "name": "Aurora Interactive",
+    "markets": [
+      "north_america"
+    ],
+    "specialties": [
+      "co_marketing",
+      "advance"
+    ]
+  },
+  {
+    "id": "rhein-media",
+    "name": "Rhein Media",
+    "markets": [
+      "europe"
+    ],
+    "specialties": [
+      "channel",
+      "co_marketing"
+    ]
+  },
+  {
+    "id": "arcade-legacy",
+    "name": "Arcade Legacy",
+    "markets": [
+      "japan",
+      "north_america"
+    ],
+    "specialties": [
+      "channel"
+    ]
+  },
+  {
+    "id": "indie-forge",
+    "name": "Indie Forge",
+    "markets": [
+      "north_america",
+      "europe"
+    ],
+    "specialties": [
+      "co_marketing"
+    ]
+  },
+  {
+    "id": "sunrise-publishing",
+    "name": "Sunrise Publishing",
+    "markets": [
+      "japan",
+      "europe"
+    ],
+    "specialties": [
+      "advance"
+    ]
+  },
+  {
+    "id": "pixel-bridge",
+    "name": "Pixel Bridge",
+    "markets": [
+      "north_america",
+      "europe",
+      "japan"
+    ],
+    "specialties": [
+      "co_marketing",
+      "advance"
+    ]
+  }
+]

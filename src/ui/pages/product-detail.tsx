@@ -2,6 +2,7 @@ import React from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import { displayPriceCents } from '@ui/components/product-metrics'
 import type { MarketingChannel } from '@domain/value-objects/marketing-response'
+import { PUBLISHERS } from '@content/publishers'
 
 interface Props { productId: string; onNavigate: (route: string, param?: string) => void }
 
@@ -12,7 +13,7 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   const {
     products, refundBatches, marketingCampaigns, publishingContracts,
     setProductPrice, applyProductDiscount, retireProduct, setMarketingBudget,
-    signRevenueShare, signMilestone, signContractTemplate, toast, dayIndex,
+    signRevenueShare, signMilestone, signContractTemplate, estimateContract, toast, dayIndex,
   } = store
   const product = products.find((p) => p.id === productId)
 
@@ -29,6 +30,9 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   const [commitmentYuan, setCommitmentYuan] = React.useState('')
   const [quality, setQuality] = React.useState('60')
   const [deliveryDay, setDeliveryDay] = React.useState('')
+  const [marketScope, setMarketScope] = React.useState('')
+  const [platformScope, setPlatformScope] = React.useState('')
+  const [estimate, setEstimate] = React.useState<import('@simulation/services/contract-estimate').ContractEstimate | null>(null)
 
   /** Hook 必须在任何 early return 之前调用（rules-of-hooks），产品缺失时返回空表。 */
   const salesByDay = React.useMemo(() => {
@@ -95,18 +99,33 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
     toast(r.message ?? '', r.success ? 'success' : 'error')
   }
 
-  const submitTemplate = () => {
+  const templateCmd = () => {
     const days = Number(durationDays || '0')
-    const r = signContractTemplate({
+    return {
       productId: product.id,
       template: tpl,
       ratePercent: Number(ratePercent),
       durationDays: days === 0 ? null : days,
-      partnerId: partnerId.trim(),
+      partnerId,
+      ...(marketScope.trim() === '' ? {} : { marketScope: marketScope.split(',').map((x) => x.trim()).filter(Boolean) }),
+      ...(platformScope.trim() === '' ? {} : { platformScope: platformScope.split(',').map((x) => x.trim()).filter(Boolean) }),
       ...(tpl === 'advance' ? { prepaymentCents: parseYuan(prepayYuan) ?? 0 } : {}),
       ...(tpl === 'co_marketing' ? { marketingCommitmentCents: parseYuan(commitmentYuan) ?? 0 } : {}),
       ...(tpl === 'advance' ? { qualityThreshold: Number(quality) || 60 } : {}),
       ...(tpl === 'advance' && deliveryDay !== '' ? { deliveryDay: Number(deliveryDay) } : {}),
+    }
+  }
+
+  const runEstimate = () => {
+    const est = estimateContract(templateCmd())
+    if (est === null) return toast(t('error.noCompany'), 'error')
+    setEstimate(est)
+    toast(t('contract.estimateDone'), 'info')
+  }
+
+  const submitTemplate = () => {
+    const r = signContractTemplate({
+      ...templateCmd(),
     })
     toast(r.message ?? '', r.success ? 'success' : 'error')
   }
@@ -197,13 +216,23 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
             <option value="co_marketing">{t('contract.template.co_marketing')}</option>
             <option value="advance">{t('contract.template.advance')}</option>
           </select>
-          <input placeholder={t('contract.partnerId')} value={partnerId} onChange={(e) => setPartnerId(e.target.value)} style={{ width: 130 }} />
+          <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}>
+            {PUBLISHERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <input placeholder={t('contract.marketScope')} value={marketScope} onChange={(e) => setMarketScope(e.target.value)} style={{ width: 120 }} />
+          <input placeholder={t('contract.platformScope')} value={platformScope} onChange={(e) => setPlatformScope(e.target.value)} style={{ width: 130 }} />
           {tpl === 'advance' ? <input placeholder={t('contract.prepay')} value={prepayYuan} onChange={(e) => setPrepayYuan(e.target.value)} style={{ width: 130 }} /> : null}
           {tpl === 'co_marketing' ? <input placeholder={t('contract.commitment')} value={commitmentYuan} onChange={(e) => setCommitmentYuan(e.target.value)} style={{ width: 130 }} /> : null}
           {tpl === 'advance' ? <input placeholder={t('contract.quality')} value={quality} onChange={(e) => setQuality(e.target.value)} style={{ width: 90 }} /> : null}
           {tpl === 'advance' ? <input placeholder={t('contract.deliveryDay')} value={deliveryDay} onChange={(e) => setDeliveryDay(e.target.value)} style={{ width: 100 }} /> : null}
+          <button className="btn btn-secondary btn-small" onClick={runEstimate}>{t('contract.estimate')}</button>
           <button className="btn btn-small" onClick={submitTemplate}>{t('contract.signTemplate')}</button>
         </div>
+        {estimate === null ? null : (
+          <div style={{ fontSize: 12, marginBottom: 8 }}>
+            {t('contract.projectedNet')}: {formatMoney(estimate.projectedNetCents)} · {t('contract.projectedProceeds')}: {formatMoney(estimate.projectedPlayerProceedsCents)} · {t('contract.worstNet')}: {formatMoney(estimate.worstNetCents)} · {t('contract.worstProceeds')}: {formatMoney(estimate.worstPlayerProceedsCents)}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           <input placeholder={t('contract.threshold')} value={thresholdYuan} onChange={(e) => setThresholdYuan(e.target.value)} style={{ width: 140 }} />
           <input placeholder={t('contract.payout')} value={payoutYuan} onChange={(e) => setPayoutYuan(e.target.value)} style={{ width: 110 }} />

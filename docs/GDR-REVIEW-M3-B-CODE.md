@@ -1,7 +1,7 @@
 # 编码审核：M3-B 发行合同三模板
 
 - 结论：**PASS_WITH_NOTES**（P1=0，P2=2，P3=3）
-- 基线 59/545 → 本批 60/552
+- 基线 59/545 → 本批 60/555（B1 552 + B2 3 条）
 
 ## 1. 行号级核对
 
@@ -19,7 +19,11 @@
 | 交付违约 | `delivery-clawback` 分支 | PASS：C05 day 91 追回 30%、合同 terminated |
 | 结算幂等键 | `contract:${id}:${day}` / `refund:${batch.id}` / `quality-clawback` / `delivery-clawback` / `contract-prepay` | PASS：无键冲突 |
 | UI 入口 | `product-detail.tsx` 模板下拉 + 4 个条件输入 + 合同表两列 | PASS（最小入口）：能签署三种模板并看到回收进度 |
-| 存档写回 | `game-world.ts:985` `signContractTemplate` | PASS：world 与 finance `transactions` 同步，重载不丢预付款流水 |
+| 存档写回 | `game-world.ts` `signContractTemplate` | PASS：world 与 finance `transactions` 同步，重载不丢预付款流水 |
+| 发行商白名单 | `publishers.json` + `contract-service` `getPublisherSpec` 校验 | PASS：C09 未知 id 与不支持模板均拒绝 |
+| 签署前估算 | `contract-estimate.ts` 90 天窗口/365 天平推/最差 −50% | PASS：C07 平坦历史偏差 0%；到手与回收月数按模板 |
+| 交付违约账面 | delivery/quality 分支 `recoupedCents += clawback` | PASS：C05 3,000,000；质量分支同改 |
+| 控制权 | `hasFullControl` + `GameWorld` 三入口拦截 | PASS：C10 锁判定；三个玩家入口返回 `CONTRACT_CONTROL_LOCKED` |
 
 ## 2. 自捉问题（本轮修掉）
 
@@ -30,8 +34,8 @@
 
 ## 3. NOTE（转后续）
 
-- **N-1（P2）交付违约后 `recoupedCents` 不调整**：追回额按「未回收余额 ×30%」计算并扣现金，但合同终止后 `recoupedCents` 仍停在旧值，账面「已回收」与「实际回收」不一致。当前合同 terminated 不再结算，不影响现金；若未来做合同复盘/审计页，会出现对不上。建议 M3-B2 在追回时同步按追回额冲减 `recoupedCents`，并补一条断言。
-- **N-2（P2）`controlLevel` 只存不用**：三种模板写入 `shared/full`，但结算、UI、事件均未消费。规格 §5 若要求展示控制权，需要在合同表加列；否则应在字段注释标明「预留」。
-- **N-3（P3）`partnerId` 未接内容表**：R2 NOTE 要求只能来自内容表，仓库暂无发行商内容表，当前为自由输入；M3-B2 建表后加白名单校验。
+- **N-1（P2）C07 只覆盖基准、平坦历史**：偏差 0% 来自每日 1,000,000 的等值假设；真实波动、促销、退款季节性的 ±20% 边界未验证。建议补一条带 30% 月度波动的 C07-b。
+- **N-2（P2）悲观估算未逐项重算三参数**：规格 §5 给了受众 −30%、竞品 +30%、退款率 +5pp，但当前直接取「净收入 −50%」。结论可复现，口径却在规格里有两套；需在规格 v1.2 二选一。
+- **N-3（P3）控制权只拦玩家入口**：`GameWorld` 三个命令已拦；AI 走 `pricing`/`marketing` 服务直调，不受玩家合同约束。AI 不会签玩家的合同，当前无实际绕过，但入口审计不完整。
 - **N-4（P3）co_marketing 不计入营销支出**：只注入认知度、不写营销流水；与「发行商承担」口径一致，但报表侧看不到这笔投入，需在统计口径确认。
-- **N-5（P3）UI 无范围选择与签署前估算**：`marketScope`/`platformScope` 只能走 API；C07 估算未做，已在交付文档登记转 M3-B2。
+- **N-5（P3）估算未进 AI 决策记录**：§5 要求 `AIDecisionRecord.candidates[].revenue` 引用同一模拟；AI 仍用自己的 EV，未接 `estimateContractProceeds`。

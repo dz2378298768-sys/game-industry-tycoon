@@ -1,7 +1,7 @@
-# M3 产业生态范围裁定（v0.3 DRAFT）
+# M3 产业生态范围裁定（v0.4 DRAFT）
 
-状态：DRAFT，待 R2
-用途：回应 R1 的 8 个 P1，并用现实游戏公司的经营约束校准参数
+状态：DRAFT，待 R3
+用途：回应 R1/R2 的 16 个 P1，并用现实游戏公司的经营约束校准参数
 
 ## 1. R1 回应摘要
 
@@ -16,6 +16,19 @@
 | P1-7 指标不可计算 | 定义有效竞争者、成熟市场、CR4、HHI、连续份额 | §6.7 |
 | P1-8 需求池确定性与性能 | 池索引、稳定排序、定点数、复杂度上限、缓存失效 | §6.8 |
 
+## 1.1 R2 回应摘要
+
+| R2 P1 | 处置 | 落点 |
+|---|---|---|
+| P1-1 runway 双计人工 | 项目预算只算项目现金需求；runway 用总月 burn 计算，不预扣整个预算 | §2.1 |
+| P1-2 需求池单位所有权 | 平台装机量、受众占比、购买意图、活跃度各只乘一次 | §6.1 |
+| P1-3 认知度投影不守恒 | 投影按产品支持 scope 归一化，总和等于原市场认知度 | §6.2 |
+| P1-4 恢复线与 runway 冲突 | 恢复线 = max($4,000, 3 个月公司固定支出)，恢复后先进 warning | §6.6 |
+| P1-5 上市营销预算循环 | 营销基数剔除营销本身，`projectBudget = base + launchMarketing` | §2.3 |
+| P1-6 影子模式污染状态 | 克隆世界/只读计算，不写销售、现金、认知度 | §6.9 |
+| P1-7 存档兼容未闭环 | 升 `SAVE_SCHEMA_VERSION=3`，解析器兼容 1/2/3，不做降级 | §8 |
+| P1-8 C4 费率改动破坏 B | 新旧费率用 `rateProfile` 隔离，B 用 legacy，C4 用 realistic | §6.10 |
+
 ## 2. 现实校准
 
 现实公司不是“每月做一堆动作”，而是被几条硬约束推着走。以下六条直接改设计。
@@ -24,12 +37,23 @@
 
 工作室财务实践把 12 个月 runway 视为融资最低线，6 个月是危险区，3 个月是危机。当前 C1 只用 3 个月 reserve，等于长期让 AI 在危机线上运行。
 
-设计改为三级：
+设计改为三级，并用总月 burn 计算，不预扣整个项目预算：
 
-- `healthy`：≥12 个月固定支出；
+```
+corporateFixedMonthly = 房租/软件/行政/未分配人员
+projectMonthlyBurn = 项目全负荷人工 + 外包/QA/认证/营销的月度分摊
+runwayMonths = cash / (corporateFixedMonthly + Σ activeProjectMonthlyBurn)
+```
+
+- `healthy`：≥12 个月；
 - `warning`：6–12 个月，冻结招聘、压缩营销、评估缩编；
 - `crisis`：<6 个月，启动裁员/取消项目；
-- `bankrupt`：<3 个月且现金为负，进入重整。
+- `bankrupt`：<3 个月且无法支付下月工资，进入重整。
+
+立项只做两道检查：
+
+1. `cash - next90DaysProjectOutflow >= 3 × corporateFixedMonthly`；
+2. 立项后的 pro forma runway ≥12 个月；6–12 个月必须同时有缩编/降档方案。
 
 ### 2.2 工资是“全负荷成本”，项目预算要覆盖全周期
 
@@ -39,14 +63,16 @@
 
 ```
 fullyLoadedMonthlyCost = salary × 1.25
-projectBudget = 全周期全负荷人工
+marketingBase = 全周期全负荷人工
               + 外包/美术/音频
               + QA/本地化/认证
-              + 上市营销
               + 10% 预备金
+launchMarketingBudget = marketingBase × launchMarketingRatio
+projectBudget = marketingBase + launchMarketingBudget
+projectCashSchedule = 按里程碑分摊的现金支出，不一次性从现金扣除
 ```
 
-项目预算不再是“现金比例 × 上限”。
+项目预算不再是“现金比例 × 上限”，也不在立项时一次性扣减全部预算；现金流只按未来 90 天里程碑支出校验。
 
 ### 2.3 营销是项目预算的一部分，不能只按上月收入投放
 
@@ -60,8 +86,10 @@ projectBudget = 全周期全负荷人工
 
 设计改为两条线：
 
-- `launchMarketingBudget`：立项时按项目预算比例预留，上市前 6 个月开始花；
+- `launchMarketingBudget`：立项时按 `marketingBase`（不含营销本身）的比例预留，上市前 6 个月开始花；
 - `ongoingMarketingBudget`：上市后按上月收入 × `persona.marketingRatio`，设上限与下限。
+
+`projectBudget = marketingBase + launchMarketingBudget`，营销不再作为自身基数。
 
 ### 2.4 发行合同的核心不是分成比例，是预付款与回收
 
@@ -136,21 +164,49 @@ C1 六项机制拆成五段：
 - 池内守恒：`Σ units_i ≤ poolUnits`；池间不重复分配。
 - 若产品支持平台已停产，不能进入该池；已上市产品按平台活跃度衰减。
 
+单位所有权表（每个因子只能乘一次）：
+
+| 因子 | 唯一来源 | 定义 |
+|---|---|---|
+| 平台用户总量 | `platform.installBase(day)` | 该平台累计用户，按生命周期曲线 |
+| 平台活跃率 | `platformActivity(day)` | 0–1，装机量活跃比例 |
+| 受众占比 | `segment.share(platform, day)` | 该平台活跃用户中属于该受众的比例，Σ=1 |
+| 购买意图 | `purchaseIntent(segment, day)` | 该受众在观察窗口内考虑购买的概率 |
+
+```
+poolUnits(scope, day) =
+  installBase(platform, day)
+  × platformActivity(platform, day)
+  × segment.share(platform, segment, day)
+  × purchaseIntent(segment, day)
+```
+
+`eligibleAudience` 只是 `installBase × platformActivity × segment.share` 的派生值，不再二次乘 `purchaseIntent` 或 `platformActivity`。
+
 ### 6.2 认知度作用域
 
-- 新增 `Product.awarenessByScope?: Record<scopeKey, number>`；
-- 旧档只有 `awarenessByMarket` 时，按 `scope = market × platform × segment` 投影：
-  `awarenessScope = awarenessMarket × platformAwarenessShare × segmentFit`；
+- 新增 `Product.awarenessByScope?: Record<scopeKey, number>`，作为唯一写入源；
+- 旧档只有 `awarenessByMarket` 时，按产品支持的 scope 投影并归一化：
+
+```
+rawScope = awarenessMarket × platformAwarenessShare × segmentFit
+norm = Σ rawScope over supported scopes
+awarenessScope = rawScope / norm × awarenessMarket   (norm > 0)
+```
+
+- 投影后 `Σ awarenessScope = awarenessMarket`，不因多平台/多受众放大；
+- `awarenessByMarket` 变为派生汇总值，只读，不再双写；
 - 营销投放携带 `platformIds?`、`segmentIds?`；缺省为全平台/全受众；
-- 新营销只写 `awarenessByScope`；旧字段保留用于兼容与汇总。
+- 营销预算按 scope 分配，不重复计费。
 
 ### 6.3 需求模型公式
 
 ```
 poolUnits(scope, day) =
-  eligibleAudience(scope, day)
-  × purchaseIntent(segment, day)
+  installBase(platform, day)
   × platformActivity(platform, day)
+  × segment.share(platform, segment, day)
+  × purchaseIntent(segment, day)
 ```
 
 ```
@@ -219,7 +275,8 @@ platformFeeRate: number
 - 合同债务：按终止条款结算，违约追回按合同；
 - 资产处置：允许一次性出售产品/IP/团队合同，估值 = 过去 12 个月净收入 × 0.5–1.5，需有买家；无买家不计现金；
 - 固定成本：按缩减后的团队与办公计，不再按原规模；
-- 恢复条件：现金 ≥ 恢复线，且连续 30 天经营现金流 ≥ 0；
+- 恢复线：`recoveryLine = max($4,000, 3 × corporateFixedMonthly)`；
+- 恢复条件：现金 ≥ 恢复线，且连续 30 天经营现金流 ≥0；恢复后进入 `active + warning`，runway ≥6 个月才允许新立项；
 - 90 天主动重整；第 90 天未恢复但现金流改善，可延长一次至 180 天；360 天未恢复则解散；
 - 不注资、不豁免工资、不锁份额。
 
@@ -241,6 +298,20 @@ platformFeeRate: number
 - 复杂度目标：`O(P × S)`，P=在售产品，S=每产品覆盖池；禁止每池全表扫描；
 - 缓存池总量与分母，产品进入/退出、价格/营销变化时失效；
 - 需求池不存档，按日重算；存档只保留产品状态、认知度、价格、合同。
+
+### 6.9 Stage 0 影子模式
+
+- 在克隆世界或纯只读计算中跑新需求公式，不写销售、不扣现金、不更新认知度；
+- 对照指标：池总量、份额和、销量量级、TOP 10 产品排序、守恒误差；
+- 切换条件：连续 2 年 × 8 seed，守恒误差 = 0，销量差异可解释；
+- 影子结果不进存档，不影响正式世界。
+
+### 6.10 合同费率隔离
+
+- `PublishingContract` 增 `rateProfile: 'legacy' | 'realistic'`；
+- 旧合同 `legacy`，继续按 15–30% 结算；新合同 `realistic`，按 channel 20–30%、co_marketing 25–40%、advance 35–50%；
+- 结算按合同自身的 `rateProfile`，不按全局常量；
+- B 系列用例继续跑 legacy；C4 新增 realistic 用例，不重开 B 的结论。
 
 ## 7. 验收用例（增补）
 
@@ -265,11 +336,13 @@ platformFeeRate: number
 
 ## 8. 存档与迁移
 
-- `awarenessByScope` 可选；旧档按 §6.2 投影，不升 `SAVE_SCHEMA_VERSION`；
+- `SAVE_SCHEMA_VERSION = 3`；
+- 解析器兼容 1/2/3；v2 的 `bankrupt` 载入时映射为 `restructuring`，并生成默认 `recoveryPlan`；
+- `awarenessByScope` 写入时 `awarenessByMarket` 只做派生汇总，不双写；
 - 平台生命周期字段可选；旧档缺省按 1970–2026 默认曲线回填；
-- 重整状态新增 `restructuring` 子状态与 `recoveryPlan`，旧档 `bankrupt` 视为 `restructuring` 起点；
 - 资产处置记录新增 `assetSales[]`，可选；
-- 所有新字段 `.optional()`，不破坏旧档。
+- v3 → v2 不做降级，文档明确“旧版本不能读新档”；
+- 迁移测试：v2 档载入、关键字段不丢、重整状态可继续、再存为 v3 可复现。
 
 ## 9. 风险
 
@@ -279,13 +352,14 @@ platformFeeRate: number
 4. 资产处置估值可能被套利。缓解：买家必须是真实 AI 公司，估值上限按过去 12 个月净收入 1.5 倍，且现金支付。
 5. 平台生命周期数据量大，1970–2026 曲线需要内容团队校准。
 
-## 10. R2 开放问题
+## 10. R3 验收重点
 
-1. 上市营销比例按项目预算还是按总预算？独立 15–30%、AA 25–50%、AAA 75–100% 是否直接映射到三类 persona？
-2. 预付款合同的分成区间是否在 C4 调整为 35–50%？这会改变已 CLOSED 的 B 系列平衡。
-3. 资产处置是否允许卖给玩家公司？若允许，玩家可低价收购 AI IP，可能形成套利。
-4. 平台 `installBaseCurve` 用绝对销量还是相对指数？绝对销量更真实，但内容工作量大。
-5. Stage 0 影子模式跑多久？建议至少 2 年 8 seed，确认守恒与销量量级后再切换。
+1. 营销比例映射：indie 15–30%、genre_specialist 25–50%、integrated 75–100%，按 `marketingBase` 计算。
+2. 预付款费率走 `realistic` profile，B 系列继续 `legacy`，不重开 B 的结论。
+3. C1 资产处置只卖给 AI 公司；玩家收购留到 M4。
+4. 平台装机量用绝对销量（百万台），1970–2026 由内容表维护；缺省用相对指数回退。
+5. 影子模式至少 2 年 × 8 seed，守恒误差 0 才切换。
+6. P0-2 修订先冻结恢复线、重整会计、状态映射，C1 v1.1 不得自行改。
 
 ## 11. 参考来源
 

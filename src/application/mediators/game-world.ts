@@ -28,6 +28,8 @@ import { ContractService } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
+import { availablePlatforms, availableSegments } from '@content/queries'
+import { genres } from '@content/index'
 import {
   citySalaryMultiplier,
   isPlatformAvailable,
@@ -817,6 +819,32 @@ export class GameWorld {
     })
   }
 
+  /** AI 立项内容：按当年可用平台/受众与公司 id 确定性选择，避免全行业永远做 1970 街机。 */
+  private aiProjectContent(company: { id: string }, dayIndex: number): {
+    genreId: string
+    segmentId: string
+    platformId: string
+  } {
+    const platforms = availablePlatforms(dayIndex)
+    const platform = platforms[platforms.length - 1]!
+    const segments = availableSegments(dayIndex)
+    const preferred =
+      platform.platformType === 'home_console'
+        ? 'home_players'
+        : platform.platformType === 'pc'
+          ? 'pc_gamers'
+          : platform.platformType === 'mobile'
+            ? 'mobile_gamers'
+            : platform.platformType === 'online'
+              ? 'online_gamers'
+              : 'arcade_enthusiasts'
+    const segment = segments.find((s) => s.id === preferred) ?? segments[segments.length - 1]!
+    let hash = 0
+    for (const ch of company.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+    const genre = genres[hash % genres.length]!
+    return { genreId: genre.id, segmentId: segment.id, platformId: platform.id }
+  }
+
   private runAiMonthly(dayIndex: number): void {
     if (!this.aiCompetitionEnabled) return
     const aiCompanies = this.world.companies
@@ -829,13 +857,14 @@ export class GameWorld {
         case 'START_PROJECT': {
           const budget = this.aiBudget(company)
           if (budget <= 0) break
+          const content = this.aiProjectContent(company, dayIndex)
           const created = this.withProjects(() =>
             this.projects.create({
               name: `${company.name} 新作`,
               companyId: company.id,
-              genreId: 'action',
-              audienceSegmentIds: ['arcade_enthusiasts'],
-              targetPlatformIds: ['arcade_pre_1975'],
+              genreId: content.genreId,
+              audienceSegmentIds: [content.segmentId],
+              targetPlatformIds: [content.platformId],
               budgetTotalCapCents: budget,
               plannedStartDay: dayIndex,
               plannedLaunchDay: dayIndex + 120,

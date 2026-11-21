@@ -109,6 +109,11 @@ export class RefundService {
   private postedUnitsByRecord = new Map<string, number>()
   private countedBatchIds = new Set<string>()
   private indexSeeded = false
+  /** refundDayIndex → 批次；避免每日对全表做 filter。 */
+  private dueIndex = new Map<number, RefundBatch[]>()
+  private indexedBatchCount = 0
+  private lastIndexedBatchId: string | null = null
+  private scannedThroughDay = -1
 
   constructor(private readonly deps: RefundServiceDeps) {}
 
@@ -137,22 +142,29 @@ export class RefundService {
   // ---------- 到期兑现（F2–F5） ----------
 
   processDueRefunds(world: WorldState, dayIndex: number): RefundProcessResult {
-    const due = world.refundBatches
-      .filter((b) => isRefundBatchDue(b, dayIndex))
-      .slice()
-      .sort(compareRefundBatchesForPosting)
+    const due = this.collectDue(world, dayIndex)
+    if (due.length === 0) {
+      return { world, postedBatchIds: [], rejectedBatchIds: [], failed: [] }
+    }
 
     // 阶段 1：预检（无任何资金副作用）。全部通过后才进入入账。
     const checked = this.precheckAll(world, due)
 
-    // 阶段 2：一次性复制工作副本，逐条就地入账（避免每条批次都整表复制）。
+    // 阶段 2：只深拷贝会变动的批次/产品/销售记录；其余共享引用。
+    const dueIds = new Set(due.map((b) => b.id))
+    const affectedProducts = new Set(due.map((b) => b.productId))
+    const recordIds = new Set(due.map((b) => b.salesRecordId))
     const draft: WorldState = {
       ...world,
-      refundBatches: world.refundBatches.map((b) => ({ ...b })),
-      products: world.products.map((p) => ({
-        ...p,
-        salesByPeriod: p.salesByPeriod.map((r) => ({ ...r })),
-      })),
+      refundBatches: world.refundBatches.map((b) => (dueIds.has(b.id) ? { ...b } : b)),
+      products: world.products.map((p) =>
+        affectedProducts.has(p.id)
+          ? {
+              ...p,
+              salesByPeriod: p.salesByPeriod.map((r) => (recordIds.has(r.id) ? { ...r } : r)),
+            }
+          : p,
+      ),
       events: [...world.events],
       transactions: [...world.transactions],
     }
@@ -187,6 +199,35 @@ export class RefundService {
     }
 
     return { world: draft, postedBatchIds, rejectedBatchIds, failed }
+  }
+
+  /** 增量到期索引：只把新追加的批次入桶，按日取桶，不再全表 filter。 */
+  private collectDue(world: WorldState, dayIndex: number): RefundBatch[] {
+    const list = world.refundBatches
+    const lastId = this.indexedBatchCount > 0 ? list[this.indexedBatchCount - 1]?.id ?? null : null
+    if (list.length < this.indexedBatchCount || lastId !== this.lastIndexedBatchId) {
+      this.dueIndex.clear()
+      this.indexedBatchCount = 0
+      this.lastIndexedBatchId = null
+      this.scannedThroughDay = -1
+    }
+    for (let i = this.indexedBatchCount; i < list.length; i += 1) {
+      const batch = list[i]!
+      const bucket = this.dueIndex.get(batch.refundDayIndex)
+      if (bucket === undefined) this.dueIndex.set(batch.refundDayIndex, [batch])
+      else bucket.push(batch)
+    }
+    this.indexedBatchCount = list.length
+    this.lastIndexedBatchId = list[list.length - 1]?.id ?? null
+
+    const from = Math.max(0, this.scannedThroughDay + 1)
+    const due: RefundBatch[] = []
+    for (let d = from; d <= dayIndex; d += 1) {
+      const bucket = this.dueIndex.get(d)
+      if (bucket !== undefined) due.push(...bucket.filter((b) => isRefundBatchDue(b, dayIndex)))
+    }
+    this.scannedThroughDay = Math.max(this.scannedThroughDay, dayIndex)
+    return due.sort(compareRefundBatchesForPosting)
   }
 
   private postOneMutable(

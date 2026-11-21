@@ -129,7 +129,7 @@ poolUnits(product, scope) = audienceUnits(scope)
 ### 3.2 认知度
 
 - `awarenessByScope[scope]` 是唯一可写认知度；
-- 上市前 90 天给 `launchAwarenessFloor = (0.05 + 0.10 × 平台商店可见度 × 类型匹配) × qualityGate`，上限 0.15；`qualityGate = clamp((finalQualityScore - 40) / 40, 0, 1)`，质量 <40 时为 0；90 天后按正常衰减，不做永久加成；
+- 上市前 90 天给 `launchAwarenessFloor = (0.05 + 0.10 × 平台商店可见度 × 类型匹配) × qualityGate`，上限 0.15；`qualityGate = clamp((finalQualityScore - 40) / 40, 0, 1)`，质量 <40 时为 0；90 天窗口结束后再用 90 天线性淡出到 0，不做永久加成；
 - `attraction` 只读 `max(awarenessByScope[scope], launchFloor(day))`，不按市场投影；
 - 多平台多受众时，每个 scope 独立衰减、独立营销、独立竞争；
 - `awarenessByMarket` 只做汇总展示，不参与销售计算。

@@ -52,3 +52,14 @@ export {
   resolveDiscount,
 } from './product-pricing'
 export * from './marketing-response'
+
+// ===== P1 产品蓝图领域内核（D-01 / D-04）纯函数 =====
+export * from './product-blueprint-tuning'
+export * from './product-blueprint-violation'
+export * from './product-blueprint-resolve-refs'
+export * from './product-blueprint-estimation'
+export * from './product-blueprint-hrb'
+export * from './product-blueprint-composition'
+export * from './product-blueprint-revalidation'
+export * from './product-blueprint-lifecycle'
+export * from './product-blueprint-rework-cost'

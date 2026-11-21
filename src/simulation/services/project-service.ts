@@ -293,6 +293,36 @@ export class ProjectService {
     )
   }
 
+  /** C1-T6：给项目补充开发预算；预算耗尽态补足后自动恢复。 */
+  fund(projectId: string, amountCents: number, dayIndex = 0): CommandResult<Project> {
+    const p = this.assertProject(projectId)
+    if (p.phase === 'LAUNCHED' || p.phase === 'CANCELLED') {
+      return fail('PRJ_CANNOT_FUND', 'Terminal project cannot be funded')
+    }
+    if (!Number.isFinite(amountCents) || !Number.isInteger(amountCents) || amountCents <= 0) {
+      return fail('PRJ_INVALID_BUDGET', 'amountCents must be a positive integer')
+    }
+    const wasExhausted = p.budgetExhausted === true
+    const dev = (p.developmentBudgetCents ?? p.budgetTotalCapCents) + amountCents
+    return ok(
+      this.updateInPlace({
+        ...p,
+        budgetTotalCapCents: p.budgetTotalCapCents + amountCents,
+        developmentBudgetCents: dev,
+        budgetExhausted: wasExhausted ? false : (p.budgetExhausted ?? false),
+        isPaused: wasExhausted ? false : p.isPaused,
+        pauseReason: wasExhausted ? null : (p.pauseReason ?? null),
+        riskFlags: wasExhausted
+          ? p.riskFlags.filter((f) => f !== 'budget_exhausted')
+          : p.riskFlags,
+        pausedDays: wasExhausted ? 0 : p.pausedDays,
+        resumeSeq: wasExhausted ? (p.resumeSeq ?? 0) + 1 : (p.resumeSeq ?? 0),
+        version: p.version + 1,
+        updatedAt: dayIndex,
+      }),
+    )
+  }
+
   cancel(projectId: string, reason: CancellationReason, dayIndex?: number): CommandResult<Project> {
     const p = this.assertProject(projectId)
     if (p.phase === 'LAUNCHED') return fail('PRJ_ALREADY_LAUNCHED', 'Launched project cannot be cancelled')

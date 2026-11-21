@@ -36,6 +36,12 @@ export const TUNING = {
     baseMonthlyRentCents: 140_000,
     /** 单位：倍率。办公室等级对租金的乘数基准。 */
     officeLevelRentMultiplier: 1,
+    /** 单位：比例。项目预备金 = (人工 + 非人工) × 本值。 */
+    projectContingencyRatio: 0.1,
+    /** 单位：比例。QA/本地化/认证等非工资源 = 人工成本 × 本值。 */
+    projectNonLaborRatio: 0.15,
+    /** 单位：美分。低于该预算不立项。 */
+    minProjectBudgetCents: 2_000_000,
   },
 
   employee: {
@@ -131,6 +137,7 @@ export const TUNING = {
         brand: 8,
         budgetRatioCap: 0.35,
         marketingRatio: 0.06,
+        projectMarketingRatio: { min: 0.15, max: 0.3 },
         riskAversion: 0.65,
         cooperative: 0.5,
       },
@@ -140,6 +147,7 @@ export const TUNING = {
         brand: 15,
         budgetRatioCap: 0.45,
         marketingRatio: 0.12,
+        projectMarketingRatio: { min: 0.25, max: 0.5 },
         riskAversion: 0.45,
         cooperative: 0.6,
       },
@@ -149,6 +157,7 @@ export const TUNING = {
         brand: 25,
         budgetRatioCap: 0.55,
         marketingRatio: 0.18,
+        projectMarketingRatio: { min: 0.75, max: 1.0 },
         riskAversion: 0.3,
         cooperative: 0.75,
       },

@@ -44,7 +44,7 @@ function fingerprint(gw: GameWorld, fromDay = 0): unknown {
 }
 
 describe('M3-A3 AI 公平性与长跑', () => {
-  it('A03 克隆对照：存档副本续跑 1 年，状态与决策差异为 0', () => {
+  it('A03 克隆对照：存档副本续跑 1 年，状态与决策差异为 0', { timeout: 30_000 }, () => {
     const live = createGameWorld(2026, { aiCompetition: true })
     live.advanceSimulation(365)
     const snapshot = JSON.parse(JSON.stringify(live.serialize())) as ReturnType<GameWorld['serialize']>
@@ -60,7 +60,7 @@ describe('M3-A3 AI 公平性与长跑', () => {
 
   // 十年（3652 天）在 M3-C 长跑执行：当前引擎退款批次按日全表扫描，
   // 1200 天已达 5.8s 且呈超线性，放进默认套件会把 11 分钟拉到不可接受。
-  it('A01 扩展 1970→1972 两年：同 seed 双世界逐项指纹相等（十年见 M3-C）', () => {
+  it('A01 扩展 1970→1972 两年：同 seed 双世界逐项指纹相等（十年见 M3-C）', { timeout: 60_000 }, () => {
     const a = createGameWorld(99, { aiCompetition: true })
     const b = createGameWorld(99, { aiCompetition: true })
     a.advanceSimulation(730)

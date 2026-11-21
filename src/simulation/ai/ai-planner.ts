@@ -18,6 +18,13 @@ import {
   MARKETING_BUDGET_MAX_CENTS,
   MARKETING_BUDGET_MIN_CENTS,
 } from '@domain/value-objects/marketing-response'
+import {
+  MIN_POST_PROJECT_RUNWAY_MONTHS,
+  RESERVE_MONTHS,
+  computeProjectBudgetCents,
+  evaluateProjectGate,
+  projectMonthlyBurnCents,
+} from './ai-runway'
 
 export type AiAction =
   | 'START_PROJECT'
@@ -80,6 +87,14 @@ export interface AiCompanyView {
     activeCampaignCount?: number
   }>
   staffCount?: number
+  /** C1 Stage 1：在职员工月薪合计（含已分配到项目的 FTE） */
+  monthlyPayrollCents?: number
+  /** 在研项目数（含暂停） */
+  activeProjectCount?: number
+  /** 现有活跃项目月烧钱合计；暂停项目不计入 */
+  existingProjectMonthlyBurnCents?: number
+  /** 应付账款；当前无 AP 账本时为项目已承诺额 */
+  accountsPayableCents?: number
 }
 
 export interface AiCandidateRecord {
@@ -110,8 +125,6 @@ export interface AiPlan extends AiDecisionRecordInput {
   /** 执行参数；判别联合，编译期必填 */
   params: AiActionParams
 }
-
-const RESERVE_MONTHS = 6
 
 function monthKey(day: number): string {
   // 仅用于记录分组，不参与计算
@@ -267,11 +280,44 @@ function marketingBudgetCents(view: AiCompanyView): number {
   return Math.max(MARKETING_BUDGET_MIN_CENTS, Math.min(MARKETING_BUDGET_MAX_CENTS, raw))
 }
 
+function payrollOf(view: AiCompanyView): number {
+  if (view.monthlyPayrollCents !== undefined) return Math.max(0, view.monthlyPayrollCents)
+  const persona = TUNING.ai.persona[view.persona]
+  return (view.staffCount ?? persona.teamSize) * TUNING.employee.defaultStartingSalaryCents
+}
+
+function existingBurnOf(view: AiCompanyView): number {
+  if (view.existingProjectMonthlyBurnCents !== undefined) {
+    return Math.max(0, view.existingProjectMonthlyBurnCents)
+  }
+  const p = view.project
+  if (p === null || p === undefined) return 0
+  return projectMonthlyBurnCents(
+    {
+      isPaused: p.isPaused,
+      developmentRemainingCents: p.budgetRemainingCents ?? 0,
+      plannedLaunchDay: p.plannedLaunchDay,
+      retainedTeamCostCents: 0,
+    },
+    0,
+  )
+}
+
 function chooseChannel(seed: number, companyId: string, day: number, productId: string): MarketingChannel {
   const value = hash01(seed, companyId, day, `channel:${productId}`)
   if (value < 0.45) return 'social'
   if (value < 0.75) return 'expo'
   return 'ads'
+}
+
+/** 立项预算：与月份决策同一 seed 口径，供执行段复用。 */
+export function suggestedStartBudget(view: AiCompanyView, day: number, seed: number, plannedDays = 120) {
+  return computeProjectBudgetCents({
+    monthlyPayrollCents: payrollOf(view),
+    plannedDays,
+    persona: view.persona,
+    marketingJitter: 0.8 + hash01(seed, view.id, day, 'budgetMarketing') * 0.4,
+  })
 }
 
 /**
@@ -285,7 +331,6 @@ function chooseChannel(seed: number, companyId: string, day: number, productId: 
  */
 export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan {
   const persona = TUNING.ai.persona[view.persona]
-  const reserve = view.monthlyFixedExpenseCents * RESERVE_MONTHS
   const budget = Math.round(Math.min(view.cashCents * persona.budgetRatioCap, 5_000_000))
   const candidates: AiCandidateRecord[] = []
 
@@ -329,8 +374,26 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
 
   const project = view.project
   if (project === null) {
-    const failed: string[] = []
-    if (view.cashCents < reserve) failed.push('CASH_RESERVE')
+    const plannedDays = 120
+    const proposed = suggestedStartBudget(view, day, seed, plannedDays)
+    const activeProjectCount = view.activeProjectCount ?? 0
+    const gate = evaluateProjectGate({
+      cashCents: view.cashCents,
+      corporateFixedMonthlyCents: view.monthlyFixedExpenseCents,
+      existingProjectBurnsCents:
+        view.existingProjectMonthlyBurnCents !== undefined
+          ? [view.existingProjectMonthlyBurnCents]
+          : [],
+      accountsPayableCents: view.accountsPayableCents ?? 0,
+      newProjectDevelopmentBudgetCents: proposed.developmentBudgetCents,
+      plannedDays,
+      day,
+      activeProjectCount,
+    })
+    const failed = [...gate.failed]
+    if (gate.preRunwayMonths < RESERVE_MONTHS && !failed.includes('CASH_RESERVE')) {
+      failed.push('CASH_RESERVE')
+    }
     if (view.cashCents < budget || budget <= 0) failed.push('BUDGET')
     const jitter = 0.9 + hash01(seed, view.id, day, 'startScore') * 0.2
     const c = candidate('START_PROJECT', failed, view, budget, persona.riskAversion, {
@@ -356,6 +419,25 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
         },
       }
     }
+
+    const cutPercent = 10 + Math.floor(hash01(seed, view.id, day, 'cutPercent') * 11)
+    const canCut =
+      gate.preRunwayMonths < RESERVE_MONTHS && view.monthlyFixedExpenseCents > 0 && (view.staffCount ?? 0) > 1
+    if (canCut) {
+      candidates.push(
+        candidate('CUT_STAFF', [], view, 0, persona.riskAversion, { reason: 'runway 不足，先降固定支出' }),
+      )
+      return {
+        companyId: view.id,
+        day,
+        month: monthKey(day),
+        candidates,
+        chosen: 'CUT_STAFF',
+        reason: `立项前 runway ${gate.preRunwayMonths.toFixed(1)} 个月 < ${RESERVE_MONTHS}，先裁员降固定支出`,
+        inputsDigest: inputsDigest(view),
+        params: { action: 'CUT_STAFF', percent: cutPercent, reason: 'runway_below_reserve' },
+      }
+    }
     candidates.push(candidate('DO_NOTHING', [], view, 0, persona.riskAversion, { reason: '立项不成立' }))
     return {
       companyId: view.id,
@@ -366,6 +448,59 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
       reason: failed.length > 0 ? `硬约束未通过：${failed.join(',')}` : '立项评分低于阈值',
       inputsDigest: inputsDigest(view),
       params: { action: 'DO_NOTHING', reason: failed.join(',') || 'score' },
+    }
+  }
+
+  if (project.isPaused) {
+    const burn = existingBurnOf(view)
+    const remaining = project.budgetRemainingCents ?? 0
+    const fundAmount = Math.max(1, Math.round(burn * 1) - remaining)
+    const canFund =
+      view.cashCents >= view.monthlyFixedExpenseCents * RESERVE_MONTHS && fundAmount > 0
+    candidates.push(
+      candidate('FUND_PROJECT', canFund ? [] : ['CASH_RESERVE'], view, fundAmount, persona.riskAversion, {
+        reason: '暂停项目补预算',
+        costCents: 0,
+      }),
+    )
+    candidates.push(
+      candidate('CANCEL_PROJECT', [], view, 0, persona.riskAversion, { reason: '暂停项目取消' }),
+    )
+    candidates.push(candidate('CUT_STAFF', [], view, 0, persona.riskAversion, { reason: '降固定支出' }))
+    if (canFund) {
+      return {
+        companyId: view.id,
+        day,
+        month: monthKey(day),
+        candidates,
+        chosen: 'FUND_PROJECT',
+        reason: '暂停项目，现金覆盖 6 个月固定支出，补一个月 burn',
+        inputsDigest: inputsDigest(view),
+        params: { action: 'FUND_PROJECT', projectId: project.id, amountCents: fundAmount },
+      }
+    }
+    if (view.cashCents < view.monthlyFixedExpenseCents * MIN_POST_PROJECT_RUNWAY_MONTHS + burn * 3) {
+      return {
+        companyId: view.id,
+        day,
+        month: monthKey(day),
+        candidates,
+        chosen: 'CANCEL_PROJECT',
+        reason: '暂停项目且现金不足 3 个月总 burn，取消止损',
+        inputsDigest: inputsDigest(view),
+        params: { action: 'CANCEL_PROJECT', projectId: project.id, reason: 'budget_exhausted' },
+      }
+    }
+    const cutPercent = 10 + Math.floor(hash01(seed, view.id, day, 'cutPercent') * 11)
+    return {
+      companyId: view.id,
+      day,
+      month: monthKey(day),
+      candidates,
+      chosen: 'CUT_STAFF',
+      reason: '暂停项目且无法补足预算，先裁员降固定支出',
+      inputsDigest: inputsDigest(view),
+      params: { action: 'CUT_STAFF', percent: cutPercent, reason: 'paused_project' },
     }
   }
 

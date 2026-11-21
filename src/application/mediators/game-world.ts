@@ -12,7 +12,8 @@ import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { createProductLifecycleChangedEvent } from '@domain/events'
 import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
-import { planAiMonth, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
+import { planAiMonth, suggestedStartBudget, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
+import { projectMonthlyBurnCents } from '@simulation/ai/ai-runway'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
@@ -30,6 +31,7 @@ import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
 import {
+  cityRentMultiplier,
   citySalaryMultiplier,
   isPlatformAvailable,
   isSegmentAvailable,
@@ -771,15 +773,52 @@ export class GameWorld {
   }
 
   private buildAiView(company: Company): AiCompanyView {
-    const activeProject = this.world.projects.find(
-      (p) => p.companyId === company.id && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED',
+    const staff = this.world.employees.filter(
+      (e) => e.companyId === company.id && e.status === 'hired',
     )
+    const activeProjects = this.world.projects
+      .filter((p) => p.companyId === company.id && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED')
+      .sort((a, b) => Number(b.isPaused) - Number(a.isPaused) || a.id.localeCompare(b.id))
+    const activeProject = activeProjects[0]
+    const assignedFte = new Map<string, number>()
+    for (const p of activeProjects) {
+      for (const a of p.teamAssignments) {
+        assignedFte.set(a.employeeId, (assignedFte.get(a.employeeId) ?? 0) + a.allocationRatio)
+      }
+    }
+    const monthlyPayrollCents = staff.reduce((sum, e) => sum + e.salaryMonthlyCents, 0)
+    const rentCents = Math.round(
+      TUNING.company.baseMonthlyRentCents *
+        cityRentMultiplier(company.cityId) *
+        (company.officeLevel || 1),
+    )
+    const corporateSalaryCents = staff.reduce((sum, e) => {
+      const assigned = Math.min(1, Math.max(0, assignedFte.get(e.id) ?? 0))
+      return sum + Math.round(e.salaryMonthlyCents * (1 - assigned))
+    }, 0)
+    let existingProjectMonthlyBurnCents = 0
+    for (const p of activeProjects) {
+      if (p.isPaused) continue
+      const dev = p.developmentBudgetCents ?? p.budgetTotalCapCents
+      existingProjectMonthlyBurnCents += projectMonthlyBurnCents(
+        {
+          isPaused: false,
+          developmentRemainingCents: Math.max(0, dev - p.budgetSpentCents - p.budgetCommittedCents),
+          plannedLaunchDay: p.plannedLaunchDay,
+        },
+        this.dayIndex,
+      )
+    }
     return {
       id: company.id,
       persona: company.persona ?? 'indie',
       status: company.status,
       cashCents: this.finance.getCashBalance(company.id),
-      monthlyFixedExpenseCents: company.monthlyFixedExpenseCents,
+      monthlyFixedExpenseCents: rentCents + corporateSalaryCents,
+      monthlyPayrollCents,
+      activeProjectCount: activeProjects.length,
+      existingProjectMonthlyBurnCents,
+      accountsPayableCents: activeProjects.reduce((sum, p) => sum + p.budgetCommittedCents, 0),
       brand: company.brand,
       project:
         activeProject === undefined
@@ -845,6 +884,56 @@ export class GameWorld {
     })
   }
 
+  /** C1-T6：AI 裁员——按薪资从高到低，付一个月补偿，释放项目分配。 */
+  private cutAiStaff(company: Company, percent: number, dayIndex: number): void {
+    const staff = this.world.employees
+      .filter((e) => e.companyId === company.id && e.status === 'hired')
+      .sort((a, b) => b.salaryMonthlyCents - a.salaryMonthlyCents || a.id.localeCompare(b.id))
+    const keepAtLeast = 1
+    const target = Math.max(
+      1,
+      Math.min(staff.length - keepAtLeast, Math.ceil((staff.length * percent) / 100)),
+    )
+    if (staff.length <= keepAtLeast || target <= 0) return
+    const cut = staff.slice(0, target)
+    const cutIds = new Set(cut.map((e) => e.id))
+    for (const emp of cut) {
+      this.finance.postTransaction(
+        {
+          idempotencyKey: `severance:${emp.id}`,
+          companyId: company.id,
+          day: dayIndex,
+          category: 'severance',
+          amountCents: -Math.round(emp.salaryMonthlyCents * TUNING.employee.severanceMonths),
+          description: `解雇补偿：${emp.name}`,
+          referenceId: emp.id,
+        },
+        { allowNegativeBalance: true },
+      )
+    }
+    this.world = {
+      ...this.world,
+      employees: this.world.employees.map((e) =>
+        cutIds.has(e.id) ? { ...e, status: 'fired' as const, version: e.version + 1 } : e,
+      ),
+      projects: this.world.projects.map((p) =>
+        p.companyId === company.id && p.teamAssignments.some((a) => cutIds.has(a.employeeId))
+          ? {
+              ...p,
+              teamAssignments: p.teamAssignments.filter((a) => !cutIds.has(a.employeeId)),
+              version: p.version + 1,
+              updatedAt: dayIndex,
+            }
+          : p,
+      ),
+    }
+    company.monthlyFixedExpenseCents = Math.max(
+      TUNING.company.baseMonthlyRentCents,
+      company.monthlyFixedExpenseCents - cut.reduce((sum, e) => sum + e.salaryMonthlyCents, 0),
+    )
+    this.syncEmployeesFromWorld()
+  }
+
   private runAiMonthly(dayIndex: number): void {
     if (!this.aiCompetitionEnabled) return
     const aiCompanies = this.world.companies
@@ -856,8 +945,8 @@ export class GameWorld {
       const params = plan.params
       switch (params.action) {
         case 'START_PROJECT': {
-          const budget = this.aiBudget(company)
-          if (budget <= 0) break
+          const budget = suggestedStartBudget(this.buildAiView(company), dayIndex, this.world.saveSeed, 120)
+          if (budget.totalBudgetCents <= 0) break
           const segmentIds = params.segmentIds.length > 0 ? params.segmentIds : ['arcade_enthusiasts']
           const platformIds = params.platformIds.length > 0 ? params.platformIds : ['arcade_pre_1975']
           const created = this.withProjects(() =>
@@ -867,7 +956,7 @@ export class GameWorld {
               genreId: params.genreId,
               audienceSegmentIds: segmentIds,
               targetPlatformIds: platformIds,
-              budgetTotalCapCents: budget,
+              budgetTotalCapCents: budget.totalBudgetCents,
               plannedStartDay: dayIndex,
               plannedLaunchDay: dayIndex + 120,
             }),
@@ -920,6 +1009,20 @@ export class GameWorld {
             dayIndex,
           )
           if (result.ok) this.world = result.world
+          break
+        }
+        case 'FUND_PROJECT': {
+          this.withProjects(() => this.projects.fund(params.projectId, params.amountCents, dayIndex))
+          break
+        }
+        case 'CANCEL_PROJECT': {
+          this.withProjects(() =>
+            this.projects.cancel(params.projectId, 'budget_exhausted', dayIndex),
+          )
+          break
+        }
+        case 'CUT_STAFF': {
+          this.cutAiStaff(company, params.percent, dayIndex)
           break
         }
         default:

@@ -127,6 +127,7 @@ export function makeSalesService(
     inputs?: MarketInputProvider
     rng?: SalesRandom
     registerCompany?: boolean
+    demandMode?: boolean
   } = {},
 ): SalesServiceHarness {
   const finance = new FinanceService()
@@ -144,6 +145,7 @@ export function makeSalesService(
     finance,
     rng,
     inputs: options.inputs ?? makeInputProvider(),
+    demandMode: options.demandMode === true,
   })
   return { finance, service, rng }
 }

@@ -3,8 +3,8 @@
  * 只读：不写销售、现金、认知度、产品、合同、项目；只消费注入的快照。
  */
 import { buildDailyDemand } from '@simulation/services/demand-pool'
+import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import type { DemandProductInput, DemandScopeInput } from '@simulation/services/demand-pool'
-import type { Product } from '@domain/entities/product'
 import type { Company } from '@domain/entities/company'
 import type { WorldState } from '@simulation/services/world-state'
 import {
@@ -270,29 +270,6 @@ export function runStage0GateForSeeds(
   }
 }
 
-function splitAwarenessForProduct(product: Product): Record<string, number> {
-  if (product.awarenessByScope && Object.keys(product.awarenessByScope).length > 0) {
-    return { ...product.awarenessByScope }
-  }
-  const marketIds = Object.keys(product.awarenessByMarket)
-  const scopes: string[] = []
-  for (const marketId of marketIds) {
-    for (const platformId of product.supportedPlatformIds) {
-      for (const segmentId of product.audienceSegmentIds) {
-        scopes.push(`${marketId}:${platformId}:${segmentId}`)
-      }
-    }
-  }
-  const result: Record<string, number> = {}
-  if (scopes.length === 0) return result
-  for (const marketId of marketIds) {
-    const scopesInMarket = scopes.filter((key) => key.startsWith(`${marketId}:`))
-    const value = product.awarenessByMarket[marketId] ?? 0
-    for (const key of scopesInMarket) result[key] = value / scopesInMarket.length
-  }
-  return result
-}
-
 /** 从真实世界快照构造 Gate 输入；只读，不修改 world。 */
 export function buildStage0GateDayFromWorld(params: {
   world: Pick<WorldState, 'products' | 'companies'>
@@ -318,7 +295,7 @@ export function buildStage0GateDayFromWorld(params: {
       status: p.status === 'active' ? 'active' : 'retired',
       supportedPlatformIds: p.supportedPlatformIds,
       audienceSegmentIds: segmentIds,
-      awarenessByScope: splitAwarenessForProduct(p),
+      awarenessByScope: awarenessByScopeOf(p),
       quality01: Math.max(0, Math.min(1, p.finalQualityScore / 100)),
       brand01: Math.max(0, Math.min(1, (brandById.get(p.companyId) ?? 10) / 100)),
       referencePriceCents: referencePriceCents(genreId, p.supportedPlatformIds[0] ?? '', segmentIds[0] ?? ''),

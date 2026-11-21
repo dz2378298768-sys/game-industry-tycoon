@@ -313,7 +313,8 @@ export function buildDailyDemand(params: {
       const purchaseIntent = computePurchaseIntent(product, scope.segmentId, scope.platformId)
       const poolUnits = audienceUnits * purchaseIntent
       if (poolUnits <= 0) continue
-      const awareness = product.awarenessByScope[key] ?? 0
+      const awareness = product.awarenessByScope[key]
+      if (awareness === undefined) continue
       const awareness01 = computeAwareness01({
         awareness,
         launchAwarenessFloor: product.launchAwarenessFloor ?? 0,

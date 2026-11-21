@@ -124,7 +124,11 @@ describe('DemandPool Stage 0 (C1-T3)', () => {
     const result = buildDailyDemand({
       dayIndex: 1,
       scopes: [scope({ segmentId: 's1' }), scope({ segmentId: 's2', segmentShare: 0.1 })],
-      products: [product({ audienceSegmentIds: ['s1', 's2'], genreAffinityBySegment: { s1: 0.8, s2: 0.4 } })],
+      products: [product({
+        audienceSegmentIds: ['s1', 's2'],
+        genreAffinityBySegment: { s1: 0.8, s2: 0.4 },
+        awarenessByScope: { 'north_america:p1:s1': 0.3, 'north_america:p1:s2': 0.3 },
+      })],
     })
     expect(result.scopes).toHaveLength(2)
     expect(result.scopes[1]!.rows).toHaveLength(1)
@@ -173,5 +177,16 @@ describe('DemandPool Stage 0 (C1-T3)', () => {
 
   it('D15 scopeKey 稳定', () => {
     expect(scopeKeyOf(scope())).toBe('north_america:p1:s1')
+  })
+
+  it('D16 没有 awareness 条目的市场不靠上市下限白拿销量', () => {
+    const result = buildDailyDemand({
+      dayIndex: 1,
+      scopes: [scope({ marketId: 'japan' }), scope({ marketId: 'north_america' })],
+      products: [product({ launchAwarenessFloor: 0.1, awarenessByScope: { 'north_america:p1:s1': 0.2 } })],
+    })
+    const japan = result.scopes.find((s) => s.marketId === 'japan')!
+    expect(japan.rows).toHaveLength(0)
+    expect(result.scopes.find((s) => s.marketId === 'north_america')!.rows).toHaveLength(1)
   })
 })

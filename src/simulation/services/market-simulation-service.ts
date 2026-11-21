@@ -13,6 +13,18 @@
 import { TUNING } from '@content/tuning'
 import genres from '@content/genres.json'
 import {
+  buildDemandScopesForDay,
+  genreSegmentAffinity,
+  referencePriceCents,
+} from '@content/c1-content'
+import {
+  buildDailyDemand,
+  computeAudienceUnits,
+  computeLaunchAwarenessFloor,
+} from './demand-pool'
+import type { DemandProductInput, DemandScopeInput, DemandTuning } from './demand-pool'
+import { awarenessByScopeOf, rollupAwarenessByMarket } from './product-awareness'
+import {
   getConsumerSegment,
   getPlatform,
   isPlatformAvailable,
@@ -32,6 +44,8 @@ import {
   SalesError,
   clampAwareness,
   computeSalesPipeline,
+  computePlatformFee,
+  computeRefundRate,
   computeWeightedQuality,
   explainSalesPipeline,
   marketingScaleKeyOf,
@@ -62,6 +76,10 @@ export interface MarketSimulationDeps {
   /** 输入端口；缺省 = 一律缺失 → 全部组合按规则跳过 */
   inputs?: MarketInputProvider
   onWarning?: (warning: SalesWarning) => void
+  /** C1-T4：启用统一需求池管线；缺省 false，保留 M2 旧管线 */
+  demandMode?: boolean
+  /** C1 需求池参数；缺省 TUNING.c1.demand */
+  demandTuning?: DemandTuning
 }
 
 interface CreatedRecord {
@@ -119,6 +137,9 @@ export class MarketSimulationService {
    */
   simulateDailySales(world: WorldState, dayIndex: number): WorldState {
     this.warnings = []
+    if (this.deps.demandMode === true) {
+      return this.simulateDailySalesWithDemand(world, dayIndex)
+    }
 
     const sortedProducts = [...world.products].sort((a, b) => {
       const byCompany = a.companyId.localeCompare(b.companyId)
@@ -226,6 +247,198 @@ export class MarketSimulationService {
   private warn(warning: SalesWarning): void {
     this.warnings.push(warning)
     this.deps.onWarning?.(warning)
+  }
+
+  /**
+   * C1-T4：统一需求池管线。
+   * 一天只建一次全局 scope 池，所有公司产品在同一池里分份额；
+   * 按 product × market × platform 聚合 segment，写入与旧管线同构的 SalesRecord。
+   */
+  private simulateDailySalesWithDemand(world: WorldState, dayIndex: number): WorldState {
+    const launched = world.products.filter((product) => {
+      if (product.status !== 'active' || product.lifecycleStage === 'retired') return false
+      if (product.launchDay > dayIndex) return false
+      return true
+    })
+    if (launched.length === 0) return world
+
+    const platformIds = [...new Set(launched.flatMap((product) => product.supportedPlatformIds))]
+    const scopes = buildDemandScopesForDay({ dayIndex, platformIds })
+    if (scopes.length === 0) return world
+
+    const brandById = new Map(world.companies.map((company) => [company.id, company.brand]))
+    const productById = new Map(launched.map((product) => [product.id, product]))
+    const demandProducts: DemandProductInput[] = []
+
+    for (const product of launched) {
+      const priceCents = effectivePriceCents(product)
+      if (priceCents === null) {
+        this.warn({
+          code:
+            product.pricePerUnitCents == null && product.launchPriceCents == null
+              ? 'SALES_MISSING_INPUT'
+              : 'SALES_INVALID_INPUT',
+          message: 'effective price is missing; demand product skipped',
+          productId: product.id,
+        })
+        continue
+      }
+      const segmentIds = product.audienceSegmentIds.filter((id) => isSegmentAvailable(id, dayIndex))
+      if (segmentIds.length === 0) continue
+      const availablePlatforms = product.supportedPlatformIds.filter((id) => isPlatformAvailable(id, dayIndex))
+      if (availablePlatforms.length === 0) continue
+
+      const affinity: Record<string, number> = {}
+      let affinitySum = 0
+      for (const segmentId of segmentIds) {
+        const value = genreSegmentAffinity(product.genreId, segmentId)
+        affinity[segmentId] = value
+        affinitySum += value
+      }
+      const platformFit: Record<string, number> = {}
+      for (const platformId of availablePlatforms) platformFit[platformId] = 1
+      const reference = referencePriceCents(
+        product.genreId,
+        availablePlatforms[0]!,
+        segmentIds[0]!,
+      )
+      const genreMatch = segmentIds.length > 0 ? affinitySum / segmentIds.length : 0
+
+      demandProducts.push({
+        productId: product.id,
+        companyId: product.companyId,
+        status: 'active',
+        supportedPlatformIds: availablePlatforms,
+        audienceSegmentIds: segmentIds,
+        awarenessByScope: awarenessByScopeOf(product),
+        quality01: Math.max(0, Math.min(1, product.finalQualityScore / 100)),
+        brand01: Math.max(0, Math.min(1, (brandById.get(product.companyId) ?? 10) / 100)),
+        referencePriceCents: reference,
+        effectivePriceCents: priceCents,
+        genreAffinityBySegment: affinity,
+        platformFitByPlatform: platformFit,
+        launchAwarenessFloor: computeLaunchAwarenessFloor({
+          storeVisibility: 1,
+          genreMatch,
+          finalQualityScore: product.finalQualityScore,
+        }),
+        launchDay: product.launchDay,
+        clearanceAvailability: 1,
+      })
+    }
+
+    if (demandProducts.length === 0) return world
+    const demand = buildDailyDemand({
+      dayIndex,
+      scopes,
+      products: demandProducts,
+      ...(this.deps.demandTuning ? { tuning: this.deps.demandTuning } : {}),
+    })
+
+    interface AggregateRow {
+      productId: string
+      marketId: string
+      platformId: string
+      units: number
+    }
+    const aggregates = new Map<string, AggregateRow>()
+    for (const scope of demand.scopes) {
+      for (const row of scope.rows) {
+        if (row.allocatedUnits <= 0) continue
+        const key = `${row.productId}:${scope.marketId}:${scope.platformId}`
+        const existing = aggregates.get(key)
+        if (existing) existing.units += row.allocatedUnits
+        else {
+          aggregates.set(key, {
+            productId: row.productId,
+            marketId: scope.marketId,
+            platformId: scope.platformId,
+            units: row.allocatedUnits,
+          })
+        }
+      }
+    }
+
+    const recordsByProduct = new Map<string, SalesRecord[]>()
+    for (const aggregate of aggregates.values()) {
+      const product = productById.get(aggregate.productId)
+      if (!product) continue
+      const platform = getPlatform(aggregate.platformId)
+      if (!platform) continue
+      const priceCents = effectivePriceCents(product)
+      if (priceCents === null) continue
+      const recordId = makeSalesRecordId(product.id, dayIndex, aggregate.marketId, aggregate.platformId)
+      if (product.salesByPeriod.some((record) => record.id === recordId)) continue
+
+      const grossRevenueCents = aggregate.units * priceCents
+      const fee = resolvePlatformFeeRate(aggregate.platformId, platform.platformFee, this.tuning)
+      const platformFeeCents = computePlatformFee(grossRevenueCents, fee.rate)
+      const refundRate = computeRefundRate(product.defectLevel, this.tuning)
+      const record: SalesRecord = {
+        id: recordId,
+        productId: product.id,
+        dayIndex,
+        marketId: aggregate.marketId,
+        platformId: aggregate.platformId,
+        grossUnits: aggregate.units,
+        unitPriceAtSaleCents: priceCents,
+        grossRevenueCents,
+        platformFeeCents,
+        netSalesRevenueCents: grossRevenueCents - platformFeeCents,
+        estimatedRefundUnits: Math.floor(aggregate.units * refundRate),
+        actualRefundUnits: 0,
+      }
+      const records = recordsByProduct.get(product.id) ?? []
+      records.push(record)
+      recordsByProduct.set(product.id, records)
+    }
+
+    const sortedProducts = [...launched].sort((a, b) => a.id.localeCompare(b.id))
+    const batches = this.buildBatches(sortedProducts, recordsByProduct, dayIndex)
+    const transactions = this.buildTransactions(sortedProducts, recordsByProduct)
+    if (transactions.length > 0) {
+      const posted = this.deps.finance.bulkPostTransactions(transactions, {
+        allowNegativeBalance: true,
+      })
+      if (!posted.success) {
+        throw new SalesError('SALES_POSTING_FAILED', posted.errorMessage ?? 'bulk posting failed')
+      }
+    }
+
+    const nextProducts = world.products.map((product) => {
+      const records = recordsByProduct.get(product.id)
+      if (!records || records.length === 0) return product
+      const productScopes = scopes.filter(
+        (scope) =>
+          product.supportedPlatformIds.includes(scope.platformId) &&
+          product.audienceSegmentIds.includes(scope.segmentId),
+      )
+      const awarenessScope = awarenessByScopeOf(product)
+      const awareness = rollupAwarenessByMarket({
+        awarenessByScope: awarenessScope,
+        scopes: productScopes.map((scope: DemandScopeInput) => ({
+          marketId: scope.marketId,
+          platformId: scope.platformId,
+          segmentId: scope.segmentId,
+          audienceUnits: computeAudienceUnits(scope),
+        })),
+        fallback: product.awarenessByMarket,
+      })
+      return {
+        ...product,
+        salesByPeriod: [...product.salesByPeriod, ...records],
+        awarenessByScope: awarenessScope,
+        awarenessByMarket: awareness,
+        version: product.version + 1,
+        updatedAt: dayIndex,
+      }
+    })
+
+    return {
+      ...world,
+      products: nextProducts,
+      refundBatches: [...world.refundBatches, ...batches],
+    }
   }
 
   private computeProductDay(product: Product, dayIndex: number): CreatedRecord[] {

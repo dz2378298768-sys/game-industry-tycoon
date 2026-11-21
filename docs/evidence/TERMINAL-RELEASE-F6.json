@@ -1,0 +1,37 @@
+{
+  "setup": {
+    "employees": 4,
+    "assigned": 4,
+    "budget": 3000000
+  },
+  "launched": {
+    "action": "launch",
+    "ok": true,
+    "phase": "LAUNCHED",
+    "team": 0,
+    "day": 180
+  },
+  "after": {
+    "aTeam": 0,
+    "bTeam": 4,
+    "results": [
+      {
+        "name": "张程",
+        "ok": true
+      },
+      {
+        "name": "李设",
+        "ok": true
+      },
+      {
+        "name": "王美",
+        "ok": true
+      },
+      {
+        "name": "赵测",
+        "ok": true
+      }
+    ],
+    "bId": "b32908b8-ebce-425e-9906-72197b89e0ee"
+  }
+}

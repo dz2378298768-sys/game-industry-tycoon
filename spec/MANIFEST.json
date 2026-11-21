@@ -1,0 +1,136 @@
+{
+  "project": "Game Industry Tycoon",
+  "revision": "2.1.7-final-freeze",
+  "document_status": "DESIGN_SPECIFICATION_FROZEN_FOR_IMPLEMENTATION",
+  "freeze_note": "V2.1.7 完成后进入 Development Baseline，不再开启设计循环。下一步启动第一个垂直切片开发。",
+  "total_bytes": 279491,
+  "file_count_excluding_self": 24,
+  "v217_patches": {
+    "p0_refund_idempotency": "FIXED (RefundBatch interface, idempotencyKey = customer-refund:${refundBatch.id})",
+    "p1a_refundrecord_cleanup": "FIXED (deleted RefundRecord/refundsByPeriod everywhere)",
+    "p1b_phase4_refund_step": "FIXED (Phase 4 extended to 4.1-4.7 with 4.5-4.7 refund processing)",
+    "p1c_salesrecord_unified": "FIXED (all SalesRecord examples use official interface fields)"
+  },
+  "files": [
+    {
+      "path": "00_审计结论/01_V2.0完整审计报告.md",
+      "bytes": 9084,
+      "sha256": "41de74adfeb698e432ce32e80cf9c77da10070a9e507ce9b3f1f8416d1c84fdd"
+    },
+    {
+      "path": "01_产品范围/01_V2.1首发范围与延期清单.md",
+      "bytes": 5779,
+      "sha256": "5876d921f376b64ab66c53dff606aa158a852180f25b4d8adb36a0f86a346544"
+    },
+    {
+      "path": "02_核心玩法规格/01_核心经营循环.md",
+      "bytes": 4991,
+      "sha256": "d305a2feaf46d8d50376b9c9db0f60408eaa2f66ad60f6a5d9d38d79f54236ce"
+    },
+    {
+      "path": "02_核心玩法规格/02_成长阶段与策略路线.md",
+      "bytes": 3230,
+      "sha256": "cc0e61d25b2db1d80a2a86665a83664c9995ae09e451ea67a12c269b02a46cfd"
+    },
+    {
+      "path": "03_系统深化规格/01_研发与产品生命周期.md",
+      "bytes": 5355,
+      "sha256": "cb8a6f3fda81488c2051002f7ac733d7514c295c8904ade054ac252852a6044a"
+    },
+    {
+      "path": "03_系统深化规格/02_市场销售与营销模型.md",
+      "bytes": 5347,
+      "sha256": "1c978f7b5351aaa0cd993b72945fd9bc6226cc656da2b1f78ef4338d6e468011"
+    },
+    {
+      "path": "03_系统深化规格/03_员工组织与财务闭环.md",
+      "bytes": 3559,
+      "sha256": "78658fa144a17e4405d1a0cd5eaf6d9b66491ca0b733d3f4dd59943b704b4058"
+    },
+    {
+      "path": "03_系统深化规格/04_AI竞争与发行合作.md",
+      "bytes": 2527,
+      "sha256": "aafffb811d81f12b3993e44d0e316e2a2124776e617ee3a0883c9f35f460099b"
+    },
+    {
+      "path": "04_UI与交互整改/01_UI逐页规格整改标准.md",
+      "bytes": 3851,
+      "sha256": "f2eb4adb18f7b73154c683ed33460c2f14c2f88174458ed9a3e2790f2632e10c"
+    },
+    {
+      "path": "05_内容数据策略/01_内容范围与数据质量.md",
+      "bytes": 3111,
+      "sha256": "7d839b9cbc53065dd14fdaa9843ba5969ca39218662a4378634b54d799598e94"
+    },
+    {
+      "path": "06_测试与实施/01_验证矩阵与里程碑.md",
+      "bytes": 2806,
+      "sha256": "ea94726bc2cc8435ef5d747369d3f94f5e912b220c8bda335605a01823a6fe7d"
+    },
+    {
+      "path": "07_Agent交接/01_实施任务与禁止猜测事项.md",
+      "bytes": 2827,
+      "sha256": "9522027fd16ded945187d79ff5c223a5dcc07fa1257105eed9663fa0abcf7431"
+    },
+    {
+      "path": "08_设计补齐/01_项目状态机统一方案.md",
+      "bytes": 8384,
+      "sha256": "a8ec8e71d01800c6c4262c2df50819094be19980f32db1c6d17b5a80a7aa5904"
+    },
+    {
+      "path": "08_设计补齐/02_工程配置规格.md",
+      "bytes": 9854,
+      "sha256": "2432909f6379f413668a40b43448a02a2d77845435098c091d006927356e6cea"
+    },
+    {
+      "path": "08_设计补齐/03_领域实体与值对象完整字段定义.md",
+      "bytes": 12479,
+      "sha256": "58aaf05d7feb29ed5c4bbc97780298731d752eed2b7b78b6d0ff86443014c4fc"
+    },
+    {
+      "path": "08_设计补齐/04_核心服务接口契约.md",
+      "bytes": 38280,
+      "sha256": "e0c53215bce45aab0e8fa4b824b06b4f70a83ea4a90c91848717ad10da86cc86"
+    },
+    {
+      "path": "08_设计补齐/05_TUNING参数默认值候选.md",
+      "bytes": 11008,
+      "sha256": "aca9146a8ec4b4e3b870e069f3480047d3f2fef3aea9906e77abea5d74dceaa7"
+    },
+    {
+      "path": "08_设计补齐/06_内容数据最小集规格.md",
+      "bytes": 17216,
+      "sha256": "0fee5ace49137bcf7bf8b7d7e3d0826166b6dfc4660b27bb8c0d13b5da0293ff"
+    },
+    {
+      "path": "08_设计补齐/07_P0页面整改模板.md",
+      "bytes": 22460,
+      "sha256": "710d1fc9cf9278cdebfbeb01bb71b737797848c14f89c1b6e8822802a5c8b5f7"
+    },
+    {
+      "path": "08_设计补齐/08_BDD测试用例规格.md",
+      "bytes": 21870,
+      "sha256": "89d5ac0ccf62f5e1802aa42d18c0cc5c71bcb89917fe037baefbb137bb23db55"
+    },
+    {
+      "path": "08_设计补齐/09_销售管线公式与计算口径.md",
+      "bytes": 40219,
+      "sha256": "2a10fc32dcb5b9885cccdaf56b2977b213369bac2a34de550b633ac38bcf4313"
+    },
+    {
+      "path": "08_设计补齐/10_V2.1.1最终一致性审计报告.md",
+      "bytes": 17161,
+      "sha256": "790ac8b2dba03a12e20dae68df706aa85c88bfbf8519932afc264abcf35a6bd3"
+    },
+    {
+      "path": "CHANGELOG_V2.1.md",
+      "bytes": 25360,
+      "sha256": "b9669304b4fa6bb5e90fdda3ce52117a2c5d02c3f41d87d9764f512b67f882ac"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2733,
+      "sha256": "83af634a7bc21a3a43e82a4fd4c9ef50a1f3ecd389582c982769b2c07b3faecc"
+    }
+  ]
+}

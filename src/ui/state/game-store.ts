@@ -1,0 +1,552 @@
+import { create } from 'zustand'
+import type { GameWorld } from '@application/mediators/game-world'
+import { createGameWorld } from '@application/factories/create-game-world'
+import { saveGame, loadGame, hasSave } from '@infrastructure/storage/save-service'
+import type { Company } from '@domain/entities/company'
+import type { Employee } from '@domain/entities/employee'
+import type { Project } from '@domain/entities/project'
+import type { Product } from '@domain/entities/product'
+import type { RefundBatch } from '@domain/entities/refund-batch'
+import type { MarketingCampaign } from '@domain/entities/marketing-campaign'
+import type { PublishingContract } from '@domain/entities/publishing-contract'
+import type { Transaction } from '@domain/entities/transaction'
+import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
+import { BUDGET_TOP_UP_EVENT, recomputeRemaining } from '@domain/value-objects'
+import { EntityNotFoundError } from '@domain/errors'
+import { t, formatMoney, formatDay, setLocale as setI18nLocale, getLocale as getI18nLocale } from '@i18n'
+
+interface Message { id: string; text: string; type: 'info' | 'error' | 'success' }
+
+interface ActionResult { success: boolean; message?: string | undefined }
+interface BudgetActionResult extends ActionResult { errorCode?: string | undefined; idempotent?: boolean | undefined }
+
+/** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2 / §9.1，按领域实际字符串逐字匹配） */
+export const ERROR_I18N: Record<string, string> = {
+  NO_COMPANY: 'error.noCompany',
+  FIN_COMPANY_BANKRUPT: 'error.finCompanyBankrupt',
+  PRJ_COMPANY_INACTIVE: 'error.prjCompanyInactive',
+  EMP_CAPACITY_FULL: 'error.capacityFull',
+  FIN_DISTRESS: 'error.financialDistress',
+  EMP_INVALID_SALARY: 'error.invalidSalary',
+  EMP_INVALID_SKILL: 'error.invalidSkill',
+  FIN_INSUFFICIENT_CASH: 'error.insufficientCash',
+  EMP_NOT_FOUND: 'error.employeeNotFound',
+  EMP_ALREADY_TERMINATED: 'error.employeeAlreadyTerminated',
+  PRJ_PLATFORM_UNAVAILABLE: 'error.platformUnavailable',
+  PRJ_SEGMENT_UNAVAILABLE: 'error.segmentUnavailable',
+  PRJ_TERMINAL: 'error.projectTerminal',
+  PRJ_NOT_FOUND: 'error.projectNotFound',
+  PRJ_WRONG_PHASE: 'error.prjWrongPhase',
+  BGT_INVALID_AMOUNT: 'error.bgtInvalidAmount',
+  PRJ_LAUNCH_TOO_EARLY: 'error.cannotLaunchEarly',
+  PRJ_MAX_DESCIPE_REACHED: 'error.prjMaxDescopeReached',
+  PRJ_SCOPE_TERMINAL: 'error.prjScopeTerminal',
+  PRJ_INVALID_CUT_RATIO: 'error.prjInvalidCutRatio',
+  PRJ_INVALID_DELAY_DAYS: 'error.prjInvalidDelayDays',
+  PRJ_LAUNCH_DELAY_TERMINAL: 'error.prjLaunchDelayTerminal',
+  PRJ_LAUNCH_DELAY_EXCEEDS_MAX: 'error.prjLaunchDelayExceedsMax',
+  PRJ_NOT_READY: 'error.prjNotReady',
+  PRJ_PAUSED: 'error.prjPaused',
+  PRJ_QA_INCOMPLETE: 'error.prjQaIncomplete',
+  PRJ_PRODUCT_EXISTS: 'error.prjProductExists',
+  PRJ_INVALID_TRANSITION: 'error.prjInvalidTransition',
+  // M2-C/D/F：定价 / 营销 / 合同（DESIGN-M2-001-G P1-3，共 14 码）
+  PRICE_COOLDOWN: 'error.priceCooldown',
+  PRICE_RANGE: 'error.priceRange',
+  PRICE_DISCOUNT_RANGE: 'error.priceDiscountRange',
+  PRICE_LIFECYCLE_LOCKED: 'error.priceLifecycleLocked',
+  LIFECYCLE_NOT_ELAPSED: 'error.lifecycleNotElapsed',
+  PRD_NOT_FOUND: 'error.prdNotFound',
+  MARKETING_PRODUCT_NOT_FOUND: 'error.marketingProductNotFound',
+  MARKETING_PRODUCT_NOT_ACTIVE: 'error.marketingProductNotActive',
+  MARKETING_BUDGET_OUT_OF_RANGE: 'error.marketingBudgetOutOfRange',
+  CONTRACT_PRODUCT_NOT_LAUNCHED: 'error.contractProductNotLaunched',
+  CONTRACT_RATE_OUT_OF_RANGE: 'error.contractRateOutOfRange',
+  CONTRACT_THRESHOLD_OUT_OF_RANGE: 'error.contractThresholdOutOfRange',
+  CONTRACT_ALREADY_ACTIVE: 'error.contractAlreadyActive',
+  CONTRACT_NOT_FOUND: 'error.contractNotFound',
+}
+
+/** 错误码优先映射 i18n；无错误码时回退领域文案，再回退通用文案 */
+function localizeError(errorCode: string | undefined, message: string | undefined, fallback = 'error.unknown'): string {
+  const key = errorCode ? ERROR_I18N[errorCode] : undefined
+  if (key) return t(key)
+  return message ?? t(fallback)
+}
+
+interface GameStore {
+  game: GameWorld | null
+  company: Company | null
+  employees: Employee[]
+  projects: Project[]
+  products: Product[]
+  refundBatches: RefundBatch[]
+  marketingCampaigns: MarketingCampaign[]
+  publishingContracts: PublishingContract[]
+  transactions: Transaction[]
+  dayIndex: number
+  speed: CalendarSpeed
+  messages: Message[]
+  locale: 'en' | 'zh-CN'
+  init(seed?: number): void
+  createCompany(name: string, cityId: string): void
+  hireEmployee(name: string, role: EmployeeRole, skillLevel: number, salaryMonthlyCents: number): { error?: string }
+  fireEmployee(employeeId: string): ActionResult
+  createProject(params: {
+    name: string
+    genreId: string
+    budgetTotalCapCents: number
+    plannedLaunchDay: number
+    audienceSegmentIds?: string[]
+    targetPlatformIds?: string[]
+  }): { error?: string }
+  advanceProjectPhase(projectId: string): ActionResult
+  launchProject(projectId: string): ActionResult
+  toggleProjectPause(projectId: string): ActionResult
+  topUpBudget(projectId: string, amountCents: number, reason: string): BudgetActionResult
+  resumeProject(projectId: string): ActionResult
+  cancelProject(projectId: string): ActionResult
+  descopeProject(projectId: string, cutRatio: number): BudgetActionResult
+  delayLaunch(projectId: string, extraDays: number): BudgetActionResult
+  assignEmployeeToProject(employeeId: string, projectId: string, allocationRatio: number, roleOnProject: ProjectRole): ActionResult
+  unassignEmployeeFromProject(employeeId: string, projectId: string): ActionResult
+  setProductPrice(productId: string, priceCents: number): BudgetActionResult
+  applyProductDiscount(productId: string, ratePercent: number): BudgetActionResult
+  retireProduct(productId: string): BudgetActionResult
+  setMarketingBudget(productId: string, channel: 'social' | 'expo' | 'ads', dailyBudgetCents: number): BudgetActionResult
+  signRevenueShare(productId: string, ratePercent: number, durationDays: number | null): BudgetActionResult
+  signMilestone(productId: string, thresholdNetRevenueCents: number, payoutCents: number, durationDays: number | null): BudgetActionResult
+  estimateContract(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    marketScope?: string[]
+    platformScope?: string[]
+    prepaymentCents?: number
+    recoupRatePercent?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+  }): import('@simulation/services/contract-estimate').ContractEstimate | null
+  signContractTemplate(cmd: {
+    productId: string
+    template: 'channel' | 'co_marketing' | 'advance'
+    ratePercent: number
+    durationDays: number | null
+    partnerId: string
+    prepaymentCents?: number
+    marketingCommitmentCents?: number
+    qualityThreshold?: number
+    deliveryDay?: number
+  }): BudgetActionResult
+  advanceDays(days: number): void
+  setSpeed(speed: CalendarSpeed): void
+  refresh(): void
+  toast(text: string, type?: 'info' | 'error' | 'success'): void
+  setLocale(loc: 'en' | 'zh-CN'): void
+  save(): Promise<void>
+  load(): Promise<boolean>
+  getHasSave(): Promise<boolean>
+  isFinanciallyDistressed(): boolean
+}
+
+export const useGameStore = create<GameStore>((set, get) => ({
+  game: null,
+  company: null,
+  employees: [],
+  projects: [],
+  products: [],
+  refundBatches: [],
+  marketingCampaigns: [],
+  publishingContracts: [],
+  transactions: [],
+  dayIndex: 0,
+  speed: 'paused',
+  messages: [],
+  locale: 'zh-CN',
+
+  init(seed = 42) {
+    const gw = createGameWorld(seed)
+    gw.calendar.setSpeed('paused')
+    set({ game: gw, dayIndex: gw.calendar.currentDayIndex, speed: gw.calendar.getSpeed() })
+  },
+
+  createCompany(name: string, cityId: string) {
+    const gw = get().game
+    if (!gw) return
+    const company = gw.createCompany({ name, cityId })
+    set({ company })
+    get().refresh()
+  },
+
+  hireEmployee(name, role, skillLevel, salaryMonthlyCents) {
+    const gw = get().game
+    if (!gw) return { error: t('error.noCompany') }
+    const outcome = gw.hireEmployee({ name, role, skillLevel, salaryMonthlyCents })
+    if (!outcome.success) {
+      const message = localizeError(outcome.errorCode, outcome.message, 'error.insufficientCash')
+      get().toast(message, 'error')
+      return { error: message }
+    }
+    get().refresh()
+    return {}
+  },
+
+  fireEmployee(employeeId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const outcome = gw.fireEmployee(employeeId)
+    get().refresh()
+    if (!outcome.success) {
+      const message = localizeError(outcome.errorCode, outcome.message)
+      get().toast(message, 'error')
+      return { success: false, message }
+    }
+    get().toast(t('employee.fire.success'), 'info')
+    return { success: true }
+  },
+
+  createProject(params) {
+    const gw = get().game
+    if (!gw) return { error: t('error.noCompany') }
+    const outcome = gw.createProject(params)
+    if (!outcome.success) {
+      const message = localizeError(outcome.errorCode, outcome.message)
+      get().toast(message, 'error')
+      return { error: message }
+    }
+    get().refresh()
+    return {}
+  },
+
+  advanceProjectPhase(projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.advanceProjectPhase(projectId)
+    get().refresh()
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
+  },
+
+  launchProject(projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.launchProject(projectId)
+    get().refresh()
+    if (!result.success) {
+      const message = localizeError(result.errorCode, result.message)
+      get().toast(message, 'error')
+      return { success: false, message }
+    }
+    get().toast(t('project.launch.success'), 'success')
+    return { success: true }
+  },
+
+  toggleProjectPause(projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.toggleProjectPause(projectId)
+    get().refresh()
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
+  },
+
+  topUpBudget(projectId, amountCents, reason) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const project = gw.world.projects.find(p => p.id === projectId)
+    if (!project) {
+      return { success: false, errorCode: 'PRJ_NOT_FOUND', message: t('error.projectNotFound') }
+    }
+    // 为每次追加分配唯一递增 seq，满足幂等键 budget:topup:{projectId}:{seq}（UI 不改领域逻辑）
+    // 无历史记录时首个 seq 取 1（DESIGN-G05 v1.4 §7.1 / v1.5）；旧存档若存在 seq=0，新 seq 从 1 起且键不冲突
+    let seq = 1
+    for (const entry of project.changeLog) {
+      const used = entry.details?.seq
+      if (entry.details?.event === BUDGET_TOP_UP_EVENT && typeof used === 'number' && Number.isInteger(used)) {
+        seq = Math.max(seq, used + 1)
+      }
+    }
+    const result = gw.topUpBudget({ projectId, amountCents, seq, reason })
+    get().refresh()
+    if (!result.success) {
+      const message = t(ERROR_I18N[result.errorCode ?? ''] ?? 'error.unknown')
+      get().toast(message, 'error')
+      return { success: false, errorCode: result.errorCode, message }
+    }
+    const message = result.idempotent
+      ? t('project.budget.topUp.idempotent')
+      : t('project.budget.topUp.success')
+    get().toast(message, 'success')
+    return { success: true, message, idempotent: result.idempotent }
+  },
+
+  resumeProject(projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const project = gw.world.projects.find(p => p.id === projectId)
+    if (!project) return { success: false, message: t('error.projectNotFound') }
+    if (!project.isPaused) return { success: false, message: t('project.budget.resume.notPaused') }
+    // 恢复前按权威公式取剩余额度，用于恢复后的“预算仍为负”提示（DESIGN-G05 v1.5 §10.1a-6）
+    const remainingCapCents = recomputeRemaining({
+      totalCapCents: project.budgetTotalCapCents,
+      committedCents: project.budgetCommittedCents,
+      spentCents: project.budgetSpentCents,
+      remainingCapCents: 0,
+    }).remainingCapCents
+    // 已暂停 → toggleProjectPause 走领域 resume：清除 budgetExhausted、resumeSeq+1、pausedDays 清零
+    const result = gw.toggleProjectPause(projectId)
+    get().refresh()
+    if (!result.success) {
+      get().toast(result.message ?? t('error.unknown'), 'error')
+      return { success: false, message: result.message }
+    }
+    get().toast(t('project.budget.resume.success'), 'success')
+    if (remainingCapCents <= 0) {
+      get().toast(t('project.budget.resume.negativeWarning'), 'info')
+    }
+    return { success: true }
+  },
+
+  cancelProject(projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.cancelProject(projectId)
+    get().refresh()
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
+  },
+
+  descopeProject(projectId, cutRatio) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    try {
+      const result = gw.descopeProject(projectId, cutRatio)
+      get().refresh()
+      if (!result.success) {
+        const message = localizeError(result.errorCode, result.message)
+        get().toast(message, 'error')
+        return { success: false, errorCode: result.errorCode, message }
+      }
+      const updated = gw.world.projects.find((p) => p.id === projectId)
+      const pct = Math.round(cutRatio * 100)
+      const total = Math.round((updated?.scopeCutRatio ?? 0) * 100)
+      const message = t('project.descope.success')
+        .replace('{pct}', String(pct))
+        .replace('{total}', String(total))
+      get().toast(message, 'success')
+      return { success: true, message }
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) {
+        const message = t('error.projectNotFound')
+        get().toast(message, 'error')
+        return { success: false, errorCode: 'PRJ_NOT_FOUND', message }
+      }
+      throw error
+    }
+  },
+
+  delayLaunch(projectId, extraDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const brandBefore = gw.world.companies.find((c) => c.isPlayer)?.brand ?? 0
+    try {
+      const result = gw.delayLaunch(projectId, extraDays)
+      get().refresh()
+      if (!result.success) {
+        const message = localizeError(result.errorCode, result.message)
+        get().toast(message, 'error')
+        return { success: false, errorCode: result.errorCode, message }
+      }
+      const brandAfter = (get().company ?? gw.world.companies.find((c) => c.isPlayer))?.brand ?? brandBefore
+      const penalty = brandBefore - brandAfter
+      const updated = gw.world.projects.find((p) => p.id === projectId)
+      const day = formatDay(updated?.plannedLaunchDay ?? 0)
+      let message = t(penalty > 0 ? 'project.delay.success' : 'project.delay.successNoBrand').replace('{day}', day)
+      if (penalty > 0) message = message.replace('{penalty}', String(penalty))
+      get().toast(message, 'success')
+      return { success: true, message }
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) {
+        const message = t('error.projectNotFound')
+        get().toast(message, 'error')
+        return { success: false, errorCode: 'PRJ_NOT_FOUND', message }
+      }
+      throw error
+    }
+  },
+
+  assignEmployeeToProject(employeeId, projectId, allocationRatio, roleOnProject) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.assignEmployeeToProject(employeeId, projectId, allocationRatio, roleOnProject)
+    get().refresh()
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
+  },
+
+  setProductPrice(productId, priceCents) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.setProductPrice({ productId, priceCents })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.priceSaved') : localizeError(r.errorCode, r.message) }
+  },
+
+  applyProductDiscount(productId, ratePercent) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.applyProductDiscount({ productId, ratePercent })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.discountSaved') : localizeError(r.errorCode, r.message) }
+  },
+
+  retireProduct(productId) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.retireProduct({ productId })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('product.retired') : localizeError(r.errorCode, r.message) }
+  },
+
+  setMarketingBudget(productId, channel, dailyBudgetCents) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.setMarketingBudget({ productId, channel, dailyBudgetCents })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('marketing.saved') : localizeError(r.errorCode, r.message) }
+  },
+
+  signRevenueShare(productId, ratePercent, durationDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signRevenueShareContract({ productId, ratePercent, durationDays })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  signMilestone(productId, thresholdNetRevenueCents, payoutCents, durationDays) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signMilestoneContract({ productId, thresholdNetRevenueCents, payoutCents, durationDays })
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  estimateContract(cmd) {
+    const gw = get().game
+    if (!gw) return null
+    return gw.estimateContract(cmd)
+  },
+
+  signContractTemplate(cmd) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.signContractTemplate(cmd)
+    get().refresh()
+    return { success: r.success, errorCode: r.errorCode, message: r.success ? t('contract.signed') : localizeError(r.errorCode, r.message) }
+  },
+
+  unassignEmployeeFromProject(employeeId, projectId) {
+    const gw = get().game
+    if (!gw) return { success: false, message: t('error.noCompany') }
+    const result = gw.unassignEmployeeFromProject(employeeId, projectId)
+    get().refresh()
+    if (!result.success) get().toast(result.message ?? t('error.unknown'), 'error')
+    return { success: result.success, ...(result.message ? { message: result.message } : {}) }
+  },
+
+  advanceDays(days) {
+    const gw = get().game
+    if (!gw) return
+    try {
+      gw.advanceSimulation(days)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      get().toast(message, 'error')
+      get().refresh()
+      return
+    }
+    get().refresh()
+  },
+
+  setSpeed(speed) {
+    const gw = get().game
+    if (!gw) return
+    gw.calendar.setSpeed(speed)
+    set({ speed })
+  },
+
+  refresh() {
+    const gw = get().game
+    if (!gw) return
+    // 破产后 getPlayerCompany() 返回 undefined → 回退到 isPlayer（否则横幅/顶栏失效，DESIGN-UI-LAYER §3.3）
+    const company =
+      gw.getPlayerCompany() ?? gw.world.companies.find((c) => c.isPlayer) ?? null
+    set({
+      company,
+      employees: gw.world.employees,
+      projects: gw.world.projects,
+      products: gw.world.products,
+      refundBatches: gw.world.refundBatches,
+      marketingCampaigns: gw.world.marketingCampaigns,
+      publishingContracts: gw.world.publishingContracts,
+      transactions: company ? gw.finance.getTransactionsByCompany(company.id) : [],
+      dayIndex: gw.calendar.currentDayIndex,
+    })
+  },
+
+  toast(text, type = 'info') {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    set(state => ({ messages: [...state.messages, { id, text, type }] }))
+    setTimeout(() => {
+      set(state => ({ messages: state.messages.filter(m => m.id !== id) }))
+    }, 3000)
+  },
+
+  setLocale(loc) {
+    setI18nLocale(loc)
+    set({ locale: loc })
+    get().refresh()
+  },
+
+  async save() {
+    const gw = get().game
+    if (!gw) return
+    await saveGame(gw.serialize())
+    get().toast(t('save.success'), 'success')
+  },
+
+  async load() {
+    const result = await loadGame()
+    if (result.status === 'empty') {
+      get().toast(t('load.empty'), 'error')
+      return false
+    }
+    if (result.status === 'invalid') {
+      // 无效存档不得覆盖当前运行状态
+      get().toast(result.errorMessage, 'error')
+      return false
+    }
+    const gw = get().game ?? createGameWorld(result.state.saveSeed)
+    gw.restore(result.state)
+    set({ game: gw, speed: gw.calendar.getSpeed(), dayIndex: gw.calendar.currentDayIndex })
+    get().refresh()
+    get().toast(t('load.success'), 'success')
+    return true
+  },
+
+  async getHasSave() {
+    return hasSave()
+  },
+
+  isFinanciallyDistressed() {
+    const gw = get().game
+    return gw ? gw.isFinanciallyDistressed() : false
+  },
+}))
+
+// Re-export helpers for components
+export { t, formatMoney, formatDay, getI18nLocale }

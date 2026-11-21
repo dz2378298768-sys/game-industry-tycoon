@@ -1,0 +1,50 @@
+[
+  {
+    "id": "C1 手动暂停",
+    "expect": "isPaused=true、pauseReason=manual、横幅\"⏸ 已手动暂停\"",
+    "actual": "isPaused=true reason=manual banner=[\"← 返回C项目益智 · 概念阶段（暂停） · Created 1970-01-01 (Day 0)⏸ 已手动暂停恢复推进阶段取消\"]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C2 推进 59 天",
+    "expect": "仍在暂停、pausedDays=59、未取消",
+    "actual": "day=59 pausedDays=59 phase=CONCEPT banner=[\"← 返回C项目益智 · 概念阶段（暂停） · Created 1970-01-01 (Day 0)⏸ 已手动暂停恢复推进阶段取消\",\"⏸ [暂停] 项目已由你暂停（第 0 天起），研发已停止。已连续暂停 59/60 天，达到 60 天将自动取消。恢复项目\"]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C3 第 60 天自动取消",
+    "expect": "phase=CANCELLED、cancellationReason=pause_timeout、isPaused=false、过程态清空",
+    "actual": "phase=CANCELLED reason=pause_timeout isPaused=false pausedDays=0 exhausted=false updatedAt=60",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C3b 取消横幅",
+    "expect": "显示\"⛔ 暂停超时，已被系统自动取消\"",
+    "actual": "[\"⛔ 暂停超时，已被系统自动取消查看取消原因\"]",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C3c 终态无操作按钮",
+    "expect": "无恢复/追加预算，仅有查看取消原因",
+    "actual": "恢复=false 追加=false 查看原因=true",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C4 取消原因弹窗",
+    "expect": "含项目名/取消日期/原因代码 pause_timeout/可读说明/仅【关闭】",
+    "actual": "{\"text\":\"项目取消详情项目C项目取消日期第 60 天原因代码pause_timeout说明连续暂停达到 60 个游戏日，系统按规则自动取消。后续状态项目不再推进研发、不产生人员产出与新支出；已发生义务按 G-05 处理。关闭\",\"buttons\":[\"关闭\"],\"ariaModal\":\"true\",\"focusInside\":true}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C4b Esc 关闭后焦点归还",
+    "expect": "弹窗关闭，焦点回到触发按钮\"查看取消原因\"",
+    "actual": "{\"gone\":true,\"focusText\":\"查看取消原因\",\"focusTag\":\"BUTTON\"}",
+    "verdict": "PASS"
+  },
+  {
+    "id": "C5 列表取消态",
+    "expect": "徽标显示\"暂停超时\"（非 i18n 原始键、非\"玩家已取消\"），阶段列显示\"已取消\"",
+    "actual": "[{\"kind\":\"cancelled_timeout\",\"text\":\"⛔ 暂停超时\"}] row=[\"C项目已取消⛔ 暂停超时—无法估算0%$4,000 / $500,000(1%)查看原因\"]",
+    "verdict": "PASS"
+  }
+]

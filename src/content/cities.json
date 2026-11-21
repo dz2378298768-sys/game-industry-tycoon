@@ -1,0 +1,10 @@
+[
+  { "id": "san_francisco", "displayName": "San Francisco", "displayNameZh": "旧金山", "regionId": "north_america", "avgSalaryMultiplier": 1.4, "officeRentMultiplier": 1.5, "talentPoolSize": 5000 },
+  { "id": "seattle", "displayName": "Seattle", "displayNameZh": "西雅图", "regionId": "north_america", "avgSalaryMultiplier": 1.3, "officeRentMultiplier": 1.3, "talentPoolSize": 3500 },
+  { "id": "los_angeles", "displayName": "Los Angeles", "displayNameZh": "洛杉矶", "regionId": "north_america", "avgSalaryMultiplier": 1.35, "officeRentMultiplier": 1.4, "talentPoolSize": 4500 },
+  { "id": "new_york", "displayName": "New York", "displayNameZh": "纽约", "regionId": "north_america", "avgSalaryMultiplier": 1.45, "officeRentMultiplier": 1.6, "talentPoolSize": 4000 },
+  { "id": "tokyo", "displayName": "Tokyo", "displayNameZh": "东京", "regionId": "japan", "avgSalaryMultiplier": 1.2, "officeRentMultiplier": 1.25, "talentPoolSize": 4000 },
+  { "id": "london", "displayName": "London", "displayNameZh": "伦敦", "regionId": "western_europe", "avgSalaryMultiplier": 1.3, "officeRentMultiplier": 1.35, "talentPoolSize": 3000 },
+  { "id": "seoul", "displayName": "Seoul", "displayNameZh": "首尔", "regionId": "east_asia", "avgSalaryMultiplier": 0.9, "officeRentMultiplier": 0.85, "talentPoolSize": 3500 },
+  { "id": "sao_paulo", "displayName": "São Paulo", "displayNameZh": "圣保罗", "regionId": "south_america", "avgSalaryMultiplier": 0.6, "officeRentMultiplier": 0.6, "talentPoolSize": 2500 }
+]

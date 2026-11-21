@@ -1,0 +1,8 @@
+[
+  { "id": "arcade_enthusiasts", "displayName": "Arcade Enthusiasts", "displayNameZh": "街机爱好者", "availableYearStart": 1970 },
+  { "id": "home_players", "displayName": "Home Console Players", "displayNameZh": "家用机玩家", "availableYearStart": 1977 },
+  { "id": "pc_gamers", "displayName": "PC Gamers", "displayNameZh": "PC 玩家", "availableYearStart": 1980 },
+  { "id": "casual_players", "displayName": "Casual Players", "displayNameZh": "休闲玩家", "availableYearStart": 1995 },
+  { "id": "online_gamers", "displayName": "Online Gamers", "displayNameZh": "在线玩家", "availableYearStart": 2001 },
+  { "id": "mobile_gamers", "displayName": "Mobile Gamers", "displayNameZh": "移动玩家", "availableYearStart": 2008 }
+]

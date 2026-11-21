@@ -1,0 +1,14 @@
+[
+  { "id": "action", "displayName": "Action", "displayNameZh": "动作", "complexityMultiplier": 1.2, "defaultLifecycleMonths": 36 },
+  { "id": "adventure", "displayName": "Adventure", "displayNameZh": "冒险", "complexityMultiplier": 1.1, "defaultLifecycleMonths": 42 },
+  { "id": "arcade", "displayName": "Arcade", "displayNameZh": "街机", "complexityMultiplier": 0.7, "defaultLifecycleMonths": 12 },
+  { "id": "fighting", "displayName": "Fighting", "displayNameZh": "格斗", "complexityMultiplier": 1.0, "defaultLifecycleMonths": 24 },
+  { "id": "puzzle", "displayName": "Puzzle", "displayNameZh": "益智", "complexityMultiplier": 0.6, "defaultLifecycleMonths": 18 },
+  { "id": "racing", "displayName": "Racing", "displayNameZh": "赛车", "complexityMultiplier": 1.1, "defaultLifecycleMonths": 30 },
+  { "id": "rpg", "displayName": "RPG", "displayNameZh": "角色扮演", "complexityMultiplier": 1.5, "defaultLifecycleMonths": 60 },
+  { "id": "shooter", "displayName": "Shooter", "displayNameZh": "射击", "complexityMultiplier": 1.2, "defaultLifecycleMonths": 30 },
+  { "id": "simulation", "displayName": "Simulation", "displayNameZh": "模拟", "complexityMultiplier": 1.3, "defaultLifecycleMonths": 48 },
+  { "id": "sports", "displayName": "Sports", "displayNameZh": "体育", "complexityMultiplier": 1.0, "defaultLifecycleMonths": 24 },
+  { "id": "strategy", "displayName": "Strategy", "displayNameZh": "策略", "complexityMultiplier": 1.3, "defaultLifecycleMonths": 42 },
+  { "id": "platformer", "displayName": "Platformer", "displayNameZh": "平台跳跃", "complexityMultiplier": 0.9, "defaultLifecycleMonths": 24 }
+]

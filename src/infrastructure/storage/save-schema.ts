@@ -128,6 +128,7 @@ const projectSchema = z
     /** M3-C1：开发/上市营销拆分；旧档缺省不补，由预算服务回退 */
     developmentBudgetCents: z.number().int().nonnegative().optional(),
     launchMarketingReservedCents: z.number().int().nonnegative().optional(),
+    launchMarketingSpentCents: z.number().int().nonnegative().optional(),
     /** DESIGN-G05 §7.3：spent/committed 非负；旧存档缺省 0 */
     budgetSpentCents: z.number().int().nonnegative().default(0),
     budgetCommittedCents: z.number().int().nonnegative().default(0),
@@ -255,6 +256,8 @@ const marketingCampaignSchema = z
   .object({
     id: z.string().min(1),
     productId: z.string().min(1),
+    projectId: z.string().min(1).optional(),
+    prelaunch: z.boolean().optional(),
     channel: z.enum(['social', 'expo', 'ads']),
     dailyBudgetCents: z.number().int().nonnegative(),
     startDay: z.number().int().nonnegative(),

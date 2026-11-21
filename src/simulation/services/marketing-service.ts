@@ -30,6 +30,8 @@ export type MarketingErrorCode =
   | 'MARKETING_PRODUCT_NOT_FOUND'
   | 'MARKETING_PRODUCT_NOT_ACTIVE'
   | 'MARKETING_BUDGET_OUT_OF_RANGE'
+  | 'MARKETING_PROJECT_NOT_FOUND'
+  | 'MARKETING_PROJECT_TERMINAL'
 
 export interface SetMarketingBudgetCmd {
   productId: string
@@ -165,6 +167,81 @@ export function setMarketingBudget(
   }
 }
 
+export interface SetPrelaunchMarketingCmd {
+  projectId: string
+  channel: MarketingChannel
+  dailyBudgetCents: number
+}
+
+/** 上市前项目投放：产品尚未生成时挂项目，费用只累加 launchMarketingSpentCents。 */
+export function setPrelaunchMarketingBudget(
+  world: WorldState,
+  cmd: SetPrelaunchMarketingCmd,
+  day: number,
+): MarketingCommandResult {
+  const project = world.projects.find((p) => p.id === cmd.projectId)
+  if (project === undefined) {
+    return { ok: false, world, errorCode: 'MARKETING_PROJECT_NOT_FOUND', errorMessage: '项目不存在' }
+  }
+  if (project.phase === 'LAUNCHED' || project.phase === 'CANCELLED') {
+    return { ok: false, world, errorCode: 'MARKETING_PROJECT_TERMINAL', errorMessage: '项目已终止' }
+  }
+  if (
+    !Number.isInteger(cmd.dailyBudgetCents) ||
+    cmd.dailyBudgetCents < MARKETING_BUDGET_MIN_CENTS ||
+    cmd.dailyBudgetCents > MARKETING_BUDGET_MAX_CENTS
+  ) {
+    return { ok: false, world, errorCode: 'MARKETING_BUDGET_OUT_OF_RANGE', errorMessage: '预算超出允许区间' }
+  }
+
+  const campaignId = `MP-${project.id}-${cmd.channel}`
+  const existing = world.marketingCampaigns.find((c) => c.id === campaignId)
+  const campaign: MarketingCampaign = {
+    id: campaignId,
+    productId: `prelaunch:${project.id}`,
+    projectId: project.id,
+    prelaunch: true,
+    channel: cmd.channel,
+    dailyBudgetCents: cmd.dailyBudgetCents,
+    startDay: existing?.startDay ?? day,
+    status: 'active',
+    version: (existing?.version ?? 0) + 1,
+    createdAt: existing?.createdAt ?? day,
+    updatedAt: day,
+  }
+  return {
+    ok: true,
+    world: {
+      ...world,
+      marketingCampaigns:
+        existing === undefined
+          ? [...world.marketingCampaigns, campaign]
+          : world.marketingCampaigns.map((c) => (c.id === campaignId ? campaign : c)),
+      events: [
+        ...world.events,
+        createMarketingCampaignSetEvent(`marketing-set:${campaignId}:${day}`, {
+          day,
+          campaignId,
+          productId: campaign.productId,
+          channel: cmd.channel,
+          dailyBudgetCents: cmd.dailyBudgetCents,
+        }),
+      ],
+    },
+    campaign,
+  }
+}
+
+/** 产品上市后结束该项目所有上市前投放。 */
+export function endPrelaunchCampaigns(world: WorldState, projectId: string, day: number): WorldState {
+  const campaigns = world.marketingCampaigns.map((c) =>
+    c.prelaunch === true && c.projectId === projectId && c.status === 'active'
+      ? { ...c, status: 'ended' as const, dailyBudgetCents: 0, version: c.version + 1, updatedAt: day }
+      : c,
+  )
+  return campaigns === world.marketingCampaigns ? world : { ...world, marketingCampaigns: campaigns }
+}
+
 /** 每日投放：扣款 →（未成功渠道）衰减 → 提升。 */
 export function tickMarketing(world: WorldState, day: number, deps: MarketingDeps): MarketingTickResult {
   if (world.marketingCampaigns.length === 0) {
@@ -173,6 +250,8 @@ export function tickMarketing(world: WorldState, day: number, deps: MarketingDep
 
   const events = [...world.events]
   const productsById = new Map(world.products.map((p) => [p.id, p]))
+  const projectsById = new Map(world.projects.map((p) => [p.id, p]))
+  const projectsUpdated = new Map<string, typeof world.projects[number]>()
   const spentByProduct = new Map<string, boolean>()
   const awarenessByProduct = new Map<string, Record<string, number>>()
   let spentCents = 0
@@ -180,6 +259,60 @@ export function tickMarketing(world: WorldState, day: number, deps: MarketingDep
 
   for (const campaign of world.marketingCampaigns) {
     if (campaign.status !== 'active' || campaign.dailyBudgetCents <= 0) continue
+
+    if (campaign.prelaunch === true && campaign.projectId !== undefined) {
+      const project = projectsById.get(campaign.projectId)
+      if (
+        project === undefined ||
+        project.phase === 'LAUNCHED' ||
+        project.phase === 'CANCELLED'
+      ) {
+        continue
+      }
+      const key = `marketing-prelaunch:${project.id}:${campaign.channel}:${day}`
+      const posted = deps.finance.postTransaction({
+        idempotencyKey: key,
+        companyId: project.companyId,
+        day,
+        category: 'marketing',
+        amountCents: -campaign.dailyBudgetCents,
+        description: `上市前营销 ${campaign.channel}`,
+        referenceId: campaign.id,
+      })
+      if (!posted.success) {
+        failedChannels += 1
+        events.push(
+          createMarketingSpendFailedEvent(`marketing-failed:${campaign.id}:${day}`, {
+            day,
+            campaignId: campaign.id,
+            productId: campaign.productId,
+            channel: campaign.channel,
+            reasonCode: posted.errorCode ?? 'FIN_UNKNOWN',
+          }),
+        )
+        continue
+      }
+      if (posted.idempotent) continue
+      spentCents += campaign.dailyBudgetCents
+      const base = projectsUpdated.get(project.id) ?? project
+      projectsUpdated.set(project.id, {
+        ...base,
+        launchMarketingSpentCents: (base.launchMarketingSpentCents ?? 0) + campaign.dailyBudgetCents,
+        version: base.version + 1,
+        updatedAt: day,
+      })
+      events.push(
+        createMarketingSpendPostedEvent(`marketing-spend:${campaign.id}:${day}`, {
+          day,
+          campaignId: campaign.id,
+          productId: campaign.productId,
+          channel: campaign.channel,
+          amountCents: campaign.dailyBudgetCents,
+        }),
+      )
+      continue
+    }
+
     const product = productsById.get(campaign.productId)
     if (product === undefined || !isInvestable(product)) continue
 
@@ -265,8 +398,12 @@ export function tickMarketing(world: WorldState, day: number, deps: MarketingDep
     return nextAwareness === undefined ? product : { ...product, awarenessByMarket: nextAwareness }
   })
 
+  const updatedProjects =
+    projectsUpdated.size === 0
+      ? world.projects
+      : world.projects.map((p) => projectsUpdated.get(p.id) ?? p)
   return {
-    world: { ...world, products: updatedProducts, events },
+    world: { ...world, products: updatedProducts, projects: updatedProjects, events },
     spentCents,
     failedChannels,
   }
@@ -278,6 +415,18 @@ export class MarketingService {
 
   setBudget(world: WorldState, cmd: SetMarketingBudgetCmd, day: number): MarketingCommandResult {
     return setMarketingBudget(world, cmd, day)
+  }
+
+  setPrelaunchBudget(
+    world: WorldState,
+    cmd: SetPrelaunchMarketingCmd,
+    day: number,
+  ): MarketingCommandResult {
+    return setPrelaunchMarketingBudget(world, cmd, day)
+  }
+
+  endPrelaunch(world: WorldState, projectId: string, day: number): WorldState {
+    return endPrelaunchCampaigns(world, projectId, day)
   }
 
   tick(world: WorldState, day: number): MarketingTickResult {

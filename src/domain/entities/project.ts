@@ -31,6 +31,8 @@ export interface Project {
   /** M3-C1：开发预算与上市营销预留拆分；旧档缺省时由 budgetTotalCapCents 回退 */
   developmentBudgetCents?: number
   launchMarketingReservedCents?: number
+  /** C1-T7：上市前已投放的营销费用；旧档缺省 0 */
+  launchMarketingSpentCents?: number
   budgetSpentCents: number
   budgetCommittedCents: number
   /**

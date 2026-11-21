@@ -70,6 +70,9 @@ export interface AiCompanyView {
     budgetRemainingCents?: number
     monthlyBurnCents?: number
     launchMarketingReservedCents?: number
+    launchMarketingSpentCents?: number
+    /** 当前项目质量估计（用于上市定价；有真实 finalQualityScore 时优先） */
+    qualityScore?: number
     genreId?: string
     platformIds?: string[]
     segmentIds?: string[]
@@ -85,6 +88,9 @@ export interface AiCompanyView {
     supportedPlatformIds?: string[]
     audienceSegmentIds?: string[]
     activeCampaignCount?: number
+    /** 上市营销预留/已花，用于上市后 90 天日预算 */
+    launchMarketingReservedCents?: number
+    launchMarketingSpentCents?: number
   }>
   staffCount?: number
   /** C1 Stage 1：在职员工月薪合计（含已分配到项目的 FTE） */
@@ -95,6 +101,8 @@ export interface AiCompanyView {
   existingProjectMonthlyBurnCents?: number
   /** 应付账款；当前无 AP 账本时为项目已承诺额 */
   accountsPayableCents?: number
+  /** 近 30 天净销售收入，用于上市后营销预算 */
+  lastMonthRevenueCents?: number
 }
 
 export interface AiCandidateRecord {
@@ -271,13 +279,34 @@ export function suggestedPriceCents(params: {
   const reference = referencePriceCents(params.genreId, params.platformId, params.segmentId)
   const factor = Math.max(0.5, Math.min(1.5, 0.75 + 0.5 * (params.qualityScore / 100)))
   const jitter = 0.95 + hash01(params.seed, params.companyId, params.day, 'price') * 0.1
-  return Math.max(1, Math.round(reference * factor * jitter))
+  const choice = 0.9 + hash01(params.seed, params.companyId, params.day, 'priceChoice') * 0.2
+  const chosen = reference * factor * jitter * choice
+  return Math.max(
+    1,
+    Math.round(Math.max(reference * 0.5, Math.min(reference * 1.5, chosen))),
+  )
 }
 
-function marketingBudgetCents(view: AiCompanyView): number {
-  const persona = TUNING.ai.persona[view.persona]
-  const raw = Math.round((view.monthlyFixedExpenseCents * persona.marketingRatio) / 30)
-  return Math.max(MARKETING_BUDGET_MIN_CENTS, Math.min(MARKETING_BUDGET_MAX_CENTS, raw))
+function marketingBudgetCents(
+  view: AiCompanyView,
+  product: AiCompanyView['products'][number],
+  day: number,
+): number {
+  const launchAge = day - product.launchDay
+  const reserve = product.launchMarketingReservedCents ?? 0
+  const spent = product.launchMarketingSpentCents ?? 0
+  let daily: number
+  if (launchAge >= 0 && launchAge < 90 && reserve - spent > 0) {
+    daily = Math.round(Math.max(0, reserve - spent) / Math.max(1, 90 - launchAge))
+  } else {
+    const monthly = Math.min(
+      Math.max(0, (view.lastMonthRevenueCents ?? 0) * 0.15),
+      Math.max(0, view.cashCents - view.monthlyFixedExpenseCents * RESERVE_MONTHS),
+    )
+    daily = Math.round(monthly / 30)
+  }
+  if (daily < MARKETING_BUDGET_MIN_CENTS) return 0
+  return Math.min(MARKETING_BUDGET_MAX_CENTS, daily)
 }
 
 function payrollOf(view: AiCompanyView): number {
@@ -529,7 +558,7 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
       genreId: content.genreId,
       platformId,
       segmentId,
-      qualityScore: 50,
+      qualityScore: project.qualityScore ?? 50,
       companyId: view.id,
       day,
       seed,
@@ -571,7 +600,20 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
   )
   if (investable !== undefined && view.cashCents >= view.monthlyFixedExpenseCents * 6) {
     const channel = chooseChannel(seed, view.id, day, `${investable.launchDay}:${investable.genreId ?? ''}`)
-    const dailyBudgetCents = marketingBudgetCents(view)
+    const dailyBudgetCents = marketingBudgetCents(view, investable, day)
+    if (dailyBudgetCents <= 0) {
+      candidates.push(candidate('DO_NOTHING', [], view, 0, persona.riskAversion, { reason: '营销预算为 0' }))
+      return {
+        companyId: view.id,
+        day,
+        month: monthKey(day),
+        candidates,
+        chosen: 'DO_NOTHING',
+        reason: '已上市产品无营销预算，等待收入或上市预售期',
+        inputsDigest: inputsDigest(view),
+        params: { action: 'DO_NOTHING', reason: 'marketing-budget-zero' },
+      }
+    }
     candidates.push(
       candidate('SET_MARKETING', [], view, 0, persona.riskAversion, { reason: '产品已上市且无投放' }),
     )

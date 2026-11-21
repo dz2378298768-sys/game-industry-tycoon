@@ -14,6 +14,8 @@ import { createProductLifecycleChangedEvent } from '@domain/events'
 import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
 import { planAiMonth, suggestedStartBudget, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
 import { projectMonthlyBurnCents } from '@simulation/ai/ai-runway'
+import { computeMarketingLift } from '@simulation/services/demand-pool'
+import { MARKETING_BUDGET_MAX_CENTS, MARKETING_BUDGET_MIN_CENTS } from '@domain/value-objects/marketing-response'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
@@ -112,6 +114,7 @@ export class GameWorld {
       finance: this.finance,
       rng: this.rng,
       inputs: this.salesInputs,
+      demandMode: true,
     })
     this.refunds = this.createRefundService()
     this.pricing = new ProductPricingService()
@@ -468,6 +471,9 @@ export class GameWorld {
     if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
       product.awarenessByMarket = seedInitialAwareness(company.brand, this.dayIndex)
     }
+    if (product !== undefined && product.awarenessByScope === undefined) {
+      product.awarenessByScope = awarenessByScopeOf(product)
+    }
     this.syncCash(company)
     return { success: true, result: result.result.product }
   }
@@ -766,12 +772,6 @@ export class GameWorld {
     return [...this.aiDecisionLog]
   }
 
-  private aiBudget(company: Company): number {
-    const persona = company.persona ?? 'indie'
-    const ratio = TUNING.ai.persona[persona].budgetRatioCap
-    return Math.round(Math.min(this.finance.getCashBalance(company.id) * ratio, 5_000_000))
-  }
-
   private buildAiView(company: Company): AiCompanyView {
     const staff = this.world.employees.filter(
       (e) => e.companyId === company.id && e.status === 'hired',
@@ -842,6 +842,10 @@ export class GameWorld {
                 ) / Math.max(1, (activeProject.plannedLaunchDay - this.dayIndex) / 30),
               ),
               launchMarketingReservedCents: activeProject.launchMarketingReservedCents ?? 0,
+              launchMarketingSpentCents: activeProject.launchMarketingSpentCents ?? 0,
+              qualityScore:
+                Object.values(activeProject.qualityEstimate).reduce((a, b) => a + b, 0) /
+                Math.max(1, Object.keys(activeProject.qualityEstimate).length),
               genreId: activeProject.genreId,
               platformIds: activeProject.targetPlatformIds,
               segmentIds: activeProject.audienceSegmentIds,
@@ -860,10 +864,68 @@ export class GameWorld {
           activeCampaignCount: this.world.marketingCampaigns.filter(
             (c) => c.productId === p.id && c.status === 'active',
           ).length,
+          launchMarketingReservedCents:
+            this.world.projects.find((proj) => proj.id === p.sourceProjectId)
+              ?.launchMarketingReservedCents ?? 0,
+          launchMarketingSpentCents:
+            this.world.projects.find((proj) => proj.id === p.sourceProjectId)
+              ?.launchMarketingSpentCents ?? 0,
         })),
+      lastMonthRevenueCents: this.finance
+        .getTransactionsByCompany(company.id)
+        .filter((t) => t.category === 'sales_revenue' && t.day >= this.dayIndex - 30)
+        .reduce((sum, t) => sum + t.amountCents, 0),
       staffCount: this.world.employees.filter(
         (e) => e.companyId === company.id && e.status === 'hired',
       ).length,
+    }
+  }
+
+  private applyPrelaunchAwareness(product: Product, project: Project): void {
+    const spent = project.launchMarketingSpentCents ?? 0
+    if (spent <= 0) return
+    const base = project.developmentBudgetCents ?? project.budgetTotalCapCents
+    const lift = computeMarketingLift(spent, Math.max(1, base))
+    const boost = (map: Record<string, number>): Record<string, number> => {
+      const out: Record<string, number> = {}
+      for (const [marketId, value] of Object.entries(map)) {
+        out[marketId] = Math.max(0, Math.min(0.6, value * lift))
+      }
+      return out
+    }
+    product.awarenessByMarket = boost(product.awarenessByMarket)
+    if (product.awarenessByScope !== undefined) product.awarenessByScope = boost(product.awarenessByScope)
+  }
+
+  /** C1-T7：上市前 90 天按月启动项目投放，日预算 = 预留 / 90。 */
+  private maybeStartAiPrelaunch(dayIndex: number): void {
+    for (const project of this.world.projects) {
+      const owner = this.world.companies.find((c) => c.id === project.companyId)
+      if (owner === undefined || owner.isPlayer) continue
+      if (project.phase === 'LAUNCHED' || project.phase === 'CANCELLED') continue
+      const daysToLaunch = project.plannedLaunchDay - dayIndex
+      if (daysToLaunch < 0 || daysToLaunch > 90) continue
+      if (this.world.marketingCampaigns.some(
+        (c) => c.prelaunch === true && c.projectId === project.id && c.status === 'active',
+      )) {
+        continue
+      }
+      const reserve = project.launchMarketingReservedCents ?? 0
+      const spent = project.launchMarketingSpentCents ?? 0
+      const remaining = reserve - spent
+      if (remaining <= 0) continue
+      const daily = Math.max(
+        MARKETING_BUDGET_MIN_CENTS,
+        Math.min(MARKETING_BUDGET_MAX_CENTS, Math.round(remaining / 90)),
+      )
+      const channels: MarketingChannel[] = ['social', 'expo', 'ads']
+      const channel = channels[Math.abs(project.plannedLaunchDay + project.genreId.length) % 3]!
+      const result = this.marketing.setPrelaunchBudget(
+        this.world,
+        { projectId: project.id, channel, dailyBudgetCents: daily },
+        dayIndex,
+      )
+      if (result.ok) this.world = result.world
     }
   }
 
@@ -936,6 +998,7 @@ export class GameWorld {
 
   private runAiMonthly(dayIndex: number): void {
     if (!this.aiCompetitionEnabled) return
+    this.maybeStartAiPrelaunch(dayIndex)
     const aiCompanies = this.world.companies
       .filter((c) => !c.isPlayer && c.status !== 'dissolved')
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -957,6 +1020,8 @@ export class GameWorld {
               audienceSegmentIds: segmentIds,
               targetPlatformIds: platformIds,
               budgetTotalCapCents: budget.totalBudgetCents,
+              developmentBudgetCents: budget.developmentBudgetCents,
+              launchMarketingReservedCents: budget.launchMarketingReservedCents,
               plannedStartDay: dayIndex,
               plannedLaunchDay: dayIndex + 120,
             }),
@@ -978,6 +1043,11 @@ export class GameWorld {
               product.awarenessByScope = awarenessByScopeOf(product)
             }
             company.brand = Math.max(0, Math.min(100, company.brand + launched.result.product.brandImpact))
+            const launchedProject = this.world.projects.find((p) => p.id === params.projectId)
+            if (product !== undefined && launchedProject !== undefined) {
+              this.applyPrelaunchAwareness(product, launchedProject)
+            }
+            this.world = this.marketing.endPrelaunch(this.world, params.projectId, dayIndex)
             if (product !== undefined && params.priceCents > 0) {
               const priced = this.pricing.setPrice(
                 this.world,
@@ -1211,9 +1281,13 @@ export class GameWorld {
   restore(state: WorldState): void {
     // M2-H §4.3：旧档空认知度回填（只写认知度，不回补历史销量/现金），并留事件
     for (const product of state.products) {
+      if (product.status === 'active' && product.awarenessByScope === undefined) {
+        product.awarenessByScope = awarenessByScopeOf(product)
+      }
       if (product.status !== 'active' || Object.keys(product.awarenessByMarket).length > 0) continue
       const company = state.companies.find((c) => c.id === product.companyId)
       product.awarenessByMarket = seedInitialAwareness(company?.brand ?? 0, state.currentDayIndex)
+      product.awarenessByScope = awarenessByScopeOf(product)
       state.events = [
         ...state.events,
         createProductLifecycleChangedEvent(`product-awareness-backfill:${product.id}`, {
@@ -1250,6 +1324,7 @@ export class GameWorld {
       finance: this.finance,
       rng: this.rng,
       inputs: this.salesInputs,
+      demandMode: true,
     })
     this.refunds = this.createRefundService()
     this.pricing = new ProductPricingService()

@@ -96,6 +96,7 @@ describe('AI 月度决策 — 纯函数', () => {
             launchDay: 10,
             activeCampaignCount: 0,
             genreId: 'action',
+            launchMarketingReservedCents: 900_000,
           },
         ],
       }),

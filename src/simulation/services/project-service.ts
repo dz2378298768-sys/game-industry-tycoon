@@ -25,6 +25,9 @@ export interface CreateProjectCmd {
   audienceSegmentIds: string[]
   targetPlatformIds: string[]
   budgetTotalCapCents: number
+  /** C1：开发/上市营销拆分；缺省时视为全部开发预算 */
+  developmentBudgetCents?: number
+  launchMarketingReservedCents?: number
   plannedLaunchDay: number
   plannedStartDay: number
   qualityTargets?: {
@@ -150,6 +153,8 @@ export class ProjectService {
       actualLaunchDay: null,
       scope: [],
       budgetTotalCapCents: cmd.budgetTotalCapCents,
+      developmentBudgetCents: cmd.developmentBudgetCents ?? cmd.budgetTotalCapCents,
+      launchMarketingReservedCents: cmd.launchMarketingReservedCents ?? 0,
       budgetSpentCents: 0,
       budgetCommittedCents: 0,
       teamAssignments: [],

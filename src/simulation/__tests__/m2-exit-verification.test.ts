@@ -32,14 +32,20 @@ function seedCompany(gw: GameWorld, cashCents = 10_000_000) {
   return company
 }
 
-function addProjectAndLaunch(gw: GameWorld, projectId: string, segmentId: string, stableId: string | null) {
+function addProjectAndLaunch(
+  gw: GameWorld,
+  projectId: string,
+  segmentId: string,
+  stableId: string | null,
+  platformId = PLATFORM,
+) {
   gw.world.projects.push(makeProject({
     id: projectId,
     companyId: 'company-1',
     phase: 'READY_TO_LAUNCH',
     plannedLaunchDay: gw.calendar.currentDayIndex,
     audienceSegmentIds: [segmentId],
-    targetPlatformIds: [PLATFORM],
+    targetPlatformIds: [platformId],
     workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 0 },
   }))
   const launched = gw.launchProject(projectId)
@@ -106,8 +112,9 @@ describe('M2 出口验证 v2', () => {
     const gw = createGameWorld(42)
     seedCompany(gw, 5_000_000_000)
     gw.advanceSimulation(gregorianToDayIndex(1977, 1, 1))
-    const arcade = addProjectAndLaunch(gw, 'project-arcade', 'arcade_enthusiasts', 'PROD-ARCADE')
-    const home = addProjectAndLaunch(gw, 'project-home', 'home_players', 'PROD-HOME')
+    // C1 后 arcade_pre_1975 在 1974 后进入 tail 并退场；1977 改用当时可用的 arcade_classic
+    const arcade = addProjectAndLaunch(gw, 'project-arcade', 'arcade_enthusiasts', 'PROD-ARCADE', 'arcade_classic')
+    const home = addProjectAndLaunch(gw, 'project-home', 'home_players', 'PROD-HOME', 'arcade_classic')
     // 测量协议：同认知度（消除品牌加成差异），同价、同市场、同平台、无营销
     const baseline = 0.072
     for (const p of [arcade.product, home.product]) {
@@ -148,6 +155,8 @@ describe('M2 出口验证 v2', () => {
     gw.world.products[0]!.awarenessByMarket = {}
     gw.advanceSimulation(1)
     const before = gw.world.products[0]!.salesByPeriod.length
+    // demand 管线销售后会按 scope 回写 awarenessByMarket；再次清空以模拟旧档
+    gw.world.products[0]!.awarenessByMarket = {}
     gw.restore(gw.world) // 模拟读档
     const backfilled = gw.world.products[0]!.awarenessByMarket
     const events = gw.world.events.filter((e) => (e.payload as { reason?: string }).reason === 'awareness_backfill')

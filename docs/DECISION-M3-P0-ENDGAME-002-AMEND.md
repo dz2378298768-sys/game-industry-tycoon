@@ -56,10 +56,10 @@ dissolved（终态）
 ### 2.2 恢复线
 
 ```
-recoveryLine = max($4,000, 6 × corporateFixedMonthly)
+recoveryLine = max($4,000, 6 × (corporateFixedMonthly + retainedProjectMonthlyBurn))
 ```
 
-`corporateFixedMonthly` 取缩减后团队的工资、房租、软件、行政；不含已取消项目的分摊。若字段缺失，用 `monthlyFixedExpenseCents` 回退。
+`corporateFixedMonthly` 取缩减后团队的工资、房租、软件、行政；不含已取消项目的分摊。`retainedProjectMonthlyBurn` 是“接近上市”例外项目保留期间的月 burn，没有例外项目时为 0。若字段缺失，用 `monthlyFixedExpenseCents` 回退。
 
 3 个月固定支出只作为“可延长重整”的稳定线，不作为恢复线。恢复到 3 个月 runway 仍属危机区，不能在危机线上宣布恢复。
 
@@ -229,7 +229,7 @@ recoveryLine = max($4,000, 6 × corporateFixedMonthly)
 | 产品 | 立即 retired | 重整期继续销售，解散才 retired |
 | 合同 | 立即 terminated | 重整期继续结算，解散才 terminated |
 | 员工 | 立即全裁、不付遣散 | 先裁非核心并付遣散，核心保留 |
-| 恢复线 | 固定 $4,000 | `max($4,000, 6 个月固定支出)` |
+| 恢复线 | 固定 $4,000 | `max($4,000, 6 个月固定支出 + 保留项目 burn)` |
 | 解散时点 | 360 天 | 360 天，新增 90/180 阶段 |
 | 资产处置 | 不做 | 每 90 天窗口一次，整个 episode 最多 3 次，需真实买家 |
 | 状态 | `bankrupt` | `bankrupt` + `bankruptcyPhase` |
@@ -254,7 +254,7 @@ recoveryLine = max($4,000, 6 × corporateFixedMonthly)
 
 ## 13. 交给 C1 的约束
 
-- C1 v1.1 必须实现本文件 §2–§9 的状态机、恢复线、重整会计、资产处置、事件、存档迁移；
+- C1 v1.2 必须实现本文件 §2–§9 的状态机、恢复线、重整会计、资产处置、事件、存档迁移；
 - C1 不得自行改恢复线、延长条件、资产处置次数；
 - C1 的 Stage 0–4 需求池、预算、选址、定价、营销必须与重整期兼容：重整期产品继续销售、项目取消、合同继续结算；
 - 玩家重整面板最小三动作纳入 C1，不做完整财务重组 UI。

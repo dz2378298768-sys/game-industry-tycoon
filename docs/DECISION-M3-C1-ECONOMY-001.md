@@ -1,6 +1,6 @@
 # M3-C1：AI 经济闭环修正（v1.0 DRAFT）
 
-状态：**SUPERSEDED（由 `DECISION-M3-C1-001-v1.1.md` 替代；本文件只保留为财务与营销子规格）**
+状态：**SUPERSEDED（由 `DECISION-M3-C1-001-v1.2.md` 替代；本文件只保留为财务与营销子规格）**
 范围：只修「AI 为什么活不下来」的结构性问题，不新增玩法系统
 前置：`docs/REPORT-M3-C-LONGRUN.md`（FAIL）、`docs/DECISION-M3-P0-AI-003.md`
 

@@ -1,8 +1,8 @@
-# M3-C1：经营与竞争最小闭环工程规格 v1.1
+# M3-C1：经营与竞争最小闭环工程规格 v1.2
 
-- 编号：DECISION-M3-C1-001-v1.1
-- 版本：v1.1（替代 v1.0 的财务子规格）
-- 状态：DRAFT，待独立设计审核
+- 编号：DECISION-M3-C1-001-v1.2
+- 版本：v1.2（R1 修订后）
+- 状态：DRAFT，待 R2
 - 上游：`DECISION-M3-SCOPE-001.md` v0.4、`DECISION-M3-P0-ENDGAME-002-AMEND.md` v2.2、`DECISION-M3-P0-AI-003.md`、`DECISION-M3-P0-CONTRACT-004.md`
 - 范围：只做六项机制，不新增 M4 系统
 
@@ -50,15 +50,38 @@ rateProfile?: 'legacy' | 'realistic'
 - `allocatedUnits(product, scope)`：实际分配，整数。
 - `awarenessByMarket[marketId]`：按 audience 加权的 scope 汇总。
 
+### 2.3 内容表
+
+新增三张表，放 `src/content/`，不得硬编码：
+
+```ts
+// platform-market-share.json
+{ platformId, marketId, year, share } // 同一平台同一年 Σ share ≤ 1
+
+// price-reference.json
+{ genreId, platformType, segmentId, referencePriceCents, source }
+
+// genre-segment-affinity.json
+{ genreId, segmentId, affinity } // 0–1
+```
+
+缺省规则：
+
+- `marketShare` 缺省 = 该市场人口权重 / 同年平台覆盖市场权重和；仍无数据则平均分；
+- `referencePriceCents` 缺省 = `TUNING.sales.basePriceCents`；
+- `affinity` 缺省 = 0.5，不得随机；
+- 内容测试：份额和 ≤1、价格为正、affinity 在 0–1、每个平台至少覆盖一个市场。
+
 ## 3. Stage 0：需求契约
 
 ### 3.1 单位所有权
 
-只乘四次，不得再乘第五次：
+只乘五次，不得再乘第六次：
 
 ```
 audienceUnits(scope) = installBaseUnits(platform, day)
                      × platformActivity(platform, day)
+                     × marketShare(platform, market, day)
                      × segmentShare(platform, segment, day)
 
 poolUnits(product, scope) = audienceUnits(scope)
@@ -67,15 +90,17 @@ poolUnits(product, scope) = audienceUnits(scope)
 
 - `installBaseUnits`：平台累计装机/保有量，单位“台/份”，不是销量增量；
 - `platformActivity`：日活跃率 0.05–1.0；
+- `marketShare`：该市场占平台人群比例，同一平台同一天 `Σ marketShare ≤ 1`；
 - `segmentShare`：该受众占平台人群比例，同一平台同一天 `Σ segmentShare ≤ 1`；
 - `purchaseIntent`：0–1，`genreAffinity × priceFit × platformFit`，只乘一次。
 
-`eligibleAudience`、`platformReach`、`segmentShare` 不得在销售管线里再次相乘。禁止“平台触达 × 受众占比 × 购买意图 × 认知投影”四连乘。
+`eligibleAudience`、`platformReach`、`segmentShare`、`marketShare` 不得在销售管线里再次相乘。禁止“平台触达 × 市场占比 × 受众占比 × 购买意图 × 认知投影”五连乘后再乘一次。
 
 ### 3.2 认知度
 
 - `awarenessByScope[scope]` 是唯一可写认知度；
-- `attraction` 只读当前 scope 的认知度，不按市场投影；
+- 上市前 90 天给 `launchAwarenessFloor = 0.05 + 0.10 × 平台商店可见度 × 类型匹配`，上限 0.15；90 天后按正常衰减，不做永久加成；
+- `attraction` 只读 `max(awarenessByScope[scope], launchFloor(day))`，不按市场投影；
 - 多平台多受众时，每个 scope 独立衰减、独立营销、独立竞争；
 - `awarenessByMarket` 只做汇总展示，不参与销售计算。
 
@@ -92,19 +117,30 @@ poolUnits(product, scope) = audienceUnits(scope)
 - 复杂度上限 `O(products × supportedPlatforms × supportedSegments × markets)`，不得 `O(products × products × scopes)`；
 - 8 seed × 10 年单 world 峰值内存目标 <800MB，单 seed <180 秒。
 
+### 3.5 Stage 0 Gate（影子模式）
+
+- 在克隆世界/只读计算里跑 2 年 ×8 seed；
+- 不写销售、现金、认知度、产品、合同、项目；
+- 断言：`Σ units ≤ audienceUnits` 误差 0；`awarenessByMarket` 汇总误差 ≤1%；同一 seed 逐字段复现；
+- Gate 未过，`TUNING.c1.stage0=false`，Stage 1–4 不得启用；
+- Gate 报告写入 `artifacts/c1/stage0/`。
+
 ## 4. Stage 1：预算、runway、暂停
 
 ### 4.1 runway
 
 ```
-projectMonthlyBurn = (budgetTotalCapCents - budgetSpentCents)
+projectMonthlyBurn = developmentRemainingCents
                    / max(1, remainingPlannedDays / 30)
+pausedProjectMonthlyBurn = retainedTeamCostCents
 runwayMonths = cashCents
-             / (corporateFixedMonthly + Σ activeProjectMonthlyBurn)
+             / (corporateFixedMonthly + Σ activeProjectMonthlyBurn + Σ pausedProjectMonthlyBurn)
 ```
 
 - `corporateFixedMonthly` 只含公司固定支出（非项目工资、房租、软件、行政）；
-- `activeProjectMonthlyBurn` 只含在研项目；
+- 每个员工按 FTE 显式分配到 `corporate` 或某一个 project，合计不得超过 100%；共享员工按 FTE 百分比拆分；同一份工资只能进一个池；
+- `developmentRemainingCents` 只含开发预算，不含 `launchMarketingReservedCents`；
+- 暂停项目按保留团队成本计，不按全项目 burn；
 - 不得用 `cash / corporateFixedMonthly` 单独算 runway，也不得预扣整个项目预算。
 
 ### 4.2 项目预算
@@ -113,14 +149,16 @@ runwayMonths = cashCents
 developmentBudget = 计划工期全负荷工资
                   + QA/本地化/认证
                   + 10% 预备金
-launchMarketingBudget = developmentBudget × personaMarketingRatio
-projectBudget = developmentBudget + launchMarketingBudget
+launchMarketingReserved = developmentBudget × personaMarketingRatio
+projectBudget = developmentBudget + launchMarketingReserved
 marketingBase = developmentBudget
 ```
 
+- 项目预算拆成 `developmentBudgetCents` 与 `launchMarketingReservedCents` 两个字段，不得合并成一个 `budgetTotalCapCents` 再反推；
 - 人工必须用全负荷工资，不得按现金比例拍；
 - `personaMarketingRatio`：indie 15–30%、genre_specialist 25–50%、integrated 75–100%，取区间中值再按 seed ±20% 抖动；
-- `projectBudget` 不得低于 `MIN_PROJECT_BUDGET_CENTS`，低于则不立项。
+- `projectBudget` 不得低于 `MIN_PROJECT_BUDGET_CENTS`，低于则不立项；
+- 营销预留单独释放、单独核销；项目取消时未花预留退回现金，不罚没。
 
 ### 4.3 立项闸门
 
@@ -158,7 +196,7 @@ marketingBase = developmentBudget
 ```
 
 - `installBaseUnits` 按年绝对值，允许缺省；缺省时用 `relativeIndex`（峰值=1.0）加 `peakUnits`；
-- `endYear` 后平台不再接受新立项，已上市产品进入衰退曲线；
+- `endYear + 12 个月 tail` 后 `availability=0`，不再产生销售；已上市产品不自动退市，但没有收入；新项目不得选该平台；
 - 内容测试：年份单调、`endYear > launchYear`、装机值非负、至少一个平台覆盖 1970–2026。
 
 ### 5.2 选址评分
@@ -198,12 +236,13 @@ platformScore = 0.30 × installNorm
 
 ### 6.2 营销
 
-- 上市前 30 天开始投 `launchMarketingBudget`，不得等上市后；
+- 上市前 90 天开始投 `launchMarketingReserved`，不得等上市后；
+- 日预算 = `clamp(launchMarketingReserved / 90, MARKETING_BUDGET_MIN_CENTS, MARKETING_BUDGET_MAX_CENTS)`；超上限部分顺延到上市后 90 天，不一次性砸；
 - 上市后月度预算 = `min(月收入 × 15%, cash - 6× fixed)`，不得为负；
 - 渠道 `social / expo / ads` 按 `CHANNEL_FACTOR`；
 - `marketingLift = clamp(1 + 0.5 × ln(1 + spend / marketingBase), 1.0, 2.0)`；
 - 营销只进 `attraction`，不得直接加销量；
-- 营销花费必须走 `FinanceService`，幂等键按 campaign。
+- 营销花费必须走 `FinanceService`，幂等键按 campaign；预留释放与实际花费分开记账，不得双扣。
 
 ## 7. Stage 4：产品级需求池
 
@@ -219,7 +258,10 @@ attraction = awareness^0.35
            × availability
 ```
 
-- `awareness`、`quality`、`value`、`fit`、`brand` 均归一化到 0–1；
+- `awareness`、`quality`、`value`、`fit`、`brand` 均归一化到 0–1：
+  - `awareness01 = clamp(awarenessByScope / TUNING.sales.awarenessCap, 0, 1)`；
+  - `quality01 = finalQualityScore / 100`；
+  - `brand01 = clamp(brand / 100, 0, 1)`（若 brand 已是 0–1 则直接用）；
 - `value = clamp(referencePrice / effectivePrice, 0.5, 1.5)`；
 - `fit = genreAffinity × platformGenreFit × segmentFit`，clamp 0.05–1；
 - `availability = 1` 正常在售，`0.7` 清仓期，`0` 退市/不支持该平台。
@@ -228,11 +270,12 @@ attraction = awareness^0.35
 
 ```
 share = attraction^θ / Σ attraction^θ   // 同一 scope 内所有在售产品
-units = floor(poolUnits × share)
+rawUnits = poolUnits × share
 ```
 
 - θ 默认 1.5，可调 1.0–3.0；
-- 同一 scope 内按 `productId` 顺序分配，`Σ units ≤ audienceUnits`；
+- 整数分配用最大余数法：先 `floor(rawUnits)`，剩余单位按小数部分从大到小、同余按 `productId` 字典序补 1，补到 `min(Σ rawUnits, audienceUnits)` 的整数上限；
+- 同一 scope 内 `Σ units ≤ audienceUnits`；
 - 超出部分丢弃，不补、不借、不跨 scope 转移；
 - 无竞争者时 `share = 1`，`units = floor(poolUnits)`。
 
@@ -247,12 +290,12 @@ units = floor(poolUnits × share)
 ## 8. 破产重整接入
 
 - 破产触发、90/180/360、恢复线、资产处置、事件、存档迁移全部按 `DECISION-M3-P0-ENDGAME-002-AMEND.md` v2.2；
-- 恢复线 `max($4,000, 6× corporateFixedMonthly)`；
+- 恢复线 `max($4,000, 6×(corporateFixedMonthly + retainedProjectMonthlyBurn))`；保留的“接近上市”项目必须计入，否则恢复后会立刻再破产；
 - 重整期在售产品继续进需求池，价格按清仓折扣，`availability=0.7`；
 - 重整期合同继续结算，应收按账期回收；
 - 在研项目默认取消，只允许破产当日快照的“接近上市”一个例外；
 - 资产处置每个 90 天窗口最多一次、整个 episode 最多 3 次，买家必须是现金充足的 AI 公司；
-- 产品出售后 `companyId` 改为买家，scope 认知度保留，合同权利按合同条款转移；
+- 产品出售后 `companyId` 改为买家，scope 认知度保留，合同权利按合同条款转移；卖方针对该产品的所有 active campaign 在成交日结束，买家可重新开；
 - `dissolved` 后产品 `retired`、合同 `terminated`、项目 `CANCELLED`，从竞争集合移除。
 
 ## 9. 合同对等
@@ -260,7 +303,7 @@ units = floor(poolUnits × share)
 - `PublishingContract.rateProfile` 缺省 `legacy`；
 - 旧档、B1/B2 合同全部 `legacy`，费率 15–30%，不重算；
 - 新签合同 `realistic`：
-  - 有预付款：开发者分成 35–50%，预付款 100% 回收，回收完成前开发者分成 0；
+  - 有预付款：开发者分成 35–50%，预付款 100% 回收，回收完成前开发者分成 0；这是为兼容 B 系列的折中，不是现实还原（现实开发者平均约 58%）；
   - 无预付款：开发者分成 55–65%，无回收；
   - 预付款上限 = 预计开发成本 50%；
 - 结算公式不变，只换参数；
@@ -279,6 +322,26 @@ Phase B（重整）：
 `RESTRUCTURE / SELL_ASSET / CLEAR_INVENTORY`
 
 `RECOVER` 不是动作，恢复由日终自动判定。
+
+动作参数用判别联合，编译期必填：
+
+```ts
+type AiActionParams =
+  | { action: 'START_PROJECT'; genreId: string; platformIds: string[]; segmentIds: string[] }
+  | { action: 'ADVANCE_PHASE'; projectId: string }
+  | { action: 'LAUNCH'; projectId: string; priceCents: number; platformIds: string[] }
+  | { action: 'SET_PRICE'; productId: string; priceCents: number; discountRatePercent: number }
+  | { action: 'SET_MARKETING'; productId: string; channel: MarketingChannel; dailyBudgetCents: number }
+  | { action: 'FUND_PROJECT'; projectId: string; amountCents: number }
+  | { action: 'CANCEL_PROJECT'; projectId: string; reason: string }
+  | { action: 'CUT_STAFF'; percent: number; reason: string }
+  | { action: 'RESTRUCTURE'; cutStaffPercent: number; cancelProjectIds: string[] }
+  | { action: 'SELL_ASSET'; assetId: string; minPriceCents: number }
+  | { action: 'CLEAR_INVENTORY'; productIds: string[]; discountRatePercent: number }
+  | { action: 'DO_NOTHING'; reason: string }
+```
+
+`LAUNCH` 必须同时给价格，不允许“先上市、下月再定价”。`SET_MARKETING` 的日预算必须在 `MARKETING_BUDGET_MIN_CENTS..MAX` 内。
 
 ### 10.2 决策记录
 
@@ -308,7 +371,7 @@ Phase B（重整）：
 
 - `SAVE_SCHEMA_VERSION = 3`；
 - v2 → v3：
-  - `awarenessByMarket` 按平台 audience 权重拆到 `awarenessByScope`；
+  - `awarenessByMarket` 拆到 `awarenessByScope`：有载入日 audience 缓存 → 按 scope 的 `audienceUnits` 权重拆分；无缓存 → 在该产品支持的 scope 间等分；同一档重复载入结果一致，测试给固定期望值；
   - 破产档按 `bankruptSinceDay` 回填，不用读档日重置；
   - 合同补 `rateProfile='legacy'`；
   - 新增可选字段允许缺省；
@@ -326,8 +389,9 @@ Phase B（重整）：
 
 | 编号 | 任务 | 交付 |
 |---|---|---|
+| C1-T0 | Stage 0 影子门 | 克隆世界、2 年 ×8 seed、守恒报告 |
 | C1-T1 | schema v3 + 迁移 | `save-schema.ts`、迁移测试 |
-| C1-T2 | 平台生命周期与价格参考数据 | `platforms.json`、内容校验 |
+| C1-T2 | 平台生命周期、市场占比、价格参考、类型亲和 | `platforms.json`、`platform-market-share.json`、`price-reference.json`、`genre-segment-affinity.json` |
 | C1-T3 | 需求池纯函数 | `demand-pool.ts` + 单测 |
 | C1-T4 | 市场管线多平台多受众 | `market-simulation-service.ts` |
 | C1-T5 | AI 动作与决策记录 | `ai-planner.ts`、`game-world.ts` |
@@ -367,12 +431,19 @@ Phase B（重整）：
 | E22 | 10 年单 world 峰值 <800MB，双 world 不同进程 |
 | E23 | 单 seed 10 年 <180 秒 |
 | E24 | 无系统注资、无锁份额、无强制复活；现金变化都能追到交易 |
+| E25 | 8 个市场下 `marketShare` 生效，总需求不放大 8 倍 |
+| E26 | 共享员工 FTE 分配后，固定支出 + 项目工资合计等于总工资，无双计 |
+| E27 | 无营销预算的 AI 上市首 90 天有 `launchAwarenessFloor`，销量非 0 |
+| E28 | 保留“接近上市”项目时，恢复线含其 burn，恢复后不再 90 天内破产 |
+| E29 | 项目取消时未花营销预留退回现金，不罚没、不双扣 |
+| E30 | 平台 `endYear+12` 后 `availability=0`，不再产生销售 |
 
 ## 15. 性能与回滚
 
 - 10 年 8 seed 串行，单 world 跑完释放；不双 world 同进程；
 - 20 年扩展验收单独跑，内存 <3GB；56 年只做流式/分段，不作硬门槛；
 - 每个 Stage 独立开关：`TUNING.c1.stage0..4`，失败可回退到上一 Stage；
+- 依赖顺序：Stage 0 Gate → Stage 1 → Stage 2 → Stage 3 → Stage 4；Stage 3 依赖 Stage 0/1，Stage 4 依赖 Stage 2；
 - 回滚不删存档字段，只停止写入新字段。
 
 ## 16. 风险
@@ -382,3 +453,24 @@ Phase B（重整）：
 - 平台生命周期数据缺失：先用相对指数，缺省不阻塞，但必须标 `source`；
 - 资产处置被套利：估值上限 + 买家现金 50% + 非关联 + 每窗口一次；
 - 旧档迁移改变历史：迁移只补字段，不重算已结算金额。
+
+## 17. R1 决议
+
+1. **多市场双计**：加 `marketShare`，`audienceUnits` 只乘一次；内容表 `platform-market-share.json`。
+2. **共享员工双计**：加 FTE 分配，工资只进一个池；runway 分 active/paused burn。
+3. **上市零认知死循环**：加 90 天 `launchAwarenessFloor`，上限 0.15，不做永久加成。
+4. **恢复线漏保留项目**：恢复线改为 `6×(fixed + retainedProjectMonthlyBurn)`。
+5. **项目/营销双计**：预算拆 `developmentBudgetCents` 与 `launchMarketingReservedCents`；runway 只算开发，营销单独核销。
+6. **Stage 0 缺影子门**：补 2 年 ×8 seed 只读 Gate，未过不得开 Stage 1。
+7. **平台无退出口**：`endYear+12` 后 `availability=0`。
+8. **迁移不确定**：有缓存按 audience 权重，无缓存按支持 scope 等分，测试固定期望。
+9. **AI 参数不足**：改判别联合，`LAUNCH` 必带价格。
+10. **内容表缺失**：补市场占比、价格参考、类型亲和三张表及缺省/校验。
+
+## 18. R2 待审
+
+- `marketShare` 与 `segmentShare` 是否会在小市场重复收窄；
+- 共享员工 FTE 分配是否会让项目预算低于最低立项线；
+- `launchAwarenessFloor` 是否会让劣质产品也获得不该有的首月销量；
+- 恢复线含保留项目 burn 后，是否会让本可恢复的公司过早 winddown；
+- 三张内容表的缺省值是否会让 1970 年代市场过于同质。

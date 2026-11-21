@@ -18,6 +18,8 @@ import {
   createCompanyBankruptedEvent,
   createCompanyRecoveredEvent,
   createCompanyDissolvedEvent,
+  createCompanyRestructuringExtendedEvent,
+  createCompanyWinddownStartedEvent,
 } from '@domain/events'
 import { TUNING } from '@content/tuning'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
@@ -108,6 +110,8 @@ export class DailyScheduler {
     state = this.syncCompanyCash(state)
     // 破产检查：公司现金为负时触发 status='bankrupt'（DESIGN-OI-21 §2.3）
     state = this.applyBankruptcyCheck(state, dayIndex)
+    state = this.applyClearanceMode(state)
+    state = this.applyRestructuringClock(state, dayIndex)
     // 终局：破产满 360 天仍未恢复 → dissolved（仅月末判定，DECISION-M3-P0-ENDGAME-002 §D1）
     state = this.applyDissolutionCheck(state, dayIndex)
     return state
@@ -511,7 +515,6 @@ export class DailyScheduler {
    */
   private applyBankruptcyCheck(state: WorldState, dayIndex: number): WorldState {
     const bankruptAt = TUNING.finance.cashBankruptThresholdCents
-    const recoverAt = TUNING.finance.cashRecoveryThresholdCents
     const events: DomainEvent[] = []
     let changed = false
 
@@ -525,21 +528,36 @@ export class DailyScheduler {
           ...c,
           status: 'bankrupt' as const,
           bankruptSinceDay: dayIndex,
+          bankruptcyPhase: 'restructuring' as const,
+          restructuringStartedDay: dayIndex,
+          restructuringDeadlineDay: dayIndex + 90,
+          restructuringExtended: false,
+          restructuringStartCashCents: balance,
+          restructuringStartFixedCents: c.monthlyFixedExpenseCents,
+          assetSales: [],
           version: c.version + 1,
           updatedAt: dayIndex,
         }
       }
-      if (c.status === 'bankrupt' && balance >= recoverAt) {
-        changed = true
-        events.push(createCompanyRecoveredEvent(uuid(), c.id, dayIndex, balance))
-        const revived: Company = {
-          ...c,
-          status: 'active' as const,
-          version: c.version + 1,
-          updatedAt: dayIndex,
+      if (c.status === 'bankrupt') {
+        const recoveryLine = this.computeRecoveryLine(c, state.projects)
+        if (balance >= recoveryLine && this.hasPositiveOperatingCashFlow(c.id, dayIndex, 30)) {
+          changed = true
+          events.push(createCompanyRecoveredEvent(uuid(), c.id, dayIndex, balance))
+          const revived: Company = {
+            ...c,
+            status: 'active' as const,
+            version: c.version + 1,
+            updatedAt: dayIndex,
+          }
+          delete revived.bankruptSinceDay
+          delete revived.bankruptcyPhase
+          delete revived.restructuringStartedDay
+          delete revived.restructuringDeadlineDay
+          delete revived.restructuringExtended
+          delete revived.restructuringStartCashCents
+          return revived
         }
-        delete revived.bankruptSinceDay
-        return revived
       }
       return c
     })
@@ -551,6 +569,123 @@ export class DailyScheduler {
       events: [...state.events, ...events],
     }
   }
+  /** 破产/恢复时切换清仓价：重整 40%，winddown 50%，恢复后清除。 */
+  private applyClearanceMode(state: WorldState): WorldState {
+    const byId = new Map(state.companies.map((c) => [c.id, c]))
+    let changed = false
+    const products = state.products.map((p) => {
+      if (p.status !== 'active') return p
+      const company = byId.get(p.companyId)
+      if (!company) return p
+      if (company.status === 'active' && p.clearanceDiscountRatePercent !== undefined) {
+        changed = true
+        const next = { ...p }
+        delete next.clearanceDiscountRatePercent
+        return next
+      }
+      if (company.status === 'bankrupt') {
+        const target = company.bankruptcyPhase === 'winddown' ? 50 : 40
+        if (p.clearanceDiscountRatePercent !== target) {
+          changed = true
+          return { ...p, clearanceDiscountRatePercent: target }
+        }
+      }
+      return p
+    })
+    return changed ? { ...state, products } : state
+  }
+
+  /** 恢复线 = max($4,000, 6 × 缩减后固定月支出 + 保留项目月 burn)；P0-2 v2.2 §2.2。 */
+  private computeRecoveryLine(c: Company, projects: readonly Project[]): number {
+    const fixed = Math.max(0, c.monthlyFixedExpenseCents ?? 0)
+    const retainedBurn = projects
+      .filter((p) => p.companyId === c.id && p.phase !== 'CANCELLED' && p.phase !== 'LAUNCHED')
+      .reduce((sum, p) => {
+        const remaining = Math.max(0, p.budgetTotalCapCents - p.budgetSpentCents)
+        const start = p.actualStartDay ?? p.plannedStartDay
+        const days = Math.max(1, p.plannedLaunchDay - start)
+        return sum + Math.round(remaining / (days / 30))
+      }, 0)
+    return Math.max(
+      TUNING.finance.cashRecoveryThresholdCents,
+      6 * (fixed + retainedBurn),
+    )
+  }
+
+  /** 经营现金流窗口是否非负：用已入账流水近似“连续 30 天经营现金流≥0”。 */
+  private hasPositiveOperatingCashFlow(companyId: string, dayIndex: number, days: number): boolean {
+    const txs = this.deps.finance.getTransactionsByCompany(companyId, {
+      fromDay: Math.max(0, dayIndex - days + 1),
+      toDay: dayIndex,
+    })
+    const net = txs
+      .filter((t) => t.status === 'posted')
+      .reduce((sum, t) => sum + t.amountCents, 0)
+    return net >= 0
+  }
+
+  /**
+   * 重整 90/180 天状态机（P0-2 v2.2 §2.4/§2.5）：
+   * - 到 90 天未恢复，满足条件可延长一次到 180 天；
+   * - 到 180 天转 winddown，只清仓/收款/处置；
+   * - 360 天由 applyDissolutionCheck 解散。
+   */
+  private applyRestructuringClock(state: WorldState, dayIndex: number): WorldState {
+    if (state.companies.every((c) => c.status !== 'bankrupt')) return state
+    const events: DomainEvent[] = []
+    let changed = false
+    const companies = state.companies.map((c) => {
+      if (c.status !== 'bankrupt') return c
+      const since = c.bankruptSinceDay ?? dayIndex
+      const phase = c.bankruptcyPhase ?? 'restructuring'
+      if (phase === 'restructuring') {
+        const deadline = c.restructuringDeadlineDay ?? since + 90
+        if (dayIndex < deadline) return c
+        if (!c.restructuringExtended) {
+          const startCash = c.restructuringStartCashCents ?? c.cashBalanceCents
+          const positiveWindows =
+            this.hasPositiveOperatingCashFlow(c.id, deadline - 31, 30) &&
+            this.hasPositiveOperatingCashFlow(c.id, deadline - 61, 30)
+          const cashImproved = this.deps.finance.getCashBalance(c.id) > startCash
+          const startFixed = c.restructuringStartFixedCents
+          const reduced =
+            (startFixed !== undefined &&
+              (c.monthlyFixedExpenseCents ?? 0) <= startFixed * 0.9) ||
+            state.projects.some(
+              (p) => p.companyId === c.id && p.cancellationReason === 'restructuring',
+            )
+          if (positiveWindows && cashImproved && reduced) {
+            changed = true
+            events.push(
+              createCompanyRestructuringExtendedEvent(
+                uuid(), c.id, dayIndex, deadline, deadline + 90,
+              ),
+            )
+            return {
+              ...c,
+              restructuringExtended: true,
+              restructuringDeadlineDay: deadline + 90,
+              version: c.version + 1,
+              updatedAt: dayIndex,
+            }
+          }
+        }
+        changed = true
+        events.push(createCompanyWinddownStartedEvent(uuid(), c.id, dayIndex))
+        return {
+          ...c,
+          bankruptcyPhase: 'winddown' as const,
+          restructuringDeadlineDay: since + 360,
+          version: c.version + 1,
+          updatedAt: dayIndex,
+        }
+      }
+      if (phase === 'winddown') return c
+      return c
+    })
+    return changed ? { ...state, companies, events: [...state.events, ...events] } : state
+  }
+
   /**
    * 终局检查（DECISION-M3-P0-ENDGAME-002）：
    *
@@ -563,15 +698,13 @@ export class DailyScheduler {
     const g = dayIndexToGregorian(dayIndex)
     if (g.day !== daysInMonth(g.year, g.month)) return state
     const graceDays = TUNING.ai.dissolutionGraceDays
-    const recoverAt = TUNING.finance.cashRecoveryThresholdCents
-
     const doomed = new Set<string>()
     const events: DomainEvent[] = []
     const companies = state.companies.map((c) => {
       if (c.status !== 'bankrupt') return c
       const since = c.bankruptSinceDay ?? dayIndex
       const balance = this.deps.finance.getCashBalance(c.id)
-      if (dayIndex - since < graceDays || balance >= recoverAt) return c
+      if (dayIndex - since < graceDays) return c
       doomed.add(c.id)
       events.push(
         createCompanyDissolvedEvent(
@@ -585,6 +718,7 @@ export class DailyScheduler {
       const dissolved: Company = {
         ...c,
         status: 'dissolved' as const,
+        cashBalanceCents: 0,
         version: c.version + 1,
         updatedAt: dayIndex,
       }
@@ -597,8 +731,16 @@ export class DailyScheduler {
     const doomedProducts = new Set(
       state.products.filter((p) => doomed.has(p.companyId)).map((p) => p.id),
     )
-    const products = state.products.map((p) =>
-      doomed.has(p.companyId) ? { ...p, status: 'retired' as const, version: p.version + 1, updatedAt: dayIndex } : p,
+    const products = state.products.map((p) => {
+      if (!doomed.has(p.companyId)) return p
+      const next = { ...p, status: 'retired' as const, version: p.version + 1, updatedAt: dayIndex }
+      delete next.clearanceDiscountRatePercent
+      return next
+    })
+    const campaigns = state.marketingCampaigns.map((campaign) =>
+      doomedProducts.has(campaign.productId) && campaign.status === 'active'
+        ? { ...campaign, status: 'ended' as const, version: campaign.version + 1, updatedAt: dayIndex }
+        : campaign,
     )
     const contracts = state.publishingContracts.map((c) =>
       doomedProducts.has(c.productId) && c.status === 'active'
@@ -629,6 +771,7 @@ export class DailyScheduler {
       publishingContracts: contracts,
       projects,
       employees,
+      marketingCampaigns: campaigns,
       events: [...state.events, ...events],
     }
   }

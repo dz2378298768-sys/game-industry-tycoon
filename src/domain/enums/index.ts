@@ -39,6 +39,7 @@ export type TransactionCategory =
   | 'tax'
   | 'advance'
   | 'severance'
+  | 'asset_sale'
 
 // ===== 退款来源 =====
 export type RefundSource = 'auto_window' | 'player_request'
@@ -82,6 +83,7 @@ export type CancellationReason =
   | 'player_decision'
   | 'pause_timeout'
   | 'company_dissolved'
+  | 'restructuring'
 
 // ===== 项目内角色 =====
 export type ProjectRole = 'lead' | 'senior' | 'generalist' | 'junior'

@@ -10,7 +10,10 @@ import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
 import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
-import { createProductLifecycleChangedEvent } from '@domain/events'
+import {
+  createCompanyAssetSoldEvent,
+  createProductLifecycleChangedEvent,
+} from '@domain/events'
 import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
 import { planAiMonth, suggestedStartBudget, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
 import { projectMonthlyBurnCents } from '@simulation/ai/ai-runway'
@@ -875,10 +878,44 @@ export class GameWorld {
         .getTransactionsByCompany(company.id)
         .filter((t) => t.category === 'sales_revenue' && t.day >= this.dayIndex - 30)
         .reduce((sum, t) => sum + t.amountCents, 0),
+      ...(company.bankruptcyPhase !== undefined ? { bankruptcyPhase: company.bankruptcyPhase } : {}),
+      ...(company.restructuringDeadlineDay !== undefined
+        ? { restructuringDeadlineDay: company.restructuringDeadlineDay }
+        : {}),
+      saleableAssets: this.listSaleableAssets(company),
       staffCount: this.world.employees.filter(
         (e) => e.companyId === company.id && e.status === 'hired',
       ).length,
     }
+  }
+
+  /** C1-T8：可处置资产清单（产品；保守估值，受“唯一收入来源”保护）。 */
+  private listSaleableAssets(company: Company): { assetId: string; assetType: 'product'; minPriceCents: number }[] {
+    const products = this.world.products.filter(
+      (p) => p.companyId === company.id && p.status === 'active',
+    )
+    if (products.length === 0) return []
+    const revenue12 = (productId: string): number =>
+      this.finance
+        .getTransactionsByCompany(company.id, { fromDay: this.dayIndex - 365, toDay: this.dayIndex })
+        .filter((t) => t.category === 'sales_revenue' && t.referenceId === productId)
+        .reduce((sum, t) => sum + t.amountCents, 0)
+    const total12 = products.reduce((sum, p) => sum + revenue12(p.id), 0)
+    return products
+      .map((product) => {
+        const rev = revenue12(product.id)
+        const project = this.world.projects.find((p) => p.id === product.sourceProjectId)
+        const book = project?.budgetTotalCapCents ?? 0
+        const value = Math.max(Math.round(rev * 0.5), Math.round(book * 0.2), 100_000)
+        return { product, value, dominant: total12 > 0 && rev / total12 > 0.5 }
+      })
+      .filter((entry, _i, all) => !entry.dominant || all.length === 1)
+      .map((entry) => ({
+        assetId: entry.product.id,
+        assetType: 'product' as const,
+        minPriceCents: entry.value,
+      }))
+      .sort((a, b) => a.minPriceCents - b.minPriceCents)
   }
 
   private applyPrelaunchAwareness(product: Product, project: Project): void {
@@ -947,6 +984,71 @@ export class GameWorld {
   }
 
   /** C1-T6：AI 裁员——按薪资从高到低，付一个月补偿，释放项目分配。 */
+  /** C1-T8：出售产品资产。90 天窗口最多 1 次、episode 最多 3 次；买家须现金 ≥ 2× 价格。 */
+  private sellAsset(company: Company, assetId: string, minPriceCents: number, dayIndex: number): void {
+    const product = this.world.products.find(
+      (p) => p.id === assetId && p.companyId === company.id && p.status === 'active',
+    )
+    if (product === undefined) return
+    const since = company.bankruptSinceDay ?? dayIndex
+    const windowStart = since + Math.floor((dayIndex - since) / 90) * 90
+    const sales = (company.assetSales ?? []).filter((entry) => entry.day >= windowStart)
+    if (sales.length >= 1 || (company.assetSales ?? []).length >= 3) return
+    const buyers = this.world.companies
+      .filter((c) => c.id !== company.id && c.status === 'active')
+      .sort((a, b) => this.finance.getCashBalance(b.id) - this.finance.getCashBalance(a.id))
+    const buyer = buyers.find((c) => this.finance.getCashBalance(c.id) >= minPriceCents * 2)
+    if (buyer === undefined) return
+    const price = Math.min(minPriceCents, Math.floor(this.finance.getCashBalance(buyer.id) * 0.5))
+    if (price <= 0) return
+    const posted = this.finance.postTransaction(
+      {
+        idempotencyKey: `asset_sale:${assetId}:${dayIndex}`,
+        companyId: company.id,
+        day: dayIndex,
+        category: 'asset_sale',
+        amountCents: price,
+        description: `资产出售：${product.name}`,
+        referenceId: assetId,
+      },
+      { allowNegativeBalance: true },
+    )
+    if (!posted.success) return
+    this.world = {
+      ...this.world,
+      companies: this.world.companies.map((c) =>
+        c.id === company.id
+          ? {
+              ...c,
+              cashBalanceCents: this.finance.getCashBalance(c.id),
+              assetSales: [
+                ...(c.assetSales ?? []),
+                { assetId, buyerId: buyer.id, priceCents: price, day: dayIndex },
+              ],
+              version: c.version + 1,
+              updatedAt: dayIndex,
+            }
+          : c,
+      ),
+      products: this.world.products.map((p) =>
+        p.id === assetId
+          ? { ...p, companyId: buyer.id, status: 'retired' as const, version: p.version + 1, updatedAt: dayIndex }
+          : p,
+      ),
+      events: [
+        ...this.world.events,
+        createCompanyAssetSoldEvent(uuid(), {
+          companyId: company.id,
+          buyerId: buyer.id,
+          assetId,
+          assetType: 'product',
+          priceCents: price,
+          day: dayIndex,
+        }),
+      ],
+    }
+  }
+
   private cutAiStaff(company: Company, percent: number, dayIndex: number): void {
     const staff = this.world.employees
       .filter((e) => e.companyId === company.id && e.status === 'hired')
@@ -1093,6 +1195,30 @@ export class GameWorld {
         }
         case 'CUT_STAFF': {
           this.cutAiStaff(company, params.percent, dayIndex)
+          break
+        }
+        case 'RESTRUCTURE': {
+          this.cutAiStaff(company, Math.max(0, Math.min(30, params.cutStaffPercent)), dayIndex)
+          for (const projectId of params.cancelProjectIds) {
+            this.withProjects(() => this.projects.cancel(projectId, 'restructuring', dayIndex))
+          }
+          break
+        }
+        case 'SELL_ASSET': {
+          this.sellAsset(company, params.assetId, params.minPriceCents, dayIndex)
+          break
+        }
+        case 'CLEARANCE_PRICING': {
+          const rate = Math.max(30, Math.min(50, params.discountRatePercent))
+          const ids = new Set(params.productIds)
+          this.world = {
+            ...this.world,
+            products: this.world.products.map((product) =>
+              ids.has(product.id) && product.companyId === company.id && product.status === 'active'
+                ? { ...product, clearanceDiscountRatePercent: rate, version: product.version + 1, updatedAt: dayIndex }
+                : product,
+            ),
+          }
           break
         }
         default:

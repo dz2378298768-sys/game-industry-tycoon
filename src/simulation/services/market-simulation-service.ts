@@ -70,6 +70,16 @@ import type {
 import { NULL_MARKET_INPUT_PROVIDER } from './sales-types'
 import type { WorldState } from './world-state'
 
+/** 重整清仓价：按 clearanceDiscountRatePercent 打折；正常产品原样。 */
+function salePriceCents(product: Product): number | null {
+  const base = effectivePriceCents(product)
+  if (base === null) return null
+  const rate = product.clearanceDiscountRatePercent ?? 0
+  if (rate <= 0) return base
+  return Math.max(1, Math.round(base * (1 - rate / 100)))
+}
+
+
 export interface MarketSimulationDeps {
   finance: FinanceService
   rng: SalesRandom
@@ -271,7 +281,7 @@ export class MarketSimulationService {
     const demandProducts: DemandProductInput[] = []
 
     for (const product of launched) {
-      const priceCents = effectivePriceCents(product)
+      const priceCents = salePriceCents(product)
       if (priceCents === null) {
         this.warn({
           code:
@@ -323,7 +333,7 @@ export class MarketSimulationService {
           finalQualityScore: product.finalQualityScore,
         }),
         launchDay: product.launchDay,
-        clearanceAvailability: 1,
+        clearanceAvailability: product.clearanceDiscountRatePercent ? 0.7 : 1,
       })
     }
 
@@ -365,7 +375,7 @@ export class MarketSimulationService {
       if (!product) continue
       const platform = getPlatform(aggregate.platformId)
       if (!platform) continue
-      const priceCents = effectivePriceCents(product)
+      const priceCents = salePriceCents(product)
       if (priceCents === null) continue
       const recordId = makeSalesRecordId(product.id, dayIndex, aggregate.marketId, aggregate.platformId)
       if (product.salesByPeriod.some((record) => record.id === recordId)) continue
@@ -447,7 +457,7 @@ export class MarketSimulationService {
 
     // M2-D：唯一取价入口（挂牌价 × 折扣，含折扣取整）
     const basePrice = product.pricePerUnitCents ?? product.launchPriceCents
-    const priceCents = effectivePriceCents(product)
+    const priceCents = salePriceCents(product)
     if (priceCents === null) {
       // 保留 B 批的两种告警语义：完全未定价 vs 定价非法（T17 依赖此区分）
       const missing = basePrice === null || basePrice === undefined

@@ -29,6 +29,10 @@ export interface Company {
   restructuringStartedDay?: number
   restructuringDeadlineDay?: number
   restructuringExtended?: boolean
+  /** 破产当日现金，用于 90 天延长条件 */
+  restructuringStartCashCents?: number
+  /** 破产当日固定月支出，用于“真实降本 ≥10%”判定 */
+  restructuringStartFixedCents?: number
   assetSales?: CompanyAssetSale[]
   monthlyFixedExpenseCents: number // TUNING: salary+rent 月合计
   officeLevel: number

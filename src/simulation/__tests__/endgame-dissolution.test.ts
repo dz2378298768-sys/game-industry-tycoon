@@ -108,7 +108,7 @@ describe('M3-A1 终局解散', () => {
   it('E03 恢复清除起算日；再次破产重新起算', () => {
     const gw = new GameWorld(7)
     gw.world = makeWorld({
-      companies: [makeCompany({ status: 'bankrupt', bankruptSinceDay: 100, cashBalanceCents: 0 })],
+      companies: [makeCompany({ status: 'bankrupt', bankruptSinceDay: 100, cashBalanceCents: 0, monthlyFixedExpenseCents: 0 })],
       employees: [],
       projects: [],
     })
@@ -119,12 +119,12 @@ describe('M3-A1 终局解散', () => {
         companyId: 'company-1',
         day: 0,
         category: 'sales_revenue',
-        amountCents: 600_000,
+        amountCents: 1_000_000,
         description: 'revive',
       },
       { allowNegativeBalance: true },
     )
-    gw.advanceSimulation(1)
+    gw.advanceSimulation(31)
     const recovered = gw.world.companies[0]!
     expect(recovered.status).toBe('active')
     expect(recovered.bankruptSinceDay).toBeUndefined()

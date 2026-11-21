@@ -36,6 +36,8 @@ export interface Product {
   /** M2：按日销售记录（唯一销售记录来源）；新上市产品初始化为 [] */
   salesByPeriod: SalesRecord[]
   status: ProductStatus
+  /** C1 重整清仓折扣（0–50）；正常产品缺省 */
+  clearanceDiscountRatePercent?: number
   version: number
   createdAt: number
   updatedAt: number

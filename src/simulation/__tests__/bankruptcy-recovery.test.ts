@@ -20,7 +20,7 @@ const COMPANY_ID = 'company-1'
 
 function bootstrap(seed = 42) {
   const gw = createGameWorld(seed)
-  const company = makeCompany({ id: COMPANY_ID, cashBalanceCents: 0, status: 'active' })
+  const company = makeCompany({ id: COMPANY_ID, cashBalanceCents: 0, status: 'active', monthlyFixedExpenseCents: 0 })
   gw.world = { ...gw.world, companies: [company], employees: [], projects: [], products: [] }
   gw.finance.registerCompany(COMPANY_ID)
   return gw
@@ -77,7 +77,7 @@ describe('M3-P0-1 破产自救恢复', () => {
 
     earn(gw, 1_000_000) // +$5,000 → 现金 +$5,000
     expect(cash(gw)).toBe(500_000)
-    gw.advanceSimulation(1)
+    gw.advanceSimulation(31)
     expect(player(gw).status).toBe('active')
 
     const recovered = eventsOf(gw, 'CompanyRecovered')
@@ -114,7 +114,7 @@ describe('M3-P0-1 破产自救恢复', () => {
     expect(blocked.errorCode).toBe('FIN_COMPANY_BANKRUPT')
 
     earn(gw, 1_000_000)
-    gw.advanceSimulation(1)
+    gw.advanceSimulation(31)
     expect(player(gw).status).toBe('active')
     const hired = gw.hireEmployee({
       name: 'B',
@@ -135,7 +135,7 @@ describe('M3-P0-1 破产自救恢复', () => {
     spend(gw, 500_000)
     gw.advanceSimulation(1)
     earn(gw, 1_000_000)
-    gw.advanceSimulation(1)
+    gw.advanceSimulation(31)
     expect(eventsOf(gw, 'CompanyRecovered')).toHaveLength(1)
     gw.advanceSimulation(5)
     expect(eventsOf(gw, 'CompanyRecovered')).toHaveLength(1)

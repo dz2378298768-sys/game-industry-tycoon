@@ -103,6 +103,57 @@ export function createCompanyBankruptedEvent(
   return { id, type: COMPANY_BANKRUPTED_EVENT, day, payload }
 }
 
+/** 重整延长期事件（P0-2 v2.2 §2.4） */
+export const COMPANY_RESTRUCTURING_EXTENDED_EVENT = 'CompanyRestructuringExtended'
+export type CompanyRestructuringExtendedPayload = {
+  companyId: string
+  day: number
+  fromDeadlineDay: number
+  toDeadlineDay: number
+}
+export function createCompanyRestructuringExtendedEvent(
+  id: string,
+  companyId: string,
+  day: number,
+  fromDeadlineDay: number,
+  toDeadlineDay: number,
+): DomainEvent {
+  return {
+    id,
+    type: COMPANY_RESTRUCTURING_EXTENDED_EVENT,
+    day,
+    payload: { companyId, day, fromDeadlineDay, toDeadlineDay },
+  }
+}
+
+/** 公司进入 winddown 事件 */
+export const COMPANY_WINDDOWN_STARTED_EVENT = 'CompanyWinddownStarted'
+export type CompanyWinddownStartedPayload = { companyId: string; day: number }
+export function createCompanyWinddownStartedEvent(
+  id: string,
+  companyId: string,
+  day: number,
+): DomainEvent {
+  return { id, type: COMPANY_WINDDOWN_STARTED_EVENT, day, payload: { companyId, day } }
+}
+
+/** 资产出售事件（P0-2 v2.2 §4） */
+export const COMPANY_ASSET_SOLD_EVENT = 'CompanyAssetSold'
+export type CompanyAssetSoldPayload = {
+  companyId: string
+  buyerId: string
+  assetId: string
+  assetType: 'product' | 'contract' | 'project'
+  priceCents: number
+  day: number
+}
+export function createCompanyAssetSoldEvent(
+  id: string,
+  payload: CompanyAssetSoldPayload,
+): DomainEvent {
+  return { id, type: COMPANY_ASSET_SOLD_EVENT, day: payload.day, payload }
+}
+
 /** 公司解散事件类型（DECISION-M3-P0-ENDGAME-002 §D5） */
 export const COMPANY_DISSOLVED_EVENT = 'CompanyDissolved'
 

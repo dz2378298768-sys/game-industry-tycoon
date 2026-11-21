@@ -75,6 +75,8 @@ const companySchema = z
     restructuringStartedDay: z.number().int().nonnegative().optional(),
     restructuringDeadlineDay: z.number().int().nonnegative().optional(),
     restructuringExtended: z.boolean().optional(),
+    restructuringStartCashCents: z.number().int().optional(),
+    restructuringStartFixedCents: z.number().int().optional(),
     assetSales: z
       .array(
         z
@@ -231,6 +233,7 @@ const productSchema = z
     lastPriceChangeDay: z.number().int().nonnegative().optional(),
     defectLevel: z.number().min(0).max(100),
     status: z.enum(['active', 'retired']),
+    clearanceDiscountRatePercent: z.number().int().min(0).max(50).optional(),
     /** M3-C1：按 scope 的认知度；旧档缺省，由迁移层从 awarenessByMarket 拆分 */
     awarenessByScope: z.record(z.string(), z.number()).optional(),
     /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */

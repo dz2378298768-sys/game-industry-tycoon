@@ -97,6 +97,11 @@ export interface AiCompanyView {
   monthlyPayrollCents?: number
   /** 在研项目数（含暂停） */
   activeProjectCount?: number
+  /** C1-T8：破产重整期 */
+  bankruptcyPhase?: 'restructuring' | 'winddown'
+  restructuringDeadlineDay?: number
+  /** 可处置资产（按保守估值排序） */
+  saleableAssets?: { assetId: string; assetType: 'product' | 'contract' | 'project'; minPriceCents: number }[]
   /** 现有活跃项目月烧钱合计；暂停项目不计入 */
   existingProjectMonthlyBurnCents?: number
   /** 应付账款；当前无 AP 账本时为项目已承诺额 */
@@ -364,6 +369,42 @@ export function planAiMonth(view: AiCompanyView, day: number, seed = 0): AiPlan 
   const candidates: AiCandidateRecord[] = []
 
   if (view.status !== 'active') {
+    if (view.status === 'bankrupt') {
+      const asset = view.saleableAssets?.[0]
+      if (asset !== undefined) {
+        candidates.push(candidate('SELL_ASSET', [], view, 0, persona.riskAversion, { reason: '处置资产换现金' }))
+        return {
+          companyId: view.id, day, month: monthKey(day), candidates, chosen: 'SELL_ASSET',
+          reason: '破产期优先变现非核心资产',
+          inputsDigest: inputsDigest(view),
+          params: { action: 'SELL_ASSET', assetId: asset.assetId, minPriceCents: asset.minPriceCents },
+        }
+      }
+      if (view.bankruptcyPhase === 'restructuring') {
+        const cancelIds = (view.project !== null ? [view.project.id] : [])
+        if (cancelIds.length > 0 || (view.staffCount ?? 0) > 1) {
+          candidates.push(candidate('RESTRUCTURE', [], view, 0, persona.riskAversion, { reason: '砍成本保生存' }))
+          return {
+            companyId: view.id, day, month: monthKey(day), candidates, chosen: 'RESTRUCTURE',
+            reason: '重整期取消在研、按比例裁员',
+            inputsDigest: inputsDigest(view),
+            params: { action: 'RESTRUCTURE', cutStaffPercent: 20, cancelProjectIds: cancelIds },
+          }
+        }
+      }
+      const clearanceIds = (view.products ?? [])
+        .filter((p) => p.status === 'active')
+        .map((p) => p.id)
+      if (clearanceIds.length > 0) {
+        candidates.push(candidate('CLEARANCE_PRICING', [], view, 0, persona.riskAversion, { reason: '清仓回款' }))
+        return {
+          companyId: view.id, day, month: monthKey(day), candidates, chosen: 'CLEARANCE_PRICING',
+          reason: '清仓价加速回款',
+          inputsDigest: inputsDigest(view),
+          params: { action: 'CLEARANCE_PRICING', productIds: clearanceIds, discountRatePercent: 40 },
+        }
+      }
+    }
     candidates.push(candidate('DO_NOTHING', [], view, 0, persona.riskAversion, { reason: '非经营状态' }))
     return {
       companyId: view.id,

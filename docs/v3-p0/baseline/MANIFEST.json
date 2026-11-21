@@ -1,0 +1,21 @@
+{
+  "project": "Game Industry Tycoon",
+  "revision": "3.0-design-baseline-2026-11-21",
+  "document_status": "PRODUCT_DESIGN_BASELINE",
+  "supersedes": "V2.1.7 for product vision, system priorities, scope and long-term roadmap; preserves compatible engineering specifications as legacy references",
+  "authority_order": [
+    "00_项目总纲/01_总体设计基线.md",
+    "01_系统总体规划/01_系统地图与领域规则.md",
+    "02_版本路线图/01_开发阶段与验收门槛.md",
+    "03_决策基线/01_已确认设计决策与待验证事项.md",
+    "03_决策基线/02_V2.1.7旧规格迁移裁定与设计任务池.md"
+  ],
+  "files": [
+    "README.md",
+    "00_项目总纲/01_总体设计基线.md",
+    "01_系统总体规划/01_系统地图与领域规则.md",
+    "02_版本路线图/01_开发阶段与验收门槛.md",
+    "03_决策基线/02_V2.1.7旧规格迁移裁定与设计任务池.md",
+    "03_决策基线/01_已确认设计决策与待验证事项.md"
+  ]
+}

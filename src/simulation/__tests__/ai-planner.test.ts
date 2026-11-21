@@ -58,6 +58,58 @@ describe('AI 月度决策 — 纯函数', () => {
     ).toBe('SET_PRICE')
   })
 
+  it('T5 LAUNCH 必带价格与平台，START 内容随 seed 变化', () => {
+    const launch = planAiMonth(
+      view({
+        project: {
+          id: 'p1',
+          phase: 'READY_TO_LAUNCH',
+          isPaused: false,
+          plannedLaunchDay: 10,
+          genreId: 'action',
+          platformIds: ['arcade_pre_1975'],
+          segmentIds: ['arcade_enthusiasts'],
+        },
+      }),
+      30,
+    )
+    expect(launch.params.action).toBe('LAUNCH')
+    if (launch.params.action === 'LAUNCH') {
+      expect(launch.params.priceCents).toBeGreaterThan(0)
+      expect(launch.params.platformIds).toEqual(['arcade_pre_1975'])
+    }
+
+    const starts = [1, 2, 3, 4, 5].map((seed) => planAiMonth(view(), 30, seed).params)
+    const signatures = new Set(starts.map((p) => JSON.stringify(p)))
+    expect(signatures.size).toBeGreaterThan(1)
+  })
+
+  it('T5 已上市未投放产品会开营销，预算在允许区间', () => {
+    const plan = planAiMonth(
+      view({
+        project: { id: 'p1', phase: 'PRODUCTION', isPaused: false, plannedLaunchDay: 300 },
+        products: [
+          {
+            id: 'prod1',
+            priceCents: 2999,
+            status: 'active',
+            launchDay: 10,
+            activeCampaignCount: 0,
+            genreId: 'action',
+          },
+        ],
+      }),
+      30,
+      7,
+    )
+    expect(plan.chosen).toBe('SET_MARKETING')
+    if (plan.params.action === 'SET_MARKETING') {
+      expect(['social', 'expo', 'ads']).toContain(plan.params.channel)
+      expect(plan.params.dailyBudgetCents).toBeGreaterThanOrEqual(1000)
+      expect(plan.params.dailyBudgetCents).toBeLessThanOrEqual(500_000)
+    }
+  })
+
   it('A01 纯函数确定性：同输入同输出（含候选明细）', () => {
     const a = planAiMonth(view({ brand: 22 }), 61)
     const b = planAiMonth(view({ brand: 22 }), 61)

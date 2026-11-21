@@ -8,6 +8,7 @@ import { MarketSimulationService } from '@simulation/services/market-simulation-
 import { NULL_MARKET_INPUT_PROVIDER } from '@simulation/services/sales-types'
 import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
+import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { createProductLifecycleChangedEvent } from '@domain/events'
 import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
@@ -28,8 +29,6 @@ import { ContractService } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
-import { availablePlatforms, availableSegments } from '@content/queries'
-import { genres } from '@content/index'
 import {
   citySalaryMultiplier,
   isPlatformAvailable,
@@ -790,6 +789,23 @@ export class GameWorld {
               phase: activeProject.phase,
               isPaused: activeProject.isPaused,
               plannedLaunchDay: activeProject.plannedLaunchDay,
+              budgetRemainingCents: Math.max(
+                0,
+                (activeProject.developmentBudgetCents ?? activeProject.budgetTotalCapCents) -
+                  activeProject.budgetSpentCents -
+                  activeProject.budgetCommittedCents,
+              ),
+              monthlyBurnCents: Math.round(
+                Math.max(
+                  0,
+                  (activeProject.developmentBudgetCents ?? activeProject.budgetTotalCapCents) -
+                    activeProject.budgetSpentCents,
+                ) / Math.max(1, (activeProject.plannedLaunchDay - this.dayIndex) / 30),
+              ),
+              launchMarketingReservedCents: activeProject.launchMarketingReservedCents ?? 0,
+              genreId: activeProject.genreId,
+              platformIds: activeProject.targetPlatformIds,
+              segmentIds: activeProject.audienceSegmentIds,
             },
       products: this.world.products
         .filter((p) => p.companyId === company.id)
@@ -798,7 +814,17 @@ export class GameWorld {
           priceCents: p.pricePerUnitCents ?? p.launchPriceCents,
           status: p.status,
           launchDay: p.launchDay,
+          genreId: p.genreId,
+          qualityScore: p.finalQualityScore,
+          supportedPlatformIds: p.supportedPlatformIds,
+          audienceSegmentIds: p.audienceSegmentIds,
+          activeCampaignCount: this.world.marketingCampaigns.filter(
+            (c) => c.productId === p.id && c.status === 'active',
+          ).length,
         })),
+      staffCount: this.world.employees.filter(
+        (e) => e.companyId === company.id && e.status === 'hired',
+      ).length,
     }
   }
 
@@ -819,32 +845,6 @@ export class GameWorld {
     })
   }
 
-  /** AI 立项内容：按当年可用平台/受众与公司 id 确定性选择，避免全行业永远做 1970 街机。 */
-  private aiProjectContent(company: { id: string }, dayIndex: number): {
-    genreId: string
-    segmentId: string
-    platformId: string
-  } {
-    const platforms = availablePlatforms(dayIndex)
-    const platform = platforms[platforms.length - 1]!
-    const segments = availableSegments(dayIndex)
-    const preferred =
-      platform.platformType === 'home_console'
-        ? 'home_players'
-        : platform.platformType === 'pc'
-          ? 'pc_gamers'
-          : platform.platformType === 'mobile'
-            ? 'mobile_gamers'
-            : platform.platformType === 'online'
-              ? 'online_gamers'
-              : 'arcade_enthusiasts'
-    const segment = segments.find((s) => s.id === preferred) ?? segments[segments.length - 1]!
-    let hash = 0
-    for (const ch of company.id) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
-    const genre = genres[hash % genres.length]!
-    return { genreId: genre.id, segmentId: segment.id, platformId: platform.id }
-  }
-
   private runAiMonthly(dayIndex: number): void {
     if (!this.aiCompetitionEnabled) return
     const aiCompanies = this.world.companies
@@ -852,19 +852,21 @@ export class GameWorld {
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 
     for (const company of aiCompanies) {
-      const plan = planAiMonth(this.buildAiView(company), dayIndex)
-      switch (plan.chosen) {
+      const plan = planAiMonth(this.buildAiView(company), dayIndex, this.world.saveSeed)
+      const params = plan.params
+      switch (params.action) {
         case 'START_PROJECT': {
           const budget = this.aiBudget(company)
           if (budget <= 0) break
-          const content = this.aiProjectContent(company, dayIndex)
+          const segmentIds = params.segmentIds.length > 0 ? params.segmentIds : ['arcade_enthusiasts']
+          const platformIds = params.platformIds.length > 0 ? params.platformIds : ['arcade_pre_1975']
           const created = this.withProjects(() =>
             this.projects.create({
               name: `${company.name} 新作`,
               companyId: company.id,
-              genreId: content.genreId,
-              audienceSegmentIds: [content.segmentId],
-              targetPlatformIds: [content.platformId],
+              genreId: params.genreId,
+              audienceSegmentIds: segmentIds,
+              targetPlatformIds: platformIds,
               budgetTotalCapCents: budget,
               plannedStartDay: dayIndex,
               plannedLaunchDay: dayIndex + 120,
@@ -874,34 +876,50 @@ export class GameWorld {
           break
         }
         case 'ADVANCE_PHASE': {
-          if (plan.params.projectId !== undefined) {
-            this.withProjects(() => this.projects.advancePhaseGeneric(plan.params.projectId!, dayIndex))
-          }
+          this.withProjects(() => this.projects.advancePhaseGeneric(params.projectId, dayIndex))
           break
         }
         case 'LAUNCH': {
-          if (plan.params.projectId !== undefined) {
-            const launched = this.withProjects(() => this.projects.launch(plan.params.projectId!, dayIndex))
-            if (launched.success && launched.result) {
-              this.world.products.push(launched.result.product)
-              const product = this.world.products.find((p) => p.sourceProjectId === plan.params.projectId)
-              if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
-                product.awarenessByMarket = seedInitialAwareness(company.brand, dayIndex)
-              }
-              company.brand = Math.max(0, Math.min(100, company.brand + launched.result.product.brandImpact))
+          const launched = this.withProjects(() => this.projects.launch(params.projectId, dayIndex))
+          if (launched.success && launched.result) {
+            this.world.products.push(launched.result.product)
+            const product = this.world.products.find((p) => p.sourceProjectId === params.projectId)
+            if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
+              product.awarenessByMarket = seedInitialAwareness(company.brand, dayIndex)
+              product.awarenessByScope = awarenessByScopeOf(product)
+            }
+            company.brand = Math.max(0, Math.min(100, company.brand + launched.result.product.brandImpact))
+            if (product !== undefined && params.priceCents > 0) {
+              const priced = this.pricing.setPrice(
+                this.world,
+                { productId: product.id, priceCents: params.priceCents },
+                dayIndex,
+              )
+              if (priced.ok) this.world = priced.world
             }
           }
           break
         }
         case 'SET_PRICE': {
-          if (plan.params.productId !== undefined && plan.params.priceCents !== undefined) {
-            const priced = this.pricing.setPrice(
-              this.world,
-              { productId: plan.params.productId, priceCents: plan.params.priceCents },
-              dayIndex,
-            )
-            if (priced.ok) this.world = priced.world
-          }
+          const priced = this.pricing.setPrice(
+            this.world,
+            { productId: params.productId, priceCents: params.priceCents },
+            dayIndex,
+          )
+          if (priced.ok) this.world = priced.world
+          break
+        }
+        case 'SET_MARKETING': {
+          const result = this.marketing.setBudget(
+            this.world,
+            {
+              productId: params.productId,
+              channel: params.channel,
+              dailyBudgetCents: params.dailyBudgetCents,
+            },
+            dayIndex,
+          )
+          if (result.ok) this.world = result.world
           break
         }
         default:

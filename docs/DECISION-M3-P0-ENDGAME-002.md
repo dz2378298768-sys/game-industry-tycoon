@@ -2,7 +2,7 @@
 
 - 编号：DECISION-M3-P0-ENDGAME-002
 - 版本：v1.1（R1 修订后，R2 PASS_WITH_NOTES）
-- 状态：**DECIDED**（规格裁定，编码在 M3-A 落地）
+- 状态：**SUPERSEDED（破产路径由 `DECISION-M3-P0-ENDGAME-002-AMEND.md` v2.0 修订；`dissolved` 终态与玩家失败结算仍有效）**
 - 上游：`DECISION-M3-P0-BANKRUPTCY-CLOSURE-001`（恢复线 $4,000）；`spec/02/01 §7`「破产不能由一次随机事件瞬间触发」
 - 范围：三态转换的最后一态（`dissolved`）与玩家失败结算；不含并购、资产拍卖给 AI
 

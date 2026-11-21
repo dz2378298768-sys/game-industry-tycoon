@@ -639,10 +639,10 @@ describe('M2-A 销售/退款存档契约（DESIGN-M2-001-A T10–T44）', () => 
     const r = parseSave(legacy)
     expect(r.ok).toBe(true)
     if (!r.ok) return
-    expect(r.state.schemaVersion).toBe(2)
+    expect(r.state.schemaVersion).toBe(3)
     expect(r.state.products[0]?.salesByPeriod).toEqual([])
     expect(r.state.refundBatches).toEqual([])
-    expect(SAVE_SCHEMA_VERSION).toBe(2)
+    expect(SAVE_SCHEMA_VERSION).toBe(3)
   })
 
   it('T42 posted 累加与 actualRefundUnits 不一致被拒', () => {

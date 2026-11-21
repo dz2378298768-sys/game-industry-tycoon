@@ -59,6 +59,9 @@ export type RefundWindowBasis = 'snapshot' | 'current_tuning' | 'not_applicable'
 // ===== 公司状态 =====
 export type CompanyStatus = 'active' | 'bankrupt' | 'dissolved'
 
+/** 破产子阶段（DECISION-M3-P0-ENDGAME-002-AMEND v2.2） */
+export type BankruptcyPhase = 'restructuring' | 'winddown'
+
 /** AI 公司画像（spec/08/03 §2.1） */
 export type CompanyPersona = 'indie' | 'genre_specialist' | 'integrated_dev_publisher'
 

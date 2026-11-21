@@ -29,6 +29,8 @@ export interface PublishingContract {
   deliveryDay?: number
   controlLevel?: 'full' | 'shared' | 'none'
   terminationClause?: 'mutual' | 'quality_breach' | 'delivery_breach' | 'dissolved'
+  /** M3-C1：旧合同 legacy，新合同 realistic；缺省 legacy */
+  rateProfile?: 'legacy' | 'realistic'
   version: number
   createdAt: number
   updatedAt: number

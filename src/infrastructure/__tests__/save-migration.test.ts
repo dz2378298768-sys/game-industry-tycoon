@@ -47,14 +47,14 @@ describe('存档迁移 v1→v2 (M2-E)', () => {
   // ---- 版本判据 M01–M04 ----
   it('M01 canMigrate(1,2) 为真', () => { expect(canMigrate(1, 2)).toBe(true) })
   it('M02 canMigrate(2,2) 为真（同版本视为已就绪）', () => { expect(canMigrate(2, 2)).toBe(true) })
-  it('M03 canMigrate(1,3) 为假（无分步路径）', () => { expect(canMigrate(1, 3)).toBe(false) })
+  it('M03 canMigrate(1,3) 为真（v1→v2→v3 分步路径）', () => { expect(canMigrate(1, 3)).toBe(true) })
   it('M04 canMigrate(2,1) 为假（不支持回退）', () => { expect(canMigrate(2, 1)).toBe(false) })
 
   // ---- 纯函数 M05–M10b ----
-  it('M05 迁移把 schemaVersion 改为 2', () => {
+  it('M05 迁移把 schemaVersion 改为 3', () => {
     const r = migrateSave(v1World())
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.state.schemaVersion).toBe(2)
+    if (r.ok) expect(r.state.schemaVersion).toBe(3)
   })
 
   it('M06 已定价产品补 pricePerUnitCents = launchPriceCents', () => {
@@ -108,13 +108,14 @@ describe('存档迁移 v1→v2 (M2-E)', () => {
   })
 
   // ---- 幂等 M11–M12 ----
-  it('M11 migrateSave(v2) 幂等且业务字段不变', () => {
+  it('M11 migrateSave(v2) 只升版本，历史交易与事件不变', () => {
     const v2 = v2World()
     const r = migrateSave(v2)
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect({ ...r.state, schemaVersion: 0 }).toEqual({ ...v2, schemaVersion: 0 })
-      expect(r.state.schemaVersion).toBe(2)
+      expect(r.state.transactions).toEqual(v2.transactions)
+      expect(r.state.events).toEqual(v2.events)
+      expect(r.state.schemaVersion).toBe(3)
     }
   })
 
@@ -127,32 +128,32 @@ describe('存档迁移 v1→v2 (M2-E)', () => {
   })
 
   // ---- parseSave M13–M18 ----
-  it('M13 v1 档 parseSave 成功并标记 migratedFrom=1、版本 2', () => {
+  it('M13 v1 档 parseSave 成功并标记 migratedFrom=1、版本 3', () => {
     const r = parseSave(v1World())
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(r.migratedFrom).toBe(1)
-      expect(r.state.schemaVersion).toBe(2)
+      expect(r.state.schemaVersion).toBe(3)
       expect(r.state.products[0]?.pricePerUnitCents).toBe(2000)
     }
   })
 
-  it('M14 v2 档 parseSave 无 migratedFrom', () => {
+  it('M14 v2 档 parseSave 标记 migratedFrom=2', () => {
     const r = parseSave(v2World())
     expect(r.ok).toBe(true)
-    if (r.ok) expect(r.migratedFrom).toBeUndefined()
+    if (r.ok) expect(r.migratedFrom).toBe(2)
   })
 
-  it('M15 版本 3 仍拒绝（迁移不放宽版本闸门）', () => {
+  it('M15 版本 4 仍拒绝（迁移不放宽版本闸门）', () => {
     const world = structuredClone(v1World())
-    world.schemaVersion = 3
+    world.schemaVersion = 4
     const r = parseSave(world)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.errorCode).toBe('SAVE_VERSION_UNSUPPORTED')
   })
 
-  it('M15b 迁移层自身拒绝版本 3（双层闸门的第一层可独立生效）', () => {
-    const r = migrateSave({ schemaVersion: 3 })
+  it('M15b 迁移层自身拒绝版本 4（双层闸门的第一层可独立生效）', () => {
+    const r = migrateSave({ schemaVersion: 4 })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.errorCode).toBe('SAVE_VERSION_UNSUPPORTED')
   })
@@ -238,12 +239,12 @@ describe('存档迁移 v1→v2 (M2-E)', () => {
     expect([...mem.keys()]).toEqual(['git_save_v1'])
   })
 
-  it('M23 saveGame 写出 v2 档', async () => {
+  it('M23 saveGame 写出 v3 档', async () => {
     await saveGame(v2World())
     const compressed = mem.get('git_save_v1') as string
     const json = JSON.parse(LZString.decompressFromUTF16(compressed) as string) as { schemaVersion: number }
     expect(json.schemaVersion).toBe(SAVE_SCHEMA_VERSION)
-    expect(SAVE_SCHEMA_VERSION).toBe(2)
+    expect(SAVE_SCHEMA_VERSION).toBe(3)
   })
 
   // ---- 回归 M24 ----

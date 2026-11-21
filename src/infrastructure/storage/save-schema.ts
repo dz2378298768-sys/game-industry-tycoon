@@ -7,7 +7,7 @@ import type { SalesRecord } from '@domain/entities/sales-record'
 import { makeRefundBatchId, refundBatchIdempotencyKey } from '@domain/entities/refund-batch'
 
 /** 当前存档结构版本 */
-export const SAVE_SCHEMA_VERSION = 2
+export const SAVE_SCHEMA_VERSION = 3
 
 /** 唯一支持的模拟算法版本 */
 export const SUPPORTED_ALGORITHM_VERSION = 'mulberry32-v1'
@@ -71,6 +71,22 @@ const companySchema = z
     isPlayer: z.boolean(),
     persona: z.enum(['indie', 'genre_specialist', 'integrated_dev_publisher']).optional(),
     bankruptSinceDay: z.number().int().nonnegative().optional(),
+    bankruptcyPhase: z.enum(['restructuring', 'winddown']).optional(),
+    restructuringStartedDay: z.number().int().nonnegative().optional(),
+    restructuringDeadlineDay: z.number().int().nonnegative().optional(),
+    restructuringExtended: z.boolean().optional(),
+    assetSales: z
+      .array(
+        z
+          .object({
+            assetId: z.string().min(1),
+            buyerId: z.string().min(1),
+            priceCents: z.number().int().nonnegative(),
+            day: z.number().int().nonnegative(),
+          })
+          .passthrough(),
+      )
+      .optional(),
   })
   .passthrough()
 
@@ -109,6 +125,9 @@ const projectSchema = z
     pauseReason: z.enum(['manual', 'budget_exhausted']).nullish(),
     plannedLaunchDay: z.number().int().nonnegative(),
     budgetTotalCapCents: z.number().int().nonnegative(),
+    /** M3-C1：开发/上市营销拆分；旧档缺省不补，由预算服务回退 */
+    developmentBudgetCents: z.number().int().nonnegative().optional(),
+    launchMarketingReservedCents: z.number().int().nonnegative().optional(),
     /** DESIGN-G05 §7.3：spent/committed 非负；旧存档缺省 0 */
     budgetSpentCents: z.number().int().nonnegative().default(0),
     budgetCommittedCents: z.number().int().nonnegative().default(0),
@@ -211,6 +230,8 @@ const productSchema = z
     lastPriceChangeDay: z.number().int().nonnegative().optional(),
     defectLevel: z.number().min(0).max(100),
     status: z.enum(['active', 'retired']),
+    /** M3-C1：按 scope 的认知度；旧档缺省，由迁移层从 awarenessByMarket 拆分 */
+    awarenessByScope: z.record(z.string(), z.number()).optional(),
     /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
     salesByPeriod: z.array(salesRecordSchema).default([]),
   })
@@ -271,6 +292,7 @@ const publishingContractSchema = z
     terminationClause: z
       .enum(['mutual', 'quality_breach', 'delivery_breach', 'dissolved'])
       .optional(),
+    rateProfile: z.enum(['legacy', 'realistic']).optional(),
     version: z.number().int().nonnegative(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),

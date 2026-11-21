@@ -1,4 +1,11 @@
-import type { GrowthStage, CompanyStatus, CompanyPersona } from '@domain/enums'
+import type { BankruptcyPhase, GrowthStage, CompanyStatus, CompanyPersona } from '@domain/enums'
+
+export interface CompanyAssetSale {
+  assetId: string
+  buyerId: string
+  priceCents: number
+  day: number
+}
 
 export interface Company {
   id: string
@@ -17,6 +24,12 @@ export interface Company {
   status: CompanyStatus
   /** 破产起算日：破产时写入，恢复时清除；旧档缺失按读档日回填（ENDGAME-002 §D6） */
   bankruptSinceDay?: number
+  /** 重整/收缩子阶段；仅 status='bankrupt' 时有值 */
+  bankruptcyPhase?: BankruptcyPhase
+  restructuringStartedDay?: number
+  restructuringDeadlineDay?: number
+  restructuringExtended?: boolean
+  assetSales?: CompanyAssetSale[]
   monthlyFixedExpenseCents: number // TUNING: salary+rent 月合计
   officeLevel: number
   version: number

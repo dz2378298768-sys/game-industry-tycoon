@@ -28,6 +28,9 @@ export interface Project {
   actualLaunchDay?: number | null
   scope: RangeItem[]
   budgetTotalCapCents: number
+  /** M3-C1：开发预算与上市营销预留拆分；旧档缺省时由 budgetTotalCapCents 回退 */
+  developmentBudgetCents?: number
+  launchMarketingReservedCents?: number
   budgetSpentCents: number
   budgetCommittedCents: number
   /**

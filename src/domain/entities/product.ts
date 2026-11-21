@@ -31,6 +31,8 @@ export interface Product {
   brandImpact: number
   lifecycleStage: ProductLifecycleStage
   awarenessByMarket: Record<string, number>
+  /** M3-C1：按 scope（market:platform:segment）的认知度；新写入唯一来源，旧档由迁移层拆分 */
+  awarenessByScope?: Record<string, number>
   /** M2：按日销售记录（唯一销售记录来源）；新上市产品初始化为 [] */
   salesByPeriod: SalesRecord[]
   status: ProductStatus

@@ -39,7 +39,111 @@ const v1ToV2: MigrationStep = {
   },
 }
 
-const STEPS: MigrationStep[] = [v1ToV2]
+const TARGET_VERSION = 3
+
+/** v2 → v3：认知度拆 scope、破产档回填阶段、合同补 rateProfile；不重算历史。 */
+const v2ToV3: MigrationStep = {
+  from: 2,
+  to: 3,
+  migrate: (raw) => {
+    const currentDayIndex =
+      typeof raw.currentDayIndex === 'number' && Number.isInteger(raw.currentDayIndex)
+        ? raw.currentDayIndex
+        : 0
+
+    const companies = Array.isArray(raw.companies)
+      ? raw.companies.map((entry) => {
+          if (entry === null || typeof entry !== 'object') return entry
+          const company = entry as Record<string, unknown>
+          if (company.status !== 'bankrupt') return company
+          const next: Record<string, unknown> = { ...company }
+          if (next.bankruptcyPhase === 'restructuring' || next.bankruptcyPhase === 'winddown') {
+            return next
+          }
+          const rawStart = next.bankruptSinceDay
+          const start =
+            typeof rawStart === 'number' && Number.isInteger(rawStart) && rawStart >= 0
+              ? rawStart
+              : currentDayIndex
+          const elapsed = Math.max(0, currentDayIndex - start)
+          next.bankruptSinceDay = start
+          next.restructuringStartedDay = start
+          if (elapsed <= 90) {
+            next.bankruptcyPhase = 'restructuring'
+            next.restructuringDeadlineDay = start + 90
+            next.restructuringExtended = false
+          } else if (elapsed <= 180) {
+            next.bankruptcyPhase = 'restructuring'
+            next.restructuringDeadlineDay = start + 180
+            next.restructuringExtended = true
+          } else if (elapsed < 360) {
+            next.bankruptcyPhase = 'winddown'
+            next.restructuringDeadlineDay = start + 360
+            next.restructuringExtended = true
+          } else {
+            // 旧档已超过 360 天：给 30 天宽限，不立即解散
+            next.bankruptcyPhase = 'winddown'
+            next.restructuringDeadlineDay = currentDayIndex + 30
+            next.restructuringExtended = true
+          }
+          if (!Array.isArray(next.assetSales)) next.assetSales = []
+          return next
+        })
+      : raw.companies
+
+    const products = Array.isArray(raw.products)
+      ? raw.products.map((entry) => {
+          if (entry === null || typeof entry !== 'object') return entry
+          const product = entry as Record<string, unknown>
+          if (product.awarenessByScope !== undefined && product.awarenessByScope !== null) {
+            return product
+          }
+          const byMarket = product.awarenessByMarket
+          if (byMarket === null || typeof byMarket !== 'object' || Array.isArray(byMarket)) {
+            return product
+          }
+          const platformIds = Array.isArray(product.supportedPlatformIds)
+            ? product.supportedPlatformIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+            : []
+          const segmentIds = Array.isArray(product.audienceSegmentIds)
+            ? product.audienceSegmentIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+            : []
+          const scopeCount = platformIds.length * segmentIds.length
+          if (scopeCount === 0) return product
+          const byScope: Record<string, number> = {}
+          for (const [marketId, value] of Object.entries(byMarket as Record<string, unknown>)) {
+            if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
+            const share = value / scopeCount
+            for (const platformId of platformIds) {
+              for (const segmentId of segmentIds) {
+                byScope[`${marketId}:${platformId}:${segmentId}`] = share
+              }
+            }
+          }
+          return { ...product, awarenessByScope: byScope }
+        })
+      : raw.products
+
+    const publishingContracts = Array.isArray(raw.publishingContracts)
+      ? raw.publishingContracts.map((entry) => {
+          if (entry === null || typeof entry !== 'object') return entry
+          const contract = entry as Record<string, unknown>
+          if (contract.rateProfile === 'legacy' || contract.rateProfile === 'realistic') return contract
+          return { ...contract, rateProfile: 'legacy' }
+        })
+      : raw.publishingContracts
+
+    return {
+      ...raw,
+      schemaVersion: 3,
+      companies,
+      products,
+      publishingContracts,
+    }
+  },
+}
+
+const MIGRATION_STEPS: MigrationStep[] = [v1ToV2, v2ToV3]
 
 /** 是否存在从 `from` 到 `to` 的迁移路径（同版本视为可迁移）。 */
 export function canMigrate(from: number, to: number): boolean {
@@ -48,7 +152,7 @@ export function canMigrate(from: number, to: number): boolean {
   if (to < from) return false
   let cursor = from
   while (cursor < to) {
-    const step = STEPS.find((s) => s.from === cursor)
+    const step = MIGRATION_STEPS.find((s) => s.from === cursor)
     if (step === undefined || step.to > to) return false
     cursor = step.to
   }
@@ -73,21 +177,21 @@ export function migrateSave(raw: unknown): MigrationResult {
       errorMessage: '存档迁移失败：schemaVersion 缺失或非法。',
     }
   }
-  if (!canMigrate(from, 2)) {
+  if (!canMigrate(from, TARGET_VERSION)) {
     return {
       ok: false,
       errorCode: 'SAVE_VERSION_UNSUPPORTED',
-      errorMessage: `不支持的存档版本 ${from}，当前仅支持 1 或 2。`,
+      errorMessage: `不支持的存档版本 ${from}，当前仅支持 1、2 或 3。`,
     }
   }
   try {
     let current: Record<string, unknown> = input
-    for (const step of STEPS) {
-      if (step.from >= 2) continue
+    for (const step of MIGRATION_STEPS) {
+      if (step.from >= TARGET_VERSION) continue
       if (step.from !== current.schemaVersion) continue
       current = step.migrate(current)
     }
-    return { ok: true, state: current as unknown as WorldState, from, to: 2 }
+    return { ok: true, state: current as unknown as WorldState, from, to: TARGET_VERSION }
   } catch (error) {
     return {
       ok: false,

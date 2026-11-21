@@ -43,6 +43,6 @@ export function createEmptyWorld(saveSeed = 42): WorldState {
     saveSeed,
     simulationAlgorithmVersion: 'mulberry32-v1',
     currentDayIndex: 0,
-    schemaVersion: 2, // SAVE_SCHEMA_VERSION：新世界即 v2，v1 档由迁移层升级
+    schemaVersion: 3, // SAVE_SCHEMA_VERSION：新世界即 v3，v1/v2 档由迁移层升级
   }
 }

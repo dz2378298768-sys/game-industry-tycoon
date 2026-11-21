@@ -117,6 +117,24 @@ describe('§5.4 依赖 / 冲突 / 环（TC-02 / TC-03）', () => {
     expect(cycle?.subjectIds.join('→')).toContain('template:TPL-B')
   })
 
+  it('C5 / CODE01-R03 反证：环中依赖缺失（无 active 支撑）仍报 E-CYCLE，E-DEP 不回退', () => {
+    // 结构仅 TPL-COMBAT active；TPL-SUPPORT 无 active 实例 → 旧实现 supports() 过滤掉边，环漏报
+    const rules: RequireRule[] = [
+      {
+        ruleId: 'R1', subject: { kind: 'template', value: 'TPL-COMBAT' },
+        requires: [{ kind: 'template', value: 'TPL-SUPPORT' }], severity: 'hard', penalty: 0,
+      },
+      {
+        ruleId: 'R2', subject: { kind: 'template', value: 'TPL-SUPPORT' },
+        requires: [{ kind: 'template', value: 'TPL-COMBAT' }], severity: 'hard', penalty: 0,
+      },
+    ]
+    const r = run(baseStructure(), { ...emptyRules(), requireRules: rules })
+    expect(r.violations.some((v) => v.code === 'E-CYCLE')).toBe(true)
+    // 缺失依赖的 E-DEP 兜底仍在（安全性不因环检测放宽而下降）
+    expect(r.violations.some((v) => v.code === 'E-DEP')).toBe(true)
+  })
+
   it('依赖满足时不报 E-DEP（传递闭包正例）', () => {
     const rule: RequireRule = {
       ruleId: 'RD-OK', subject: { kind: 'template', value: 'TPL-COMBAT' },

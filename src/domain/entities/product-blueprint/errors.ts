@@ -29,6 +29,19 @@ export const E04 = {
 } as const
 
 /**
+ * §11 D-01 E 级硬规则码（返工完成/交付闸门复用；编号与 §11 一致）。
+ * 与 E04 引用解析码分属不同体系，闸门中按 code 去重展示、不互相覆盖：
+ *  - E-10 断言空值（必填未填）：主类型 primaryTypeId 为空。
+ *    resolveRefs 对空主类型刻意不报 E04（见 resolve-refs.ts §5.2 注释），故 E-10 不与 E04 重复。
+ *  - E-11 平台缺失：platformTargets 为空（至少 1 个平台）。
+ *    platformIds 为空时 resolveRefs 不产生 E04，故 E-11 亦不重复。
+ */
+export const BP_E = {
+  E10_EMPTY_PRIMARY_TYPE: 'E-10',
+  E11_EMPTY_PLATFORM: 'E-11',
+} as const
+
+/**
  * §11 E-20 覆盖的全部 7 个引用解析 E04 码。
  * 测试须逐一覆盖（不穷举加载期码）。
  */

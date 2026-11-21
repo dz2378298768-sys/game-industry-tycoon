@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   revalidationGate, decideSnapshotSwitch, undoRework,
 } from '../product-blueprint-revalidation'
-import { E20_RESOLUTION_CODES, E04 } from '@domain/entities/product-blueprint'
+import { E20_RESOLUTION_CODES, E04, BP_E } from '@domain/entities/product-blueprint'
 import type { ReworkSession, VocabularyCatalog } from '@domain/entities/product-blueprint'
 import { createP1Catalog, SEED_SEGMENT_TAGS, SEED_ARCHETYPES, SEED_PLATFORMS } from '@content/d04-vocabulary'
 import { withTuningOverrides } from '../product-blueprint-tuning'
@@ -105,6 +105,58 @@ describe('E-20：闸门覆盖全部 7 个引用解析 E04 码（TC-21）', () =>
       expect(result.pass, `${c.code} 应 fail-closed`).toBe(false)
       expect(decideSnapshotSwitch(result)).toBe('block')
     }
+  })
+})
+
+describe('§11 E-10 / E-11 必填空值（CODE01-R01 / C9 反证）', () => {
+  it('C9 / §11 E-10：空主类型 primaryTypeId → FAIL 且 decideSnapshotSwitch=block', () => {
+    const result = revalidationGate({
+      ...validInput(),
+      structure: baseStructure({
+        positioning: { ...baseStructure().positioning, primaryTypeId: '' },
+      }),
+    })
+    expect(result.violations.map((v) => v.code)).toContain(BP_E.E10_EMPTY_PRIMARY_TYPE)
+    expect(result.violations.some((v) => v.code === 'E-10' && v.severity === 'E')).toBe(true)
+    expect(result.pass).toBe(false)
+    expect(decideSnapshotSwitch(result)).toBe('block')
+    // 去重展示：resolveRefs 不为空主类型重复产 E04-UNKNOWN-ARCHETYPE
+    expect(result.refViolations.map((v) => v.code)).not.toContain(E04.UNKNOWN_ARCHETYPE)
+  })
+
+  it('C9 / §11 E-11：空平台 platformTargets → FAIL 且 decideSnapshotSwitch=block', () => {
+    const result = revalidationGate({
+      ...validInput(),
+      structure: baseStructure({
+        positioning: { ...baseStructure().positioning, platformTargets: [] },
+      }),
+    })
+    expect(result.violations.map((v) => v.code)).toContain(BP_E.E11_EMPTY_PLATFORM)
+    expect(result.violations.some((v) => v.code === 'E-11' && v.severity === 'E')).toBe(true)
+    expect(result.pass).toBe(false)
+    expect(decideSnapshotSwitch(result)).toBe('block')
+    // 去重展示：空平台不触发 E04-UNKNOWN-PLATFORM
+    expect(result.refViolations.map((v) => v.code)).not.toContain(E04.UNKNOWN_PLATFORM)
+  })
+
+  it('C9 原始反证：空主类型 + 空平台同时为空 → FAIL / block，两码均生成且不重复', () => {
+    const result = revalidationGate({
+      ...validInput(),
+      structure: baseStructure({
+        positioning: {
+          ...baseStructure().positioning,
+          primaryTypeId: '',
+          platformTargets: [],
+        },
+      }),
+    })
+    const codes = result.violations.map((v) => v.code)
+    expect(codes).toContain('E-10')
+    expect(codes).toContain('E-11')
+    expect(codes.filter((c) => c === 'E-10')).toHaveLength(1)
+    expect(codes.filter((c) => c === 'E-11')).toHaveLength(1)
+    expect(result.pass).toBe(false)
+    expect(decideSnapshotSwitch(result)).toBe('block')
   })
 })
 

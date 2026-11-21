@@ -35,6 +35,26 @@ export { resolveRefs, refsFromPositioning } from '@domain/value-objects/product-
 /** P1 全局单版本（§4.1）。 */
 export const P1_VOCABULARY_VERSION = 'D04-VOCAB-v0.1'
 
+/**
+ * ADJ-2026-11-21-02 裁定二 / D-04 §8.1 X-9：已发布 tagId 取值与语义永久不可变。
+ * 递归深拷贝：每次构造目录都拿到独立的嵌套对象，杜绝 regionScope/eraRange/typeAffinity/
+ * existence/inputCapabilities/techStandards 跨目录、跨种子共享可变引用（C7 / CODE01-R02）。
+ */
+function deepClone<T>(value: T): T {
+  return structuredClone(value)
+}
+
+/** 运行时冻结全局种子（编译期 readonly 之外的第二道锁），防止绕过构造入口直接改写已发布语义。 */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const key of Object.keys(value)) {
+      deepFreeze((value as Record<string, unknown>)[key])
+    }
+  }
+  return value
+}
+
 const globalScope = { kind: 'global' as const, regionIds: [] as string[] }
 const p1Era = { fromYear: 1970, toYear: 2026 }
 const northAmerica = ['north_america']
@@ -43,7 +63,7 @@ const northAmerica = ['north_america']
  * §6.1 SegmentTag 种子集（10 个）。
  * displayName / dimension / granularity / regionScope / eraRange 已发布即永久不可变。
  */
-export const SEED_SEGMENT_TAGS: readonly SegmentTag[] = [
+export const SEED_SEGMENT_TAGS: readonly SegmentTag[] = deepFreeze([
   { tagId: 'SEG-MASS_MARKET', code: 'mass_market', displayName: '大众', dimension: 'preference', granularity: 'broad', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
   { tagId: 'SEG-YOUTH', code: 'youth', displayName: '青少年', dimension: 'demographic', granularity: 'broad', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
   { tagId: 'SEG-CASUAL', code: 'casual', displayName: '休闲', dimension: 'preference', granularity: 'broad', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
@@ -54,13 +74,13 @@ export const SEED_SEGMENT_TAGS: readonly SegmentTag[] = [
   { tagId: 'SEG-COMPETITIVE', code: 'competitive', displayName: '竞技向', dimension: 'preference', granularity: 'niche', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
   { tagId: 'SEG-STRATEGY_FAN', code: 'strategy_fan', displayName: '策略偏好', dimension: 'preference', granularity: 'niche', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
   { tagId: 'SEG-NOSTALGIA', code: 'nostalgia', displayName: '怀旧', dimension: 'preference', granularity: 'niche', regionScope: globalScope, eraRange: p1Era, state: 'active', source: 'seed_data', vocabularyVersion: P1_VOCABULARY_VERSION },
-]
+])
 
 /**
  * §6.2 GameplayArchetype 种子集（3 个）。字段严格对齐 D-01 §4.13。
  * typeAffinity 数值为 TUNING；缺键一律取 0（D-01 §6.5）。
  */
-export const SEED_ARCHETYPES: readonly GameplayArchetype[] = [
+export const SEED_ARCHETYPES: readonly GameplayArchetype[] = deepFreeze([
   {
     archetypeId: 'SEED-PLATFORMER', name: '平台动作',
     coreSlotDomains: ['combat', 'exploration'],
@@ -82,13 +102,13 @@ export const SEED_ARCHETYPES: readonly GameplayArchetype[] = [
     subtypeTableId: null, isProvisional: false, state: 'active', successCount: 0,
     source: 'seed_data', createdAt: null, promotedAt: null,
   },
-]
+])
 
 /**
  * §6.3 Platform 种子集（3 个）。techStandards=[] 为 CONFIRMED 占位，档位待 D-06（不伪装确定门槛）。
  * P1 三平台成本/市场侧无差异；即时可观察差异仅 inputCapabilities（DEFERRED-1）。
  */
-export const SEED_PLATFORMS: readonly Platform[] = [
+export const SEED_PLATFORMS: readonly Platform[] = deepFreeze([
   {
     platformId: 'PLT-ARCADE', code: 'arcade', displayName: '街机',
     existence: { available: true, eraRange: { fromYear: 1970, toYear: 2026 }, regionCoverage: northAmerica },
@@ -104,7 +124,7 @@ export const SEED_PLATFORMS: readonly Platform[] = [
     existence: { available: true, eraRange: { fromYear: 1977, toYear: 2026 }, regionCoverage: northAmerica },
     inputCapabilities: ['keyboard_mouse'], techStandards: [], state: 'active', source: 'historical',
   },
-]
+])
 
 /** 构造 P1 词表版本对象（不改种子取值）。 */
 export function createP1Vocabulary(): SegmentTagVocabulary {
@@ -112,7 +132,8 @@ export function createP1Vocabulary(): SegmentTagVocabulary {
     vocabularyVersion: P1_VOCABULARY_VERSION,
     effectiveFrom: 1978,
     changelog: ['D04-VOCAB-v0.1: P1 初始种子集（10 标签 / 3 类型 / 3 平台）'],
-    tags: SEED_SEGMENT_TAGS.map((t) => ({ ...t })),
+    // 递归深拷贝（非浅拷贝）：每个目录持有独立的嵌套语义对象（C7 / R02）
+    tags: SEED_SEGMENT_TAGS.map((t) => deepClone(t)),
     sealed: true,
   }
 }
@@ -121,8 +142,8 @@ export function createP1Vocabulary(): SegmentTagVocabulary {
 export function createP1Catalog(): VocabularyCatalog {
   return {
     vocabulary: createP1Vocabulary(),
-    archetypes: SEED_ARCHETYPES.map((a) => ({ ...a })),
-    platforms: SEED_PLATFORMS.map((p) => ({ ...p })),
+    archetypes: SEED_ARCHETYPES.map((a) => deepClone(a)),
+    platforms: SEED_PLATFORMS.map((p) => deepClone(p)),
   }
 }
 
@@ -146,7 +167,8 @@ export function loadVocabulary(catalog: VocabularyCatalog): VocabularyCatalog {
     }
     seen.add(id)
   }
-  return catalog
+  // 加载期返回的目录同样深拷贝：即便调用方传入共享引用的对象，也不会把种子/其他目录的原始引用泄漏出去（C7 / R02）
+  return deepClone(catalog)
 }
 
 /** §7.1 getVocabulary(version?)；P1 仅单版本，version 不匹配则抛加载期错误。 */

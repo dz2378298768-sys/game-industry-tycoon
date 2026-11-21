@@ -257,6 +257,67 @@ describe('ADJ-2026-11-21-02 tagId 语义不可变（TC-15 / TC-22 / TC-23）', (
     expect(second.eraRange).toEqual({ fromYear: 1970, toYear: 2026 })
   })
 
+  it('TC-22 / C7 反证（CODE01-R02）：篡改目录 A 的嵌套语义字段，目录 B 与全局种子均不被污染', () => {
+    const catalogA = createP1Catalog()
+    const catalogB = createP1Catalog()
+    const tagA = catalogA.vocabulary.tags.find((t) => t.tagId === 'SEG-HARDCORE')!
+    const tagB = catalogB.vocabulary.tags.find((t) => t.tagId === 'SEG-HARDCORE')!
+    const seedTag = SEED_SEGMENT_TAGS.find((t) => t.tagId === 'SEG-HARDCORE')!
+
+    // readonly 是编译期锁；此处显式断言绕过，模拟"误改/恶意改"以验证运行时隔离（C7 原实测 polluted:true）
+    const scopeA = tagA.regionScope as unknown as { kind: 'global' | 'regional'; regionIds: string[] }
+    scopeA.kind = 'regional'
+    scopeA.regionIds.push('evil_region')
+    const eraA = tagA.eraRange as unknown as { fromYear: number; toYear: number }
+    eraA.fromYear = 1900
+
+    const archA = catalogA.archetypes.find((a) => a.archetypeId === 'SEED-PLATFORMER')!
+    const affinityA = archA.typeAffinity as unknown as Record<string, number>
+    affinityA.combat = -1
+
+    const platA = catalogA.platforms.find((p) => p.platformId === 'PLT-ARCADE')!
+    const existenceA = platA.existence as unknown as {
+      available: boolean
+      eraRange: { fromYear: number; toYear: number }
+      regionCoverage: string[]
+    }
+    existenceA.available = false
+    existenceA.eraRange.fromYear = 1900
+    existenceA.regionCoverage.push('evil_region')
+    const inputsA = platA.inputCapabilities as unknown as string[]
+    inputsA.push('touch')
+    const standardsA = platA.techStandards as unknown as unknown[]
+    standardsA.push({ gateId: 'EVIL' })
+
+    const archB = catalogB.archetypes.find((a) => a.archetypeId === 'SEED-PLATFORMER')!
+    const platB = catalogB.platforms.find((p) => p.platformId === 'PLT-ARCADE')!
+    const seedArch = SEED_ARCHETYPES.find((a) => a.archetypeId === 'SEED-PLATFORMER')!
+    const seedPlat = SEED_PLATFORMS.find((p) => p.platformId === 'PLT-ARCADE')!
+
+    // 反证判据：目录 A 的所有嵌套字段被篡改后，B 与全局种子必须保持原语义（polluted:false）
+    const polluted =
+      tagB.regionScope.kind !== 'global' ||
+      tagB.regionScope.regionIds.includes('evil_region') ||
+      tagB.eraRange.fromYear !== 1970 ||
+      seedTag.regionScope.kind !== 'global' ||
+      seedTag.regionScope.regionIds.includes('evil_region') ||
+      seedTag.eraRange.fromYear !== 1970 ||
+      (archB.typeAffinity.combat ?? 0) < 0 ||
+      (seedArch.typeAffinity.combat ?? 0) < 0 ||
+      platB.existence.available !== true ||
+      platB.existence.eraRange.fromYear !== 1970 ||
+      platB.existence.regionCoverage.includes('evil_region') ||
+      platB.inputCapabilities.includes('touch') ||
+      platB.techStandards.length !== 0 ||
+      seedPlat.existence.available !== true ||
+      seedPlat.existence.eraRange.fromYear !== 1970 ||
+      seedPlat.existence.regionCoverage.includes('evil_region') ||
+      seedPlat.inputCapabilities.includes('touch') ||
+      seedPlat.techStandards.length !== 0
+
+    expect(polluted).toBe(false)
+  })
+
   it('TC-23：读档遇完全未知 tagId/platformId → 拒绝该引用、标记只读、不报 E、存档仍可打开', () => {
     const refs: VocabularyRefs = {
       tagIds: ['SEG-UNKNOWN'],

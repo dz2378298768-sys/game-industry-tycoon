@@ -393,13 +393,16 @@ export type VocabularyState = 'active' | 'deprecated'
  * 及语义永久不可变（ADJ-2026-11-21-02 裁定二）；跨版本仅允许新增 tagId 或 active→deprecated。
  */
 export interface SegmentTag {
-  tagId: string
-  code: string
-  displayName: string
-  dimension: SegmentTagDimension
-  granularity: SegmentTagGranularity
-  regionScope: { kind: 'global' | 'regional'; regionIds: string[] }
-  eraRange: { fromYear: number; toYear: number }
+  readonly tagId: string
+  readonly code: string
+  /** 已发布语义永久不可变（ADJ-2026-11-21-02 裁定二 / D-04 §8.1 X-9）。 */
+  readonly displayName: string
+  readonly dimension: SegmentTagDimension
+  readonly granularity: SegmentTagGranularity
+  /** 地区适用范围只读，杜绝跨目录/跨版本共享可变引用（C7 / R02）。 */
+  readonly regionScope: Readonly<{ kind: 'global' | 'regional'; regionIds: readonly string[] }>
+  readonly eraRange: Readonly<{ fromYear: number; toYear: number }>
+  /** 仅 state 允许 active→deprecated（§4.1）；其余语义字段不可变。 */
   state: VocabularyState
   source: 'seed_data' | 'game_master'
   vocabularyVersion: string
@@ -407,11 +410,12 @@ export interface SegmentTag {
 
 /** §3.2 / D-01 §4.13 GameplayArchetype。字段不新增、不改名、不改类型。 */
 export interface GameplayArchetype {
-  archetypeId: string
-  name: string
-  coreSlotDomains: GameplayDomain[]
-  /** 缺键一律取 0（D-01 §6.5）。 */
-  typeAffinity: Partial<Record<GameplayDomain, number>>
+  readonly archetypeId: string
+  /** 已发布取值/语义永久不可变（ADJ-2026-11-21-02）。 */
+  readonly name: string
+  readonly coreSlotDomains: readonly GameplayDomain[]
+  /** 嵌套亲和表只读（C7 / R02）；缺键一律取 0（D-01 §6.5）。 */
+  readonly typeAffinity: Readonly<Partial<Record<GameplayDomain, number>>>
   subtypeTableId: string | null
   isProvisional: boolean
   state: 'provisional' | 'active' | 'deprecated'
@@ -423,16 +427,18 @@ export interface GameplayArchetype {
 
 /** §3.3 Platform。P1 techStandards=[]；inputCapabilities 供 §5.2 硬兼容检查。 */
 export interface Platform {
-  platformId: string
-  code: string
-  displayName: string
-  existence: {
+  readonly platformId: string
+  readonly code: string
+  readonly displayName: string
+  /** 存在性/年份/地区覆盖嵌套只读（C7 / R02）；已发布语义不随目录复制漂移。 */
+  readonly existence: Readonly<{
     available: boolean
-    eraRange: { fromYear: number; toYear: number }
-    regionCoverage: string[]
-  }
-  inputCapabilities: Array<'gamepad' | 'keyboard_mouse' | 'touch'>
-  techStandards: TechGate[]
+    eraRange: Readonly<{ fromYear: number; toYear: number }>
+    regionCoverage: readonly string[]
+  }>
+  readonly inputCapabilities: readonly ('gamepad' | 'keyboard_mouse' | 'touch')[]
+  /** P1 techStandards=[]；档位待 D-06，只读引用避免共享可变数组（C7 / R02）。 */
+  readonly techStandards: readonly TechGate[]
   state: VocabularyState
   source: 'seed_data' | 'historical'
 }

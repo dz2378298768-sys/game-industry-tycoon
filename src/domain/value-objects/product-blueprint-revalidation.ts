@@ -7,7 +7,9 @@
  *  2. 复用 §11 全部 E 级硬规则及 §5.3/§5.4 硬规则；E04-* 按 E 级硬违规并入 violations。
  *  3. fail-closed：任一 E 级违规 → FAIL，禁止切换权威快照 / 禁止交付。
  *  4. E-20 覆盖全部 7 个引用解析 E04 码（由 resolveRefs 产出，见 E20_RESOLUTION_CODES）。
- *  5. 提供撤销路径：撤销返工 → 丢弃目标草稿，旧快照继续生效，state 保持 EXECUTING。
+ *  5. §11 E-10（断言空值：primaryTypeId 为空）/ E-11（平台缺失：platformTargets 为空）
+ *     为闸门兜底硬规则；resolveRefs 对二者刻意不产 E04（避免重复展示），由本模块单独生成。
+ *  6. 提供撤销路径：撤销返工 → 丢弃目标草稿，旧快照继续生效，state 保持 EXECUTING。
  *
  * D-06 尚未定义的 E-TECH/E-ERA 及平台输入兼容检查以 externalViolations 注入（下游输入），
  * 本模块不自造 D-06 档位语义。
@@ -21,6 +23,8 @@ import type {
   ReworkSession,
   VocabularyCatalog,
 } from '@domain/entities/product-blueprint'
+import { BP_E } from '@domain/entities/product-blueprint'
+import { makeViolation } from './product-blueprint-violation'
 import { resolveRefs, refsFromPositioning } from './product-blueprint-resolve-refs'
 import { checkCompositionRules } from './product-blueprint-composition'
 import type { CompositionRules } from './product-blueprint-composition'
@@ -63,6 +67,25 @@ export function revalidationGate(input: RevalidationInput): RevalidationResult {
     ...composition.violations,
     ...external,
   ]
+
+  // ②b §11 E-10 / E-11：必填空值与平台缺失（闸门兜底）。
+  //  resolveRefs 对空 primaryTypeId / 空 platformIds 刻意不产 E04（resolve-refs.ts §5.2），
+  //  故此处按 code 去重展示，不与 E04 引用码重复。
+  const positioning = input.structure.positioning
+  if (positioning.primaryTypeId === '') {
+    hardRuleViolations.push(makeViolation(
+      BP_E.E10_EMPTY_PRIMARY_TYPE, 'E', 'E-10', [],
+      '主类型 primaryTypeId 为空：必填未填（§11 E-10，IN_REVIEW 前阻断）',
+      '选择 active 主类型',
+    ))
+  }
+  if (positioning.platformTargets.length === 0) {
+    hardRuleViolations.push(makeViolation(
+      BP_E.E11_EMPTY_PLATFORM, 'E', 'E-11', [],
+      '平台目标 platformTargets 为空：至少 1 个平台（§11 E-11，阻断）',
+      '选择至少一个目标平台',
+    ))
+  }
 
   // ③ refViolations 的 E 级并入 violations；W04 草稿提示也保留但不阻断
   const violations: BlueprintViolation[] = [...hardRuleViolations, ...refResult.violations]

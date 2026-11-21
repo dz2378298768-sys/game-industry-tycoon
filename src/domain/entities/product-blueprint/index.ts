@@ -3,7 +3,7 @@
  * 不含 application / UI / 存档迁移；不覆盖现有 product.ts / project.ts。
  */
 export * from './types'
-export { E04, E20_RESOLUTION_CODES } from './errors'
+export { E04, BP_E, E20_RESOLUTION_CODES } from './errors'
 export {
   VocabularyLoadError,
   InvalidBlueprintTransitionError,

@@ -100,24 +100,20 @@ function nodeKey(selector: RuleSelector): string {
 }
 
 /**
- * §5.4 第 4 步：RequireRule 传递闭包的环检测。
- * 构建「主体 → 被依赖方」有向图（节点为 active subject），DFS 找环并返回路径。
+ * §11 E-2 / §5.4 第 4 步：RequireRule 传递闭包的环检测。
+ * 直接基于规则 subject→requires 建有向图（不依赖 active 支撑），否则"环中依赖缺失"
+ * 时边会被 supports() 过滤掉，E-CYCLE 漏报（C5 / CODE01-R03）。E-DEP 仍独立兜底 fail-closed。
  */
-function findDependencyCycle(rules: RequireRule[], views: InstanceView[]): string[] | null {
+function findDependencyCycle(rules: RequireRule[]): string[] | null {
   const graph = new Map<string, string[]>()
   for (const rule of rules) {
-    for (const view of views) {
-      if (!matches(rule.subject, view)) continue
-      const from = nodeKey(rule.subject)
-      const edges = graph.get(from) ?? []
-      for (const req of rule.requires) {
-        if (supports(req, views)) {
-          const to = nodeKey(req)
-          if (!edges.includes(to)) edges.push(to)
-        }
-      }
-      graph.set(from, edges)
+    const from = nodeKey(rule.subject)
+    const edges = graph.get(from) ?? []
+    for (const req of rule.requires) {
+      const to = nodeKey(req)
+      if (!edges.includes(to)) edges.push(to)
     }
+    graph.set(from, edges)
   }
 
   const WHITE = 0, GREY = 1, BLACK = 2
@@ -253,7 +249,7 @@ export function checkCompositionRules(
   }
 
   // §5.4 第 4 步：传递闭包环 → E-CYCLE（列出环路径）
-  const cycle = findDependencyCycle(rules.requireRules, views)
+  const cycle = findDependencyCycle(rules.requireRules)
   if (cycle !== null) {
     violations.push(makeViolation('E-CYCLE', 'E', 'E-CYCLE', cycle, `依赖环：${cycle.join(' → ')}`, '打破环（不自动打破）'))
   }

@@ -20,3 +20,6 @@ export type {
 
 // ===== P1 产品蓝图领域内核（D-01 / D-04），独立目录，不覆盖 product.ts / project.ts =====
 export * from './product-blueprint'
+
+// ===== P1 统一账本领域内核（FIN V0.2），独立目录，不覆盖 transaction.ts / company.ts =====
+export * from './finance'

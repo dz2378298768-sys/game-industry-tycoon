@@ -63,3 +63,12 @@ export * from './product-blueprint-composition'
 export * from './product-blueprint-revalidation'
 export * from './product-blueprint-lifecycle'
 export * from './product-blueprint-rework-cost'
+
+// ===== P1 统一账本领域内核（FIN V0.2）纯函数 =====
+export * from './finance-tuning'
+export * from './finance-compat'
+export * from './finance-cashflow'
+export * from './finance-commitment'
+export * from './finance-crisis'
+export * from './finance-formulas'
+export * from './finance-remedy'

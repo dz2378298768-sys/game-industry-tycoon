@@ -321,6 +321,35 @@ export const worldStateSchema = z
     marketingCampaigns: z.array(marketingCampaignSchema).default([]),
     publishingContracts: z.array(publishingContractSchema).default([]),
     transactions: z.array(transactionSchema),
+    /**
+     * CODE-04：账本承诺集合（FIN §3.3）。旧档缺省 []，不升存档版本。
+     * 结构性字段逐一约定；`cancelEffectiveMonth` 等取消溯源字段可空（旧档/未取消）。
+     */
+    commitments: z
+      .array(
+        z
+          .object({
+            commitmentId: z.string().min(1),
+            companyId: z.string().min(1),
+            sourceType: z.enum(['employment_salary', 'office_rent', 'project_budget', 'contract_obligation']),
+            sourceRef: z.string().min(1),
+            amountCents: z.number().int().positive(),
+            period: z.enum(['monthly', 'one_off']),
+            periodCount: z.number().int().nonnegative(),
+            totalPlannedCents: z.number().int().nonnegative(),
+            startAt: z.number().int().nonnegative(),
+            endAt: z.number().int().nonnegative(),
+            realizedCents: z.number().int().nonnegative(),
+            state: z.enum(['committed', 'partially_realized', 'realized', 'cancelled']),
+            linkedTxIds: z.array(z.string().min(1)),
+            cancelEffectiveMonth: z.string().nullable().optional(),
+            releasedPeriods: z.number().int().nonnegative().optional(),
+            releasedCents: z.number().int().nonnegative().optional(),
+            cancelledAtPeriods: z.number().int().nonnegative().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
     /** M3-A3：旧档缺省 []；AI 决策日志随档，供克隆对照与审计；不升版本 */
     aiDecisionLog: z
       .array(

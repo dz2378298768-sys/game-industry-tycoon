@@ -219,3 +219,44 @@ describe('存档安全 (G10/G21)', () => {
     }
   })
 })
+
+/**
+ * CODE-04 D 段：承诺集合随档持久化并在读档时随 replay 重建（FIN §3.3 / §10.5）。
+ */
+describe('CODE-04：账本承诺集合的存档往返', () => {
+  it('serialize 带上账本承诺；restore 后承诺逐字段相等且余额不变', () => {
+    const gw = new GameWorld(9)
+    const company = gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
+    const ledger = gw.finance.getLedger()
+    const registered = ledger.registerCommitment({
+      commitmentId: 'commit:prj-1:budget:0:2000000', companyId: company.id,
+      sourceType: 'project_budget', sourceRef: 'prj-1', amountCents: 2_000_000,
+      period: 'one_off', startAt: 0, endAt: 0,
+    })
+    expect(registered.success).toBe(true)
+
+    const world = gw.serialize()
+    expect(world.commitments).toHaveLength(1)
+    expect(world.commitments?.[0]?.commitmentId).toBe('commit:prj-1:budget:0:2000000')
+
+    const restored = new GameWorld(9)
+    restored.restore(world)
+    expect(restored.finance.getLedger().getCommitments(company.id)).toEqual(
+      ledger.getCommitments(company.id),
+    )
+    expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(company.cashBalanceCents)
+  })
+
+  it('旧档缺 commitments 字段：缺省为空集合，读档正常（不升版本、不破坏余额）', () => {
+    const gw = new GameWorld(9)
+    gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
+    const world = structuredClone(gw.serialize())
+    delete world.commitments
+    const r = parseSave(world)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const restored = new GameWorld(9)
+    restored.restore(r.state)
+    expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(gw.getPlayerCompany()?.cashBalanceCents)
+  })
+})

@@ -42,7 +42,10 @@ export interface RefundServiceDeps {
   finance: Pick<
     FinanceService,
     'postTransaction' | 'hasTransaction' | 'getAllTransactions'
-  > & { getTransactionByKey?: FinanceService['getTransactionByKey'] }
+  > & {
+    /** P3-05：按 (companyId, key) 精确查询，避免多公司同键时取到"某一笔"。 */
+    getTransactionByKey?: (idempotencyKey: string, companyId?: string) => Transaction | undefined
+  }
   /**
    * 当前 TUNING 的窗口天数；**仅用于无快照的 player_request**（Q10 回退口径）。
    * 历史批次一律按 `batch.refundDayIndex`，绝不按此值复算。
@@ -287,6 +290,11 @@ export class RefundService {
     return { posted: false, rejected: false, failure: posted.errorCode ?? 'FIN_UNKNOWN' }
   }
 
+  /** 退款批次所属公司（经产品反查；批次本身只记 productId）。 */
+  private companyIdOfBatch(world: WorldState, batch: RefundBatch): string | undefined {
+    return world.products.find((p) => p.id === batch.productId)?.companyId
+  }
+
   private markPostedMutable(
     draft: WorldState,
     batch: RefundBatch,
@@ -313,7 +321,7 @@ export class RefundService {
     const txKey = refundBatchIdempotencyKey(batch.id)
     if (this.appendedTxKeys === null) this.appendedTxKeys = new Set(draft.transactions.map((t) => t.idempotencyKey))
     if (!this.appendedTxKeys.has(txKey)) {
-      const tx = this.deps.finance.getTransactionByKey?.(txKey)
+      const tx = this.deps.finance.getTransactionByKey?.(txKey, this.companyIdOfBatch(draft, batch))
       if (tx !== undefined) {
         this.appendedTxKeys.add(txKey)
         draft.transactions.push(tx)
@@ -488,7 +496,12 @@ export class RefundService {
   private findRefundTransaction(world: WorldState, key: string): Transaction | undefined {
     // 生产 FinanceService 有全量幂等索引：undefined 即"确实不存在"，不再全表扫描证明缺席。
     if (this.deps.finance.getTransactionByKey !== undefined) {
-      return this.deps.finance.getTransactionByKey(key)
+      // P3-05：优先按公司作用域查询（批次 → 产品 → 公司），找不到公司时退回全局签名。
+      const productId = world.refundBatches.find((b) => refundBatchIdempotencyKey(b.id) === key)?.productId
+      const companyId = productId === undefined
+        ? undefined
+        : world.products.find((p) => p.id === productId)?.companyId
+      return this.deps.finance.getTransactionByKey(key, companyId)
     }
     // 兼容测试注入的轻量 mock（无索引），保留旧路径
     return world.transactions.find(
@@ -598,7 +611,7 @@ export class RefundService {
       this.appendedTxKeys = new Set(world.transactions.map((t) => t.idempotencyKey))
     }
     if (this.appendedTxKeys.has(key)) return world.transactions
-    const tx = this.deps.finance.getTransactionByKey?.(key)
+    const tx = this.deps.finance.getTransactionByKey?.(key, this.companyIdOfBatch(world, batch))
     if (tx === undefined) return world.transactions
     this.appendedTxKeys.add(key)
     return [...world.transactions, tx]

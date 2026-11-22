@@ -20,6 +20,7 @@ import { createCommitment, remainingPlannedCents } from '@domain/value-objects/f
 import { withFinanceTuningOverrides, ALL_TRANSACTION_CATEGORIES, DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { checkHrbFeasibility } from '@domain/value-objects/product-blueprint-hrb'
 import { DEFAULT_BLUEPRINT_TUNING } from '@domain/value-objects/product-blueprint-tuning'
+import { UnifiedLedger } from '@domain/entities/finance'
 import type { BudgetCommitment, PayableReceivable } from '@domain/entities/finance'
 
 const T = withFinanceTuningOverrides()
@@ -29,8 +30,14 @@ function commitment(amount: number, months: number): BudgetCommitment {
   return createCommitment({
     commitmentId: `c-${amount}`, companyId: 'c1', sourceType: 'employment_salary',
     sourceRef: 'emp', amountCents: amount, period: 'monthly', startAt: d(1), endAt: d(months),
-  })
+  }, { ledger: SANDBOX_FREE_LEDGER })
 }
+
+/**
+ * P3-07：`createCommitment` 的沙盒守卫改为必填，纯公式用例用一个"无沙盒公司"的账本充当守卫源。
+ * 共享实例只读（从不 registerCompany/post），沙盒态必然为 false。
+ */
+const SANDBOX_FREE_LEDGER = new UnifiedLedger()
 
 function payable(amount: number, dueDay: number, settled = 0): PayableReceivable {
   return {
@@ -238,7 +245,7 @@ describe('CODE-02 C-2：AvailableCash horizon 截断（P2-01）', () => {
       commitmentId: 'cm-23', companyId: 'c1', sourceType: 'employment_salary',
       sourceRef: 'emp', amountCents: 100_000, period: 'monthly',
       startAt: d(1), endAt: gregorianToDayIndex(2027, 11, 1),
-    })
+    }, { ledger: SANDBOX_FREE_LEDGER })
     expect(long.periodCount).toBe(23)
     expect(remainingPlannedCents(long)).toBe(2_300_000)
     const available = computeAvailableCash({

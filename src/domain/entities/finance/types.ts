@@ -49,6 +49,9 @@ export interface LedgerTransaction {
 /**
  * 账本账户。cashBalanceCents 为**派生只读**（类型 readonly + 无写 API），
  * 唯一写路径是 UnifiedLedger 依据 Transaction 重算；业务/UI 不得直接赋值（F-10 / BR-1）。
+ *
+ * 全部字段 readonly（A-3）：`registerCompany` 内部维护 openedAt / sandbox 状态，
+ * 本快照仅作投影，没有任何可变句柄留给调用方。
  */
 export interface LedgerAccount {
   readonly ledgerAccountId: string
@@ -57,7 +60,7 @@ export interface LedgerAccount {
   readonly cashBalanceCents: Cents
   readonly accountType: 'operating_cash'
   readonly openedAt: number
-  state: 'active' | 'frozen' | 'closed'
+  readonly state: 'active' | 'frozen' | 'closed'
 }
 
 // ===== §3.3 BudgetCommitment（承诺支出，F-02） =====
@@ -70,9 +73,18 @@ export type CommitmentSourceType =
 export type CommitmentPeriod = 'monthly' | 'one_off'
 export type CommitmentState = 'committed' | 'partially_realized' | 'realized' | 'cancelled'
 
+/** §4.1 / ADJ-2026-11-22-05 §3.1：取消生效期（YYYY-MM）。 */
+export type MonthKey = string
+
 /**
  * 预算承诺。承诺本身永不改变现金（BR-3）；只有兑现事件提交 Transaction 才改现金。
  * totalPlannedCents = amountCents × periodCount 于创建时固化，是 realizedCents 的累计上限。
+ *
+ * 取消生效期（ADJ-2026-11-22-05 §3，CODE-04 / FIN-INT-01）：
+ * - `cancelEffectiveMonth`：中途取消的生效月（YYYY-MM），null 表示未设置。
+ * - `releasedPeriods` / `releasedCents`：被释放的周期数与金额（已入账部分不冲回）。
+ * - `cancelledAtPeriods`：取消时**已被计入已兑现**的周期数，供一致性自检
+ *   （`cancelledAtPeriods + releasedPeriods == periodCount`）；未取消为 null。
  */
 export interface BudgetCommitment {
   readonly commitmentId: string
@@ -88,6 +100,29 @@ export interface BudgetCommitment {
   realizedCents: Cents
   state: CommitmentState
   linkedTxIds: string[]
+  cancelEffectiveMonth: MonthKey | null
+  releasedPeriods: number
+  releasedCents: Cents
+  cancelledAtPeriods: number | null
+}
+
+/**
+ * 取消结果（ADJ-2026-11-22-05 §3.2）。
+ * 恒等式：`realizedCents + releasedCents == 原承诺 totalPlannedCents`；
+ * `realizedPeriods + releasedPeriods == 原 periodCount`。
+ */
+export interface CancelCommitmentResult {
+  /** 生效月之前的**已兑现**周期数（不冲回）。 */
+  readonly realizedPeriods: number
+  /** 生效月及之后**被释放**的周期数。 */
+  readonly releasedPeriods: number
+  /** 已兑现金额（由原承诺结构读取，不由调用方传入）。 */
+  readonly realizedCents: Cents
+  /** 释放金额。 */
+  readonly releasedCents: Cents
+  readonly effectiveMonth: MonthKey
+  /** 更新后的承诺快照（state='cancelled'，含取消溯源字段）。 */
+  readonly commitment: BudgetCommitment
 }
 
 // ===== §3.4 Payable / Receivable（应付 / 应收） =====

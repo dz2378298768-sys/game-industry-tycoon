@@ -24,9 +24,22 @@ export const FIN_ERROR = {
   REMEDY_PRECONDITION_FAILED: 'FIN_REMEDY_PRECONDITION_FAILED',
   REFUND_FEE_TX_NOT_FOUND: 'FIN_REFUND_FEE_TX_NOT_FOUND',
   IDENTITY_MISMATCH: 'FIN_IDEMPOTENCY_KEY_MISMATCH',
-  /** 同公司复用冲销/退款键指向不同目标操作（P2-04）：拒绝假成功，不返回他笔交易。 */
+  /**
+   * 同公司复用键指向不同目标操作（P2-04）：拒绝假成功，不返回他笔交易。
+   * CODE-04 P3-05 后仅用于**同公司**内部复用（跨公司同名键不再冲突——各自独立）。
+   */
   IDEMPOTENCY_KEY_CONFLICT: 'FIN_IDEMPOTENCY_KEY_CONFLICT',
   REPLAY_LIMIT_EXCEEDED: 'FIN_REPLAY_LIMIT_EXCEEDED',
+  /** A-3 一致性断言失败：Company.cashBalanceCents 与账本求和不一致（禁止静默对齐）。 */
+  CASH_MISMATCH: 'FIN_CASH_MISMATCH',
+  /** 承诺注册表：同 (companyId, commitmentId) 已存在且字段不一致（不复用 ID 覆盖）。 */
+  COMMITMENT_ALREADY_REGISTERED: 'FIN_COMMITMENT_ALREADY_REGISTERED',
+  /** 承诺注册表：公司未在账本注册（先 registerCompany）。 */
+  COMMITMENT_COMPANY_NOT_REGISTERED: 'FIN_COMMITMENT_COMPANY_NOT_REGISTERED',
+  /** 承诺注册表：待结算/释放的承诺不存在。 */
+  COMMITMENT_NOT_FOUND: 'FIN_COMMITMENT_NOT_FOUND',
+  /** 承诺注册表：结算金额与周期不符 / 已取消仍试图结算。 */
+  COMMITMENT_SETTLEMENT_INVALID: 'FIN_COMMITMENT_SETTLEMENT_INVALID',
 } as const
 
 export type FinanceErrorCode = (typeof FIN_ERROR)[keyof typeof FIN_ERROR]
@@ -45,6 +58,20 @@ export class LedgerInconsistentError extends FinanceError {
     super(
       FIN_ERROR.LEDGER_INCONSISTENT,
       `Company ${companyId}: cashBalanceCents ${expected} != Σ(amountCents) ${actual}`,
+    )
+  }
+}
+
+/**
+ * A-3 单点一致性断言失败：`Company.cashBalanceCents`（兼容展示字段）与账本
+ * `Σ amountCents` 不一致。**fail-loud，不得静默对齐**（任务卡 §A.2）。
+ * 只有 `hydrateCashFromLedger` 可写该字段；出现本错说明存在第二写入者。
+ */
+export class CashMismatchError extends FinanceError {
+  constructor(companyId: string, declared: number, actual: number) {
+    super(
+      FIN_ERROR.CASH_MISMATCH,
+      `${FIN_ERROR.CASH_MISMATCH}: Company ${companyId}: cashBalanceCents ${declared} != Ledger Σ(amountCents) ${actual}`,
     )
   }
 }

@@ -7,6 +7,7 @@ import type { MarketingCampaign } from '@domain/entities/marketing-campaign'
 import type { PublishingContract } from '@domain/entities/publishing-contract'
 import type { Transaction } from '@domain/entities/transaction'
 import type { DomainEvent } from '@domain/events'
+import type { BudgetCommitment } from '@domain/entities/finance'
 
 export interface WorldState {
   companies: Company[]
@@ -27,6 +28,11 @@ export interface WorldState {
   schemaVersion: number
   /** M3-A2/A3：AI 决策日志（最近 24 个月，随档持久化，供克隆对照与审计） */
   aiDecisionLog?: unknown[]
+  /**
+   * CODE-04 / FIN §3.3：账本承诺集合（唯一来源 = UnifiedLedger）；
+   * 与 transactions 一同持久化，读档时随 replay 重建。旧档缺省 []（passthrough 不升版本）。
+   */
+  commitments?: BudgetCommitment[]
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {

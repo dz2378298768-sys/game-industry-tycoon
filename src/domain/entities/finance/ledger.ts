@@ -4,6 +4,11 @@
  * 唯一现金入口：所有现金变动只能来自本类的 postTransaction / bulkPostTransactions /
  * reverseTransaction / refundSale / settleItem / replay（后者仅读档重建）。
  *
+ * 承诺注册表（CODE-04 D 段 / FIN §3.3 §4.1 §6.2 §10.3）：
+ * registerCommitment / getCommitments / getCommitment / settleCommitment / releaseCommitment。
+ * 承诺本身**永不改现金**（BR-3），它只是 `AvailableCash` 的扣除项来源与"未来支出"的事实源；
+ * 这里只是"存得住、查得到、释放得了"，真正的现金变化仍只发生在上面那五个入口。
+ *
  * INV-1（F-01 方案 a）：cashBalanceCents == Σ(全部 LedgerTransaction.amountCents)，
  * **不按 status 过滤**。status 仅审计标记；冲销以反向交易实现，原交易与反向交易都参与求和。
  * 余额不存储为可写字段：getCashBalance 每次由交易重算，LedgerAccount.cashBalanceCents 为
@@ -12,18 +17,29 @@
 import type { TransactionCategory } from '@domain/enums'
 import { fail, ok, uuid, type CommandResult } from '@domain/types'
 import { InsufficientCashError } from '@domain/errors'
-import { FIN_ERROR, FinanceError, LedgerInconsistentError } from './errors'
+import { CashMismatchError, FIN_ERROR, FinanceError, LedgerInconsistentError } from './errors'
 import type {
+  BudgetCommitment,
   Cents,
   CashFlowType,
+  CancelCommitmentResult,
+  CommitmentState,
   LedgerAccount,
   LedgerTransaction,
+  MonthKey,
   PayableReceivable,
   TransactionSource,
 } from './types'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import type { FinanceTuning } from '@domain/value-objects/finance-tuning'
 import { resolveCashFlowType } from '@domain/value-objects/finance-cashflow'
+import {
+  cancelCommitment as computeCancelCommitment,
+  createCommitment,
+  deriveCommitmentState,
+  remainingPlannedCents,
+  type CreateCommitmentInput,
+} from '@domain/value-objects/finance-commitment'
 
 export interface PostLedgerTxInput {
   idempotencyKey: string
@@ -55,6 +71,11 @@ export interface LedgerSnapshot {
   companyId: string
   cashBalanceCents: Cents
   transactionCount: number
+  /**
+   * 该公司承诺集合的只读快照（D 段：承诺注册表）。
+   * 与交易一同纳入快照，供存档/对账读取；重建走 `replay(transactions, companyIds, commitments)`。
+   */
+  commitments: BudgetCommitment[]
 }
 
 export interface ReversalPairResult {
@@ -64,6 +85,18 @@ export interface ReversalPairResult {
   feeReversal?: LedgerTransaction
   /** 退款交易自身的净额（含手续费冲回）：−(原销售净额)。全额退款后账户回到销售前余额（F-11）。 */
   refundCashImpactCents: Cents
+}
+
+/** 承诺注册结果（幂等键 `commitment:${companyId}:${commitmentId}`）。 */
+export interface RegisterCommitmentResult {
+  commitment: BudgetCommitment
+  idempotent: boolean
+}
+
+/** 承诺结算结果：累积 realizedCents、推进 state（不改现金，现金只来自 linkTxId）。 */
+export interface SettleCommitmentResult {
+  commitment: BudgetCommitment
+  idempotent: boolean
 }
 
 export interface SettlementResult {
@@ -79,10 +112,43 @@ export function settlementIdempotencyKey(itemId: string, period: string): string
 
 /**
  * 幂等键按公司作用域（CODE-02 P1-01）：开局固定键 `advance` 等由各公司独立使用，
- * 复合键避免两家公司互相命中。全局 transactionByKey 仅保留首笔供单参查询兼容。
+ * 复合键避免两家公司互相命中。
+ *
+ * P3-05：幂等判定与查询**一律走复合键** `transactionByCompanyKey`（唯一决策源，
+ * 结构上不可能跨公司串账）；不再维护"裸键 → 单笔"的全局索引——
+ * 该索引在多公司同键时只能保留**后写者**，却容易被误读为"首笔"（原注释失实，已删除）。
+ * 需要精确查询时用 `getTransactionByKeyInCompany(companyId, key)`。
  */
 function companyScopedKey(companyId: string, idempotencyKey: string): string {
   return `${companyId}\u0000${idempotencyKey}`
+}
+
+/**
+ * 承诺注册表幂等键（D 段）：`commitment:${companyId}:${commitmentId}`。
+ * 跨公司隔离——两家公司出现同 id（项目 id 碰撞 / AI 公司复制）时互不命中。
+ */
+export function commitmentScopedKey(companyId: string, commitmentId: string): string {
+  return `commitment:${companyId}:${commitmentId}`
+}
+
+/** 承诺快照（防调用方持有内部对象并直接改写状态）。 */
+function cloneCommitment(c: BudgetCommitment): BudgetCommitment {
+  return { ...c, linkedTxIds: [...c.linkedTxIds] }
+}
+
+/** 幂等重注册时的字段一致性判定（同 id 不得"换内容"）。 */
+function sameCommitmentShape(
+  c: BudgetCommitment,
+  input: CreateCommitmentInput,
+): boolean {
+  return (
+    c.sourceType === input.sourceType &&
+    c.sourceRef === input.sourceRef &&
+    c.amountCents === input.amountCents &&
+    c.period === input.period &&
+    c.startAt === input.startAt &&
+    c.endAt === input.endAt
+  )
 }
 
 /** 结算类别由义务来源决定（§3.4 / §5.8）；不自建第二本账。 */
@@ -99,12 +165,13 @@ function settlementCategory(item: PayableReceivable): TransactionCategory {
 export class UnifiedLedger {
   private transactions: LedgerTransaction[] = []
   private readonly transactionById = new Map<string, LedgerTransaction>()
-  /** 跨期保留（BR-7）：不随 30 天索引清理删除，供退款等跨期幂等命中。 */
-  private readonly transactionByKey = new Map<string, LedgerTransaction>()
-  /** 复合键（companyId + idempotencyKey）：幂等判定按公司隔离（P1-01）。 */
+  /** 复合键（companyId + idempotencyKey）：幂等判定与查询的唯一索引（P1-01 / P3-05）。 */
   private readonly transactionByCompanyKey = new Map<string, LedgerTransaction>()
-  private readonly idempotencyIndex = new Map<string, string>()
+  /** 快索引保留窗口（仅 pruneIdempotency 使用；幂等判定不依赖它，故清理不影响去重）。 */
   private readonly idempotencyDay = new Map<string, number>()
+  /** 承诺注册表（D 段）：复合键 → 承诺；companyId → 该公司承诺 id 集合（保持插入序）。 */
+  private readonly commitments = new Map<string, BudgetCommitment>()
+  private readonly commitmentIdsByCompany = new Map<string, string[]>()
   private readonly registeredCompanies = new Map<string, number>()
   /** 沙盒观察态公司集合（§10.4）：阻止新增玩家授权支出，不影响固定结算。 */
   private readonly sandboxCompanies = new Set<string>()
@@ -148,6 +215,11 @@ export class UnifiedLedger {
     return sum
   }
 
+  /** 是否已在账本注册（未注册公司余额恒为 0，且拒绝入账）。 */
+  isCompanyRegistered(companyId: string): boolean {
+    return this.registeredCompanies.has(companyId)
+  }
+
   /** 权威余额读源（UI 唯一读源，§7.2）。 */
   getCashBalance(companyId: string): Cents {
     return this.sumTransactions(companyId)
@@ -160,6 +232,7 @@ export class UnifiedLedger {
       companyId,
       cashBalanceCents: this.sumTransactions(companyId),
       transactionCount: count,
+      commitments: this.getCommitments(companyId),
     }
   }
 
@@ -183,9 +256,8 @@ export class UnifiedLedger {
       return fail(FIN_ERROR.COMPANY_NOT_REGISTERED, `Company ${input.companyId} not registered`)
     }
 
-    const hit = this.transactionByKey.get(input.idempotencyKey)
-    if (hit && hit.companyId === input.companyId) return ok({ transaction: hit, idempotent: true })
-    // 同名键属于其他公司（如两家公司都用固定键 advance）视为未命中，各自独立入账。
+    // P3-05：幂等判定只看本公司复合键命中。同名键属于其他公司（如两家公司都用固定键
+    // advance）视为未命中，各自独立入账——不需要（也不会）读取任何"裸键"全局索引。
     const scopedHit = this.transactionByCompanyKey.get(
       companyScopedKey(input.companyId, input.idempotencyKey),
     )
@@ -226,15 +298,12 @@ export class UnifiedLedger {
     for (const input of inputs) {
       const r = this.postTransaction(input, options)
       if (!r.success || !r.result) {
-        const added = this.transactions.slice(startLen)
-        for (const tx of added) {
+        // 回滚到批前状态：删除本批新增交易及其索引（P3-05：一律按复合键删除）。
+        for (let i = startLen; i < this.transactions.length; i++) {
+          const tx = this.transactions[i]!
           this.transactionById.delete(tx.transactionId)
-          if (this.transactionByKey.get(tx.idempotencyKey) === tx) {
-            this.transactionByKey.delete(tx.idempotencyKey)
-          }
           this.transactionByCompanyKey.delete(companyScopedKey(tx.companyId, tx.idempotencyKey))
-          this.idempotencyIndex.delete(tx.idempotencyKey)
-          this.idempotencyDay.delete(tx.idempotencyKey)
+          this.idempotencyDay.delete(companyScopedKey(tx.companyId, tx.idempotencyKey))
         }
         this.transactions.length = startLen
         return fail(r.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, r.errorMessage ?? 'bulk post failed')
@@ -268,14 +337,6 @@ export class UnifiedLedger {
         )
       }
       return { success: true, result: hit, idempotent: true }
-    }
-    // 同一冲销键被其他公司占用属调用方错误，不得静默复用他公司交易（P1-01）。
-    const foreign = this.transactionByKey.get(newKey)
-    if (foreign && foreign.companyId !== target.companyId) {
-      return fail(
-        FIN_ERROR.IDENTITY_MISMATCH,
-        `Idempotency key ${newKey} belongs to company ${foreign.companyId}`,
-      )
     }
     if (target.status === 'reversed') {
       return fail(FIN_ERROR.TX_ALREADY_REVERSED, `Transaction ${transactionId} already reversed`)
@@ -326,15 +387,6 @@ export class UnifiedLedger {
     const feeHit = this.transactionByCompanyKey.get(
       companyScopedKey(sale.companyId, params.feeRefundKey),
     )
-    for (const key of [params.refundKey, params.feeRefundKey]) {
-      const foreign = this.transactionByKey.get(key)
-      if (foreign && foreign.companyId !== sale.companyId) {
-        return fail(
-          FIN_ERROR.IDENTITY_MISMATCH,
-          `Idempotency key ${key} belongs to company ${foreign.companyId}`,
-        )
-      }
-    }
     // P2-04：命中不等于"同一次退款"。键已被本公司用于不同销售/不同退款额时，直接返回会
     // 混合"当前销售 + 他笔反向"，调用方误判已退款；此处校验操作同一性后报明确冲突。
     if (
@@ -436,6 +488,11 @@ export class UnifiedLedger {
   /**
    * BR-4 应付/应收结算：同一义务由幂等键去重，只允许一次成功结算。
    * payable 流出（负）、receivable 流入（正）；更新 settledCents / state / settlementTxIds。
+   *
+   * P3-06：**幂等键命中优先于 remaining 守卫**。
+   * 同键重试（结算完成后再次提交同一笔）必须返回幂等成功，而不是 `PAYABLE_OVER_SETTLED`
+   * ——后者会让调用方误以为"这次重试失败了"，进而在上层重试/报错。
+   * 命中后校验 `itemId` 一致（同一键不得指向另一笔义务），不一致报 `IDEMPOTENCY_KEY_CONFLICT`。
    */
   settleItem(
     item: PayableReceivable,
@@ -443,6 +500,29 @@ export class UnifiedLedger {
     idempotencyKey: string,
     day: number,
   ): CommandResult<SettlementResult> {
+    // 1) 键命中优先：本公司同键交易已存在。
+    const hit = this.transactionByCompanyKey.get(companyScopedKey(item.companyId, idempotencyKey))
+    if (hit) {
+      if (hit.referenceId !== item.itemId) {
+        return fail(
+          FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+          `Idempotency key ${idempotencyKey} already used for item ${hit.referenceId ?? 'none'}, not ${item.itemId}`,
+        )
+      }
+      if (hit.amountCents !== (item.direction === 'payable' ? -amountCents : amountCents)) {
+        return fail(
+          FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+          `Idempotency key ${idempotencyKey} already used for a different settlement amount (${hit.amountCents})`,
+        )
+      }
+      return {
+        success: true,
+        result: { item: { ...item }, transaction: hit, idempotent: true },
+        idempotent: true,
+      }
+    }
+
+    // 2) 未命中：常规守卫。
     const remaining = item.amountCents - item.settledCents
     if (!Number.isInteger(amountCents) || amountCents <= 0 || amountCents > remaining) {
       return fail(FIN_ERROR.PAYABLE_OVER_SETTLED, `Settlement ${amountCents} exceeds remaining ${remaining}`)
@@ -478,7 +558,11 @@ export class UnifiedLedger {
    * replay：从持久化交易按 INV-1 重建余额与索引，status 不参与求和。
    * 逐笔校验持久化 balanceAfterCents 与重算值一致，不一致抛 LedgerInconsistentError（拒绝读档）。
    */
-  replay(transactions: ReadonlyArray<LedgerTransaction>, companyIds: ReadonlyArray<string>): Map<string, Cents> {
+  replay(
+    transactions: ReadonlyArray<LedgerTransaction>,
+    companyIds: ReadonlyArray<string>,
+    commitments: ReadonlyArray<BudgetCommitment> = [],
+  ): Map<string, Cents> {
     // FIN-T5：读档规模上限（P3-02）。超限明确抛错，不静默截断，避免读档后状态不完整。
     if (transactions.length > this.tuning.replayMaxTransactions) {
       throw new FinanceError(
@@ -488,10 +572,10 @@ export class UnifiedLedger {
     }
     this.transactions = []
     this.transactionById.clear()
-    this.transactionByKey.clear()
     this.transactionByCompanyKey.clear()
-    this.idempotencyIndex.clear()
     this.idempotencyDay.clear()
+    this.commitments.clear()
+    this.commitmentIdsByCompany.clear()
     this.registeredCompanies.clear()
     this.sandboxCompanies.clear()
     for (const id of companyIds) this.registeredCompanies.set(id, 0)
@@ -508,14 +592,17 @@ export class UnifiedLedger {
       const rebuilt: LedgerTransaction = { ...tx, balanceAfterCents: next }
       this.transactions.push(rebuilt)
       this.transactionById.set(rebuilt.transactionId, rebuilt)
-      this.transactionByKey.set(rebuilt.idempotencyKey, rebuilt)
       this.transactionByCompanyKey.set(
         companyScopedKey(rebuilt.companyId, rebuilt.idempotencyKey),
         rebuilt,
       )
-      this.idempotencyIndex.set(rebuilt.idempotencyKey, rebuilt.transactionId)
-      this.idempotencyDay.set(rebuilt.idempotencyKey, rebuilt.day)
+      this.idempotencyDay.set(companyScopedKey(rebuilt.companyId, rebuilt.idempotencyKey), rebuilt.day)
       running.set(tx.companyId, next)
+    }
+    // D 段：承诺集合同样随读档重建（与交易同等对待，不依赖调用方的临时数组）。
+    for (const c of commitments) {
+      if (!this.registeredCompanies.has(c.companyId)) this.registeredCompanies.set(c.companyId, 0)
+      this.storeCommitment({ ...c, linkedTxIds: [...c.linkedTxIds] })
     }
     return new Map(running)
   }
@@ -528,31 +615,235 @@ export class UnifiedLedger {
     }
   }
 
+  /**
+   * A-3 落盘不变量：`Company.cashBalanceCents`（兼容展示字段）必须等于账本求和。
+   * `status` **不参与**求和（FIN F-01 方案 a）——本断言只比较求和结果，不按状态过滤。
+   * 不一致时抛 `CashMismatchError`（fail-loud），**不做任何静默对齐**。
+   */
+  assertLedgerInvariant(companyId: string, declaredCashBalanceCents: Cents): void {
+    const actual = this.sumTransactions(companyId)
+    if (actual !== declaredCashBalanceCents) {
+      throw new CashMismatchError(companyId, declaredCashBalanceCents, actual)
+    }
+  }
+
   getAllTransactions(): ReadonlyArray<LedgerTransaction> {
     return [...this.transactions]
   }
 
-  /** 单参查询保留全局语义（兼容既有调用）；传 companyId 时按公司作用域精确查询（P1-01）。 */
-  getTransactionByKey(key: string, companyId?: string): LedgerTransaction | undefined {
-    if (companyId !== undefined) {
-      return this.transactionByCompanyKey.get(companyScopedKey(companyId, key))
-    }
-    return this.transactionByKey.get(key)
+  getTransactionsByCompany(companyId: string): ReadonlyArray<LedgerTransaction> {
+    return this.transactions.filter((t) => t.companyId === companyId)
+  }
+
+  /**
+   * P3-05：按 (companyId, key) 精确查询。幂等键在多公司间可同名，故**必须**带 companyId；
+   * 原单参重载已删除（多公司同键时它只能返回后写者，调用方易误判）。
+   */
+  getTransactionByKeyInCompany(companyId: string, key: string): LedgerTransaction | undefined {
+    return this.transactionByCompanyKey.get(companyScopedKey(companyId, key))
   }
 
   getTransactionById(id: string): LedgerTransaction | undefined {
     return this.transactionById.get(id)
   }
 
-  /** 跨期幂等：30 天只清理快索引，transactionByKey 永久保留（BR-7 / §12）。 */
+  /**
+   * 30 天保留策略：只清理 idempotencyDay **观测窗口**（供审计/统计），
+   * 不影响幂等去重——去重判定只依赖永久的 `transactionByCompanyKey`（BR-7 / §12 / P3-05）。
+   */
   pruneIdempotency(currentDay: number): void {
     const cutoff = currentDay - this.tuning.idempotencyRetentionDays
     for (const [key, day] of this.idempotencyDay) {
-      if (day < cutoff) {
-        this.idempotencyIndex.delete(key)
-        this.idempotencyDay.delete(key)
+      if (day < cutoff) this.idempotencyDay.delete(key)
+    }
+  }
+
+  // ===== 承诺注册表（D 段 / FIN §3.3 §4.1 §6.2.§10.3） =====
+
+  /**
+   * 注册承诺（BR-3：不提交交易、不改现金）。
+   * 幂等键 `commitment:${companyId}:${commitmentId}`——**按公司隔离**：
+   * 同一 commitmentId 出现在两家公司（如项目 id 碰撞、AI 公司复制）互不命中。
+   *
+   * @throws SandboxCommitmentBlockedError 沙盒观察态（P3-07 守卫由本方法内置，不可绕过）
+   */
+  registerCommitment(input: CreateCommitmentInput): CommandResult<RegisterCommitmentResult> {
+    if (!this.registeredCompanies.has(input.companyId)) {
+      return fail(
+        FIN_ERROR.COMMITMENT_COMPANY_NOT_REGISTERED,
+        `Company ${input.companyId} not registered`,
+      )
+    }
+    const existing = this.commitments.get(commitmentScopedKey(input.companyId, input.commitmentId))
+    if (existing) {
+      if (!sameCommitmentShape(existing, input)) {
+        return fail(
+          FIN_ERROR.COMMITMENT_ALREADY_REGISTERED,
+          `Commitment ${input.commitmentId} already registered for ${input.companyId} with different fields`,
+        )
+      }
+      return { success: true, result: { commitment: cloneCommitment(existing), idempotent: true }, idempotent: true }
+    }
+    // P3-07：守卫来源固定为账本自身实例（调用方无法"忘记传"）。
+    const commitment = createCommitment(input, { ledger: this })
+    this.storeCommitment(commitment)
+    return { success: true, result: { commitment: cloneCommitment(commitment), idempotent: false }, idempotent: false }
+  }
+
+  getCommitments(
+    companyId: string,
+    filter?: { state?: CommitmentState | ReadonlyArray<CommitmentState>; sourceRef?: string },
+  ): BudgetCommitment[] {
+    const ids = this.commitmentIdsByCompany.get(companyId) ?? []
+    const states =
+      filter?.state === undefined
+        ? undefined
+        : Array.isArray(filter.state)
+          ? filter.state
+          : [filter.state as CommitmentState]
+    const out: BudgetCommitment[] = []
+    for (const id of ids) {
+      const c = this.commitments.get(commitmentScopedKey(companyId, id))
+      if (!c) continue
+      if (states !== undefined && !states.includes(c.state)) continue
+      if (filter?.sourceRef !== undefined && c.sourceRef !== filter.sourceRef) continue
+      out.push(cloneCommitment(c))
+    }
+    return out
+  }
+
+  getCommitment(companyId: string, commitmentId: string): BudgetCommitment | undefined {
+    const c = this.commitments.get(commitmentScopedKey(companyId, commitmentId))
+    return c ? cloneCommitment(c) : undefined
+  }
+
+  /**
+   * 承诺结算（FIN §4.1）：现金**只**来自由 `txId` 指向的既有交易（本方法绝不 post）；
+   * 这里只做账面跟踪：累积 realizedCents、追加 linkedTxIds、推进 state。
+   *
+   * 幂等：txId 已在 linkedTxIds 中 ⇒ 命中（idempotent=true，不重复累加）。
+   */
+  settleCommitment(
+    companyId: string,
+    commitmentId: string,
+    amountCents: Cents,
+    txId: string,
+  ): CommandResult<SettleCommitmentResult> {
+    const pending = this.requireSettlable(companyId, commitmentId, amountCents)
+    if ('errorCode' in pending) return fail(pending.errorCode, pending.errorMessage)
+    const c = pending.commitment
+    const tx = this.transactionById.get(txId)
+    if (!tx || tx.companyId !== companyId) {
+      return fail(FIN_ERROR.TX_NOT_FOUND, `Transaction ${txId} not found for ${companyId}`)
+    }
+    return this.applySettlement(c, amountCents, txId)
+  }
+
+  /**
+   * 先校验、后入账的结算路径（给调用方"先 post 交易、再登记兑现"的场景用）：
+   * 用 `requireSettlable` 在任何副作用前失败，避免"钱已经花了、承诺却登记不上"。
+   */
+  requireSettlable(
+    companyId: string,
+    commitmentId: string,
+    amountCents: Cents,
+  ): { commitment: BudgetCommitment } | { errorCode: string; errorMessage: string } {
+    const c = this.commitments.get(commitmentScopedKey(companyId, commitmentId))
+    if (!c) {
+      return { errorCode: FIN_ERROR.COMMITMENT_NOT_FOUND, errorMessage: `Commitment ${commitmentId} not found for ${companyId}` }
+    }
+    // 已整段释放（无剩余额度）同样不可再兑现：取消、全部兑现、或"取消释放了剩余部分"。
+    if (c.state === 'cancelled' || c.state === 'realized' || remainingPlannedCents(c) <= 0) {
+      return {
+        errorCode: FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
+        errorMessage: `Commitment ${commitmentId} is ${c.state}; cannot settle further`,
       }
     }
+    if (!Number.isInteger(amountCents) || amountCents <= 0 || amountCents > remainingPlannedCents(c)) {
+      return {
+        errorCode: FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
+        errorMessage: `Settlement ${amountCents} invalid for remaining ${remainingPlannedCents(c)}`,
+      }
+    }
+    return { commitment: c }
+  }
+
+  private applySettlement(
+    c: BudgetCommitment,
+    amountCents: Cents,
+    txId: string,
+  ): CommandResult<SettleCommitmentResult> {
+    if (c.linkedTxIds.includes(txId)) {
+      return { success: true, result: { commitment: cloneCommitment(c), idempotent: true }, idempotent: true }
+    }
+    const realizedCents = c.realizedCents + amountCents
+    const updated: BudgetCommitment = {
+      ...c,
+      realizedCents,
+      linkedTxIds: [...c.linkedTxIds, txId],
+      // 按创建时固化的周期/月度上限判定 state（不得因中途取消而提前变 realized）。
+      state: c.state === 'committed' || c.state === 'partially_realized'
+        ? deriveCommitmentState({ ...c, realizedCents, state: 'committed' })
+        : c.state,
+    }
+    this.storeCommitment(updated)
+    return { success: true, result: { commitment: cloneCommitment(updated), idempotent: false }, idempotent: false }
+  }
+
+  /**
+   * 承诺释放/取消（FIN-INT-01 / ADJ-2026-11-22-05 §3）：与 `cancelCommitment` 共用实现。
+   * `effectiveMonth` 必填；已入账部分不冲回，只释放生效月及之后的周期。
+   * 重复以同一 effectiveMonth 释放 ⇒ 幂等命中。
+   */
+  releaseCommitment(
+    companyId: string,
+    commitmentId: string,
+    effectiveMonth: MonthKey,
+  ): CommandResult<CancelCommitmentResult> {
+    const c = this.commitments.get(commitmentScopedKey(companyId, commitmentId))
+    if (!c) {
+      return fail(FIN_ERROR.COMMITMENT_NOT_FOUND, `Commitment ${commitmentId} not found for ${companyId}`)
+    }
+    if (c.state === 'cancelled') {
+      if (c.cancelEffectiveMonth === effectiveMonth) {
+        const result = computeCancelCommitment(c, effectiveMonth)
+        return { success: true, result, idempotent: true }
+      }
+      return fail(
+        FIN_ERROR.COMMITMENT_MISMATCH,
+        `Commitment ${commitmentId} already cancelled at ${c.cancelEffectiveMonth ?? 'unknown'}`,
+      )
+    }
+    const result = computeCancelCommitment(c, effectiveMonth)
+    this.storeCommitment(result.commitment)
+    return ok(result)
+  }
+
+  /** 从既有交易回填承诺的已兑现金额（读档后若只持久化了交易，可在守卫校验下重新对齐）。 */
+  reconcileCommitmentsFromTransactions(companyId: string): void {
+    for (const id of this.commitmentIdsByCompany.get(companyId) ?? []) {
+      const c = this.commitments.get(commitmentScopedKey(companyId, id))
+      if (!c || c.state === 'cancelled') continue
+      let realized = 0
+      for (const tx of this.transactions) {
+        if (tx.companyId !== companyId || tx.referenceId !== c.commitmentId) continue
+        if (tx.amountCents < 0) realized += -tx.amountCents
+      }
+      if (realized > c.realizedCents) {
+        this.storeCommitment({
+          ...c,
+          realizedCents: Math.min(c.totalPlannedCents, realized),
+          state: deriveCommitmentState({ ...c, realizedCents: Math.min(c.totalPlannedCents, realized) }),
+        })
+      }
+    }
+  }
+
+  private storeCommitment(c: BudgetCommitment): void {
+    this.commitments.set(commitmentScopedKey(c.companyId, c.commitmentId), c)
+    const list = this.commitmentIdsByCompany.get(c.companyId)
+    if (list === undefined) this.commitmentIdsByCompany.set(c.companyId, [c.commitmentId])
+    else if (!list.includes(c.commitmentId)) list.push(c.commitmentId)
   }
 
   /** 设置/解除沙盒观察态（§10.4）；仅影响新支出守卫，不改现金。 */
@@ -588,10 +879,8 @@ export class UnifiedLedger {
     }
     this.transactions.push(tx)
     this.transactionById.set(tx.transactionId, tx)
-    this.transactionByKey.set(tx.idempotencyKey, tx)
     this.transactionByCompanyKey.set(companyScopedKey(tx.companyId, tx.idempotencyKey), tx)
-    this.idempotencyIndex.set(tx.idempotencyKey, tx.transactionId)
-    this.idempotencyDay.set(tx.idempotencyKey, tx.day)
+    this.idempotencyDay.set(companyScopedKey(tx.companyId, tx.idempotencyKey), tx.day)
     this.pruneIdempotency(tx.day)
     return tx
   }
@@ -616,14 +905,6 @@ export class UnifiedLedger {
       }
       return { success: true, result: hit, idempotent: true }
     }
-    const foreign = this.transactionByKey.get(newKey)
-    if (foreign && foreign.companyId !== target.companyId) {
-      return fail(
-        FIN_ERROR.IDENTITY_MISMATCH,
-        `Idempotency key ${newKey} belongs to company ${foreign.companyId}`,
-      )
-    }
-
     const prev = this.sumTransactions(target.companyId)
     if (prev + signedAmount < 0 && options.allowNegativeBalance !== true) {
       return fail(FIN_ERROR.LEDGER_INCONSISTENT, 'Reversal would violate balance guard')

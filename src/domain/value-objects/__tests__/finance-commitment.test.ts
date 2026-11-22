@@ -32,7 +32,7 @@ describe('F-02 累计基准：periodCount / totalPlannedCents / 日历月计数'
     const monthly = createCommitment({
       commitmentId: 'cm', companyId: 'c1', sourceType: 'employment_salary',
       sourceRef: 'emp-1', amountCents: 100_000, period: 'monthly', startAt: d(1), endAt: d(6),
-    })
+    }, { ledger: makeLedger() })
     expect(monthly.periodCount).toBe(6)
     expect(monthly.totalPlannedCents).toBe(600_000)
     expect(monthly.realizedCents).toBe(0)
@@ -40,7 +40,7 @@ describe('F-02 累计基准：periodCount / totalPlannedCents / 日历月计数'
     const oneOff = createCommitment({
       commitmentId: 'co', companyId: 'c1', sourceType: 'project_budget',
       sourceRef: 'prj-1', amountCents: 300_000, period: 'one_off', startAt: d(1), endAt: d(1),
-    })
+    }, { ledger: makeLedger() })
     expect(oneOff.periodCount).toBe(1)
     expect(oneOff.totalPlannedCents).toBe(300_000)
     expect(remainingPlannedCents(oneOff)).toBe(300_000)
@@ -59,7 +59,7 @@ describe('TC-06 承诺不改现金（BR-3）', () => {
     const c = createCommitment({
       commitmentId: 'cm', companyId: 'c1', sourceType: 'office_rent',
       sourceRef: 'office-1', amountCents: 100_000, period: 'monthly', startAt: d(1), endAt: d(3),
-    })
+    }, { ledger })
     expect(ledger.getCashBalance('c1')).toBe(2_000_000)
     expect(committedBurnForMonth([c], '2026-01')).toBe(100_000)
 
@@ -77,7 +77,7 @@ describe('TC-19 跨月月薪承诺：6 月 6 笔逐月兑现无遗漏（F-02）'
     let c = createCommitment({
       commitmentId: 'cm6', companyId: 'c1', sourceType: 'employment_salary',
       sourceRef: 'emp-team', amountCents: 100_000, period: 'monthly', startAt: d(1), endAt: d(6),
-    })
+    }, { ledger })
 
     const keys = new Set<string>()
     let cash = 2_000_000
@@ -116,12 +116,13 @@ describe('TC-19 跨月月薪承诺：6 月 6 笔逐月兑现无遗漏（F-02）'
     const base = createCommitment({
       commitmentId: 'cm2', companyId: 'c1', sourceType: 'project_budget',
       sourceRef: 'prj', amountCents: 100_000, period: 'monthly', startAt: d(1), endAt: d(2),
-    })
+    }, { ledger })
     const overRealized = { ...base, realizedCents: base.totalPlannedCents }
     expect(() => realizeCommitment({ commitment: overRealized, ledger, day: d(1) }))
       .toThrow(CommitmentOverRealizedError)
 
-    const cancelled = cancelCommitment(base)
+    // FIN-INT-01：effectiveMonth 必填——此处取起始月，等价于"没有任何周期已兑现"的整段取消。
+    const cancelled = cancelCommitment(base, monthKeyOf(base.startAt)).commitment
     expect(cancelled.state).toBe('cancelled')
     const r = realizeCommitment({ commitment: cancelled, ledger, day: d(1) })
     expect(r.success).toBe(false)
@@ -152,8 +153,8 @@ describe('CODE-02 C-2：沙盒态拒绝新建承诺（P2-03 / §10.4）', () => 
     expect(thrown).toBeInstanceOf(SandboxCommitmentBlockedError)
     expect((thrown as SandboxCommitmentBlockedError).code).toBe('FIN_SANDBOX_COMMITMENT_BLOCKED')
 
-    // 显式状态入参同样生效（不依赖账本实例）
-    expect(() => createCommitment(input, { sandboxActive: true }))
+    // 显式状态入参同样生效（不依赖账本实例）；P3-07 起必须声明状态来源，不再有"不传即放行"
+    expect(() => createCommitment(input, { sandboxActive: true, sandboxStateSource: 'caller_asserted' }))
       .toThrow(SandboxCommitmentBlockedError)
     expect(createCommitment({ ...input, commitmentId: 'cm-other', companyId: 'c2' }, { ledger }).state)
       .toBe('committed')

@@ -10,13 +10,16 @@ import type { CommandResult } from '@domain/types'
 import { fail, ok } from '@domain/types'
 import {
   CommitmentOverRealizedError,
+  FinanceError,
   SandboxCommitmentBlockedError,
   FIN_ERROR,
   type BudgetCommitment,
+  type CancelCommitmentResult,
   type CommitmentPeriod,
   type CommitmentSourceType,
   type CommitmentState,
   type LedgerTransaction,
+  type MonthKey,
   type UnifiedLedger,
 } from '@domain/entities/finance'
 import { dayIndexToGregorian } from './day-index'
@@ -64,23 +67,52 @@ export interface CreateCommitmentInput {
 }
 
 export interface CreateCommitmentOptions {
-  /** 账本沙盒观察态：true 时拒绝新建承诺（§10.4「停止新增义务」，P2-03）。 */
-  sandboxActive?: boolean
-  /** 只读沙盒查询（可直接传 UnifiedLedger）；显式 sandboxActive 优先。 */
+  /**
+   * P3-07：沙盒守卫来源，**必填**（不再有"不传 options 默认放行"的路径）。
+   * 二选一：
+   *  - `ledger`：账本绑定模式，直接查询该公司的沙盒观察态（推荐，唯一真值源）；
+   *  - `sandboxActive` + `sandboxStateSource`：无账本实例时由调用方显式给出状态并**声明来源**，
+   *    迫使调用方说明"这个状态从哪儿来"，而不是忘了传。
+   */
   ledger?: Pick<UnifiedLedger, 'isSandboxObserved'>
+  sandboxActive?: boolean
+  sandboxStateSource?: 'ledger_query' | 'caller_asserted'
+}
+
+function resolveSandboxActive(companyId: string, options: CreateCommitmentOptions | undefined): boolean {
+  // P3-07：options 在类型层必填；此处仍防御运行期漏传（JS 调用方 / 反序列化路径），一律 fail-loud。
+  if (options === undefined) {
+    throw new FinanceError(
+      FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
+      `${FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID}: createCommitment requires an options argument ` +
+        'with a sandbox guard source ({ ledger } or { sandboxActive, sandboxStateSource })',
+    )
+  }
+  if (options.ledger !== undefined) {
+    return options.ledger.isSandboxObserved(companyId) || options.sandboxActive === true
+  }
+  if (options.sandboxActive !== undefined && options.sandboxStateSource !== undefined) {
+    return options.sandboxActive
+  }
+  throw new FinanceError(
+    FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
+    `${FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID}: createCommitment requires sandbox guard source: ` +
+      'pass { ledger } or { sandboxActive, sandboxStateSource }',
+  )
 }
 
 /**
  * 创建承诺：固化 periodCount / totalPlannedCents；**不提交交易，不改现金**（BR-3）。
  * 沙盒观察态下拒绝新建义务并抛 FIN_SANDBOX_COMMITMENT_BLOCKED（§10.4）。
+ *
+ * P3-07：`options` 必填且必须携带守卫来源；无守卫调用在类型层面不可能（参数非可选），
+ * 运行期缺来源亦 fail-loud（抛 FIN_COMMITMENT_SETTLEMENT_INVALID），不存在"默认放行"。
  */
 export function createCommitment(
   input: CreateCommitmentInput,
-  options: CreateCommitmentOptions = {},
+  options: CreateCommitmentOptions,
 ): BudgetCommitment {
-  const sandboxActive =
-    options.sandboxActive === true ||
-    (options.ledger?.isSandboxObserved(input.companyId) ?? false)
+  const sandboxActive = resolveSandboxActive(input.companyId, options)
   if (sandboxActive) throw new SandboxCommitmentBlockedError(input.companyId)
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new CommitmentOverRealizedError(input.commitmentId, 0, input.amountCents, 0)
@@ -103,6 +135,10 @@ export function createCommitment(
     realizedCents: 0,
     state: 'committed',
     linkedTxIds: [],
+    cancelEffectiveMonth: null,
+    releasedPeriods: 0,
+    releasedCents: 0,
+    cancelledAtPeriods: null,
   }
 }
 
@@ -137,9 +173,56 @@ export function committedBurnForMonth(
   return sum
 }
 
-/** 取消承诺：不产生 Transaction、不改现金；中途取消只停止未来周期（§4.1 / §10.3）。 */
-export function cancelCommitment(c: BudgetCommitment): BudgetCommitment {
-  return { ...c, state: 'cancelled' }
+/** YYYY-MM → 连续月序（与 finance-formulas 同口径，避免跨文件重复实现漂移）。 */
+function monthOrdinal(monthKey: string): number {
+  const [year, month] = monthKey.split('-').map(Number)
+  return (year ?? 1970) * 12 + ((month ?? 1) - 1)
+}
+
+/**
+ * 取消承诺（FIN §4.1 / §10.3 + ADJ-2026-11-22-05 §3 / FIN-INT-01）。
+ *
+ * 语义：**只停止未来周期兑现，已入账不冲回**；不产生 Transaction、不改现金。
+ * `effectiveMonth`（YYYY-MM）**必填、无默认值**——缺省会退化成立即全额释放，
+ * 把已付周期一并"释放"，是最危险的误用，故交由类型系统强制。
+ *
+ * - `effectiveMonth` 早于承诺起始月 ⇒ 全额释放（realizedPeriods=0）。
+ * - `effectiveMonth` 晚于承诺结束月 ⇒ 全额已兑现（releasedPeriods=0）。
+ * - 其余 ⇒ 生效月之前的周期为"已兑现"（其中已有交易的部分计入 realizedCents），
+ *   生效月及之后的周期一律释放。
+ * - 恒等式：`realizedCents + releasedCents == totalPlannedCents`，
+ *   `realizedPeriods + releasedPeriods == periodCount`。
+ */
+export function cancelCommitment(
+  c: BudgetCommitment,
+  effectiveMonth: MonthKey,
+): CancelCommitmentResult {
+  const startIdx = monthOrdinal(monthKeyOf(c.startAt))
+  const effIdx = monthOrdinal(effectiveMonth)
+
+  const realizedPeriods = Math.min(c.periodCount, Math.max(0, effIdx - startIdx))
+  const releasedPeriods = c.periodCount - realizedPeriods
+  const realizedCents = Math.min(c.totalPlannedCents, realizedPeriods * c.amountCents)
+  const releasedCents = c.totalPlannedCents - realizedCents
+
+  const commitment: BudgetCommitment = {
+    ...c,
+    state: 'cancelled',
+    // 生效期之前的周期视为已兑现：realizedCents 不得低于该口径（已记账部分本就在其中）。
+    realizedCents: Math.max(c.realizedCents, realizedCents),
+    cancelEffectiveMonth: effectiveMonth,
+    releasedPeriods,
+    releasedCents,
+    cancelledAtPeriods: realizedPeriods,
+  }
+  return {
+    realizedPeriods,
+    releasedPeriods,
+    realizedCents,
+    releasedCents,
+    effectiveMonth,
+    commitment,
+  }
 }
 
 export interface RealizeCommitmentInput {
@@ -176,7 +259,7 @@ export function realizeCommitment(input: RealizeCommitmentInput): CommandResult<
   const periodKey = c.period === 'monthly' ? monthKeyOf(input.day) : 'one_off'
   const key = commitmentIdempotencyKey(c.commitmentId, periodKey)
 
-  const existing = input.ledger.getTransactionByKey(key, c.companyId)
+  const existing = input.ledger.getTransactionByKeyInCompany(c.companyId, key)
   if (existing) {
     return ok({
       commitment: c, transaction: existing, idempotent: true,

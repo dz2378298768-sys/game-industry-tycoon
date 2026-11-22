@@ -1,6 +1,7 @@
 import { createEmptyWorld, type WorldState } from '@simulation/services/world-state'
 import { GameCalendar } from '@simulation/services/game-calendar'
 import { FinanceService } from '@simulation/services/finance-service'
+import { UnifiedLedger } from '@domain/entities/finance'
 import { EmployeeService } from '@simulation/services/employee-service'
 import { ProjectService } from '@simulation/services/project-service'
 import { RandomService } from '@simulation/services/random-service'
@@ -97,7 +98,8 @@ export class GameWorld {
     this.world = createEmptyWorld(seed)
     this.calendar = new GameCalendar(0)
     this.rng = new RandomService(seed)
-    this.finance = new FinanceService()
+    // A-1：账本唯一——FinanceService 只是它的委托层，二者共享同一实例。
+    this.finance = new FinanceService(new UnifiedLedger())
     this.salesInputs = salesInputs
     this.employees = new EmployeeService({
       getAssignmentsByCompany: (companyId) => {
@@ -161,8 +163,14 @@ export class GameWorld {
     this.employees.reset(this.world.employees)
   }
 
+  /**
+   * A-2：`Company.cashBalanceCents` 是**派生只读兼容字段**（F-10）。
+   * 全仓库只有这里（运行时单点回写）与 `restore` 的读档 hydrate 会写它，且每次都从账本派生；
+   * 写完立即做 A-3 一致性断言（fail-loud，不静默对齐）。
+   */
   private syncCash(company: Company): void {
-    company.cashBalanceCents = this.finance.getCashBalance(company.id)
+    this.finance.syncCash(company)
+    this.finance.assertCashConsistent(company)
   }
 
   // ----- Company -----
@@ -1020,6 +1028,7 @@ export class GameWorld {
         c.id === company.id
           ? {
               ...c,
+              // 派生回写（A-2）：值来自账本，非第二个写源。
               cashBalanceCents: this.finance.getCashBalance(c.id),
               assetSales: [
                 ...(c.assetSales ?? []),
@@ -1393,6 +1402,8 @@ export class GameWorld {
       currentDayIndex: this.calendar.currentDayIndex,
       // 财务流水以 FinanceService 为准（唯一现金记账处）
       transactions: this.finance.getAllTransactions(),
+      // CODE-04：承诺集合由账本持久化（唯一来源），读档时随 replay 重放。
+      commitments: this.world.companies.flatMap((c) => this.finance.getLedger().getCommitments(c.id)),
       aiDecisionLog: [...this.aiDecisionLog],
       // DESIGN-G05 §7.3：写入预算权威公式快照，供读档一致性校验。
       // 快照在此处按权威公式即时重算，避免领域对象中的旧快照被写入存档。
@@ -1437,12 +1448,19 @@ export class GameWorld {
     this.rng = new RandomService(state.saveSeed)
     this.rng.setCurrentDayIndex(state.currentDayIndex)
 
-    this.finance = new FinanceService()
+    // A-2：读档 hydrate 单点——新账本 → replay 重建（交易 + 承诺）→ 逐公司派生回写 + 断言。
+    this.finance = new FinanceService(new UnifiedLedger())
     for (const company of state.companies) this.finance.registerCompany(company.id)
-    this.finance.replay(state.transactions, state.companies.map((c) => c.id))
+    // 读档重建：交易与承诺一并重放（承诺集合的唯一来源就是账本，不做第二份拷贝）。
+    this.finance.replay(
+      state.transactions,
+      state.companies.map((c) => c.id),
+      state.commitments ?? [],
+    )
     for (const company of state.companies) {
-      this.finance.registerCompany(company.id)
-      company.cashBalanceCents = this.finance.getCashBalance(company.id)
+      // 读档 hydrate：先按账本派生回写，再做 A-3 一致性断言（旧档 cash 字段与流水不符即拒绝读档）。
+      this.finance.syncCash(company)
+      this.finance.assertCashConsistent(company)
     }
 
     // 重建销售服务与 scheduler（finance/rng 实例已替换）；解释缓存随新实例清空

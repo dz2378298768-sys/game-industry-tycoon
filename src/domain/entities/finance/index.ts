@@ -11,7 +11,9 @@ export type {
   CommitmentSourceType,
   CommitmentPeriod,
   CommitmentState,
+  MonthKey,
   BudgetCommitment,
+  CancelCommitmentResult,
   SettlementDirection,
   SettlementState,
   PayableReceivable,
@@ -39,14 +41,19 @@ export {
   RestructuringConsequenceRequiredError,
   SandboxPlayerExpenseBlockedError,
   SandboxCommitmentBlockedError,
+  CashMismatchError,
   InsufficientCashError,
 } from './errors'
 export type { FinanceErrorCode } from './errors'
 
-export { UnifiedLedger } from './ledger'
+export { UnifiedLedger, commitmentScopedKey, settlementIdempotencyKey } from './ledger'
 export type {
   PostLedgerTxInput,
+  PostLedgerTxOptions,
   PostLedgerTxResult,
   LedgerSnapshot,
   ReversalPairResult,
+  RegisterCommitmentResult,
+  SettleCommitmentResult,
+  SettlementResult,
 } from './ledger'

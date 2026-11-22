@@ -84,7 +84,7 @@ describe('TC-02 反证：绕过唯一入口无法改现金（BR-1 / F-10）', ()
     }))
     expect(ledger.getCashBalance('c1')).toBe(7_000)
     expect(ledger.getCashBalance('c2')).toBe(20_000)
-    expect(ledger.getTransactionByKey('contract')!.referenceId).toBe('ct-1')
+    expect(ledger.getTransactionByKeyInCompany('c1', 'contract')!.referenceId).toBe('ct-1')
   })
 })
 
@@ -119,12 +119,12 @@ describe('TC-03 / TC-04 幂等与跨期去重（BR-7）', () => {
     const day40 = DAY.after30
     ledger.pruneIdempotency(day40) // 快索引清理，但 transactionByKey 保留
     const rev = ledger.reverseTransaction(
-      ledger.getTransactionByKey('sale-day1')!.transactionId,
+      ledger.getTransactionByKeyInCompany('c1', 'sale-day1')!.transactionId,
       '跨期退款', 'refund:sale-day1', { allowNegativeBalance: true },
     )
     expect(rev.success).toBe(true)
     const again = ledger.reverseTransaction(
-      ledger.getTransactionByKey('sale-day1')!.transactionId,
+      ledger.getTransactionByKeyInCompany('c1', 'sale-day1')!.transactionId,
       '重复退款', 'refund:sale-day1', { allowNegativeBalance: true },
     )
     expect(again.success).toBe(true)
@@ -244,7 +244,7 @@ describe('TC-16 / §10.5：读档重放与一致性', () => {
     const txs = ledger.getAllTransactions().map((t) => ({ ...t }))
     const rebuilt = new UnifiedLedger()
     expect(rebuilt.replay(txs, ['c1']).get('c1')).toBe(1_000)
-    expect(rebuilt.getTransactionByKey('advance')).toBeDefined()
+    expect(rebuilt.getTransactionByKeyInCompany('c1', 'advance')).toBeDefined()
 
     const corrupt = txs.map((t) => ({ ...t, balanceAfterCents: t.balanceAfterCents + 1 }))
     expect(() => new UnifiedLedger().replay(corrupt, ['c1'])).toThrow(LedgerInconsistentError)
@@ -267,10 +267,13 @@ describe('TC-16 / §10.5：读档重放与一致性', () => {
     }
     const key = 'settle:ap-1:2026-01'
     const a = ledger.settleItem(item, 300, key, 30)
+    // P3-06：同键重试不再"重新累加"，而是返回同一笔交易并声明幂等（item 摘要即为已结算态）。
     const b = ledger.settleItem(item, 300, key, 30)
     expect(a.result!.item.settledCents).toBe(300)
     expect(a.result!.item.state).toBe('settled')
-    expect(b.result!.item.settledCents).toBe(300)
+    expect(b.idempotent).toBe(true)
+    expect(b.result!.idempotent).toBe(true)
+    expect(b.result!.transaction.transactionId).toBe(a.result!.transaction.transactionId)
     expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === key)).toHaveLength(1)
     expect(ledger.getCashBalance('c1')).toBe(700)
   })
@@ -300,11 +303,16 @@ describe('CODE-02 C-1：幂等键按公司隔离（P1-01）', () => {
     const b = postAdvance(ledger, 'c2', 1_000_000, 0).result!.transaction
     const first = ledger.reverseTransaction(a.transactionId, '退款', 'refund:shared', { allowNegativeBalance: true })
     expect(first.success).toBe(true)
+    // P3-05：幂等键改为纯复合键，跨公司同名键是**各自独立的合法操作**（如两家公司都用
+    // refund:m1），不再有"裸键被谁占用"的全局概念 → 两家各自冲销成功、互不串账、互不误扣。
     const second = ledger.reverseTransaction(b.transactionId, '退款', 'refund:shared', { allowNegativeBalance: true })
-    expect(second.success).toBe(false)
-    expect(second.errorCode).toBe(FIN_ERROR.IDENTITY_MISMATCH)
+    expect(second.success).toBe(true)
+    expect(second.result!.companyId).toBe('c2')
+    expect(second.result!.reversalOf).toBe(b.transactionId)
     expect(ledger.getCashBalance('c1')).toBe(0)
-    expect(ledger.getCashBalance('c2')).toBe(1_000_000)
+    expect(ledger.getCashBalance('c2')).toBe(0)
+    expect(ledger.getTransactionByKeyInCompany('c1', 'refund:shared')!.reversalOf).toBe(a.transactionId)
+    expect(ledger.getTransactionByKeyInCompany('c2', 'refund:shared')!.reversalOf).toBe(b.transactionId)
   })
 
   it('refundSale 退款/手续费键被其他公司占用 → FIN_IDEMPOTENCY_KEY_MISMATCH', () => {
@@ -339,15 +347,23 @@ describe('CODE-02 C-1：幂等键按公司隔离（P1-01）', () => {
       refundAmountCents: 10_000, refundKey: 'refund:shared', feeRefundKey: 'feeRefund:shared',
       reason: 'c2 退款', day: 5,
     })
-    expect(blocked.success).toBe(false)
-    expect(blocked.errorCode).toBe(FIN_ERROR.IDENTITY_MISMATCH)
+    // P3-05：同上——跨公司同名退款键不再冲突，c2 的退款独立成立且只作用于 c2 的交易。
+    expect(blocked.success).toBe(true)
+    expect(blocked.result!.original.companyId).toBe('c2')
+    expect(blocked.result!.reversal.companyId).toBe('c2')
     expect(ledger.getCashBalance('c1')).toBe(100_000)
-    expect(ledger.getCashBalance('c2')).toBe(108_000)
+    expect(ledger.getCashBalance('c2')).toBe(100_000)
   })
 })
 
 describe('CODE-02 C-3：结算守卫 / 退款半状态 / replay 上限（P3-02、P3-03）', () => {
-  it('重复结算传入已结算对象：remaining 守卫拒绝，不新增交易', () => {
+  /**
+   * P3-06 回归（先失败后通过）：原实现中 remaining 守卫先于幂等判定，同键重试返回
+   * PAYABLE_OVER_SETTLED。CODE-04 按任务卡 §B.7 改为"键命中优先 + 校验 itemId"，
+   * 同键重试必须幂等成功且不新增交易；键被另一笔义务占用时报冲突。
+   * 本用例替换了 CODE-02 C-3 中**固化了旧错误行为**的断言（详见实施报告 §B.3）。
+   */
+  it('P3-06：同键重试幂等成功（不再报 PAYABLE_OVER_SETTLED）；键指向他笔义务报冲突', () => {
     const ledger = makeLedger()
     postAdvance(ledger, 'c1', 1_000, 0)
     const item = {
@@ -359,11 +375,25 @@ describe('CODE-02 C-3：结算守卫 / 退款半状态 / replay 上限（P3-02�
     expect(first.success).toBe(true)
     const settled = first.result!.item
     expect(settled.settledCents).toBe(300)
-    const replay = ledger.settleItem(settled, 300, 'settle:ap-1:2026-01', 30)
-    expect(replay.success).toBe(false)
-    expect(replay.errorCode).toBe(FIN_ERROR.PAYABLE_OVER_SETTLED)
+
+    const retry = ledger.settleItem(settled, 300, 'settle:ap-1:2026-01', 30)
+    expect(retry.success).toBe(true)
+    expect(retry.idempotent).toBe(true)
+    expect(retry.result!.idempotent).toBe(true)
+    expect(retry.result!.transaction.transactionId).toBe(first.result!.transaction.transactionId)
     expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'settle:ap-1:2026-01')).toHaveLength(1)
     expect(ledger.getCashBalance('c1')).toBe(700)
+
+    // 同键指向另一笔义务 → 不得静默复用（假成功）
+    const other = { ...item, itemId: 'ap-2' }
+    const conflict = ledger.settleItem(other, 300, 'settle:ap-1:2026-01', 30)
+    expect(conflict.success).toBe(false)
+    expect(conflict.errorCode).toBe(FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT)
+    expect(ledger.getCashBalance('c1')).toBe(700)
+    // 同键但金额不同 → 同样报冲突
+    const mismatch = ledger.settleItem(settled, 100, 'settle:ap-1:2026-01', 30)
+    expect(mismatch.success).toBe(false)
+    expect(mismatch.errorCode).toBe(FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT)
   })
 
   it('退款半状态（refund 已入账、fee 未入账）续做手续费冲回，不重复退款', () => {

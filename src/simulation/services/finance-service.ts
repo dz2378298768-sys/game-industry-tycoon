@@ -1,7 +1,32 @@
-import type { TransactionCategory, TransactionStatus } from '@domain/enums'
+/**
+ * FinanceService —— 统一账本的**薄委托层**（CODE-04 A 段 / FIN V0.2 §5.1 BR-1）。
+ *
+ * 历史：本类原先自己维护 `transactions` / `balanceByCompany` / `idempotencyIndex` /
+ * `transactionByKey` 四套索引，是"第二个记账处"。CODE-04 起：
+ *
+ *  - **自身不再存任何余额或交易**：全部状态在注入的 `UnifiedLedger`；
+ *  - **全部写操作**（入账 / 批量 / 冲销 / 重放）直接委托账本，本类不含 `+= / -=`；
+ *  - **全部读操作**从账本派生（`getCashBalance` = `ledger.getCashBalance` 等），
+ *    并按既有 `Transaction` 形状回吐，保持上层调用方与存档形状零变更；
+ *  - 写操作后调用 `syncCash()` 把账本余额**单点回写**到本公司 `Company.cashBalanceCents`
+ *    （兼容展示字段，F-10），这是全仓库唯一允许写该字段的两处之一（另一处为读档 hydrate）。
+ *
+ * 幂等语义随之统一到账本：跨公司同名键互不命中（复合键），冲销/退款以
+ * 反向交易实现（不再有"把原交易 status 改置 reversed"的第二种冲销写法）。
+ */
+import type { TransactionCategory } from '@domain/enums'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CommandResult } from '@domain/types'
-import { ok, fail, uuid } from '@domain/types'
+import { fail, ok } from '@domain/types'
+import {
+  FIN_ERROR,
+  UnifiedLedger,
+  type BudgetCommitment,
+  type LedgerTransaction,
+} from '@domain/entities/finance'
+import { resolveCashFlowType } from '@domain/value-objects/finance-cashflow'
+import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
+import { toLegacyTransaction } from '@domain/value-objects/finance-compat'
 
 export interface PostTransactionCmd {
   idempotencyKey: string
@@ -23,238 +48,197 @@ export interface PostTransactionOptions {
   allowNegativeBalance?: boolean
 }
 
-/**
- * FinanceService —— 所有现金变动的唯一入口。
- *
- * 规则：
- *   - 初始现金只能通过一笔 `advance` 交易入账一次（幂等键由调用方固定）。
- *   - 固定结算允许负现金（财务困难状态由 Application 层读取）。
- *   - 自主支出在余额不足时拒绝。
- *   - 所有交易按幂等键去重。
- */
-export class FinanceService {
-  private transactions: Transaction[] = []
-  /** 公司最新余额快照 */
-  private balanceByCompany = new Map<string, number>()
-  /** 幂等键 → transaction id */
-  private idempotencyIndex = new Map<string, string>()
-  /** transaction id → transaction（O(1) 取回，避免按 id 全表扫描） */
-  private transactionById = new Map<string, Transaction>()
-  /** 幂等键 → transaction（不随 30 天保留策略清理，供退款等跨期幂等判定） */
-  private transactionByKey = new Map<string, Transaction>()
-  /** 幂等键 → day，用于清理 */
-  private idempotencyDay = new Map<string, number>()
+/** 兼容字段单点回写目标（`Company.cashBalanceCents`）。 */
+export interface CashCarrier {
+  id: string
+  cashBalanceCents: number
+}
 
-  private readonly IDEMPOTENCY_RETENTION_DAYS = 30
+export class FinanceService {
+  /**
+   * @param ledger 统一账本；缺省自建一个（测试便利）。生产装配应在 `GameWorld`
+   *   构造时显式传入同一实例，保证"账本唯一"。
+   */
+  constructor(private readonly ledger: UnifiedLedger = new UnifiedLedger(DEFAULT_FINANCE_TUNING)) {}
+
+  /** 底层账本（只读用法；供上层做承诺注册表 / 快照 / 不变量断言）。 */
+  getLedger(): UnifiedLedger {
+    return this.ledger
+  }
 
   /** 注册公司，初始余额固定为 0；真实现金必须由交易入账 */
   registerCompany(companyId: string): void {
-    if (!this.balanceByCompany.has(companyId)) {
-      this.balanceByCompany.set(companyId, 0)
-    }
+    this.ledger.registerCompany(companyId)
   }
 
   postTransaction(
     cmd: PostTransactionCmd,
     options: PostTransactionOptions = {},
   ): CommandResult<Transaction> {
-    if (!Number.isInteger(cmd.amountCents)) {
-      return fail('FIN_AMOUNT_NOT_INTEGER', 'Transaction amount must be an integer number of cents')
+    const posted = this.ledger.postTransaction(
+      {
+        idempotencyKey: cmd.idempotencyKey,
+        companyId: cmd.companyId,
+        day: cmd.day,
+        category: cmd.category,
+        amountCents: cmd.amountCents,
+        description: cmd.description,
+        ...(cmd.referenceId !== undefined ? { referenceId: cmd.referenceId } : {}),
+        source: 'system_auto',
+      },
+      { allowNegativeBalance: options.allowNegativeBalance === true },
+    )
+    if (!posted.success || !posted.result) {
+      return fail(posted.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, posted.errorMessage ?? 'post failed')
     }
-    if (cmd.amountCents === 0) {
-      return fail('FIN_AMOUNT_ZERO', 'Transaction amount must be non-zero')
+    return {
+      success: true,
+      result: toLegacyTransaction(posted.result.transaction),
+      ...(posted.result.idempotent ? { idempotent: true } : {}),
     }
-    if (!this.balanceByCompany.has(cmd.companyId)) {
-      return fail('FIN_COMPANY_NOT_REGISTERED', `Company ${cmd.companyId} is not registered`)
-    }
-
-    const existingId = this.idempotencyIndex.get(cmd.idempotencyKey)
-    if (existingId) {
-      const found = this.transactionById.get(existingId)
-      if (found) {
-        return { success: true, result: found, idempotent: true }
-      }
-    }
-
-    const currentBalance = this.getBalance(cmd.companyId)
-    const newBalance = currentBalance + cmd.amountCents
-    if (newBalance < 0 && options.allowNegativeBalance !== true) {
-      return fail(
-        'FIN_INSUFFICIENT_CASH',
-        `Cannot post transaction of ${cmd.amountCents}; balance would be ${newBalance}`,
-      )
-    }
-
-    const tx: Transaction = {
-      id: uuid(),
-      idempotencyKey: cmd.idempotencyKey,
-      companyId: cmd.companyId,
-      day: cmd.day,
-      category: cmd.category,
-      amountCents: cmd.amountCents,
-      balanceAfterCents: newBalance,
-      description: cmd.description,
-      status: 'posted' as TransactionStatus,
-      ...(cmd.referenceId !== undefined ? { referenceId: cmd.referenceId } : {}),
-    }
-    this.transactions.push(tx)
-    this.transactionById.set(tx.id, tx)
-    this.transactionByKey.set(tx.idempotencyKey, tx)
-    this.balanceByCompany.set(cmd.companyId, newBalance)
-    this.idempotencyIndex.set(cmd.idempotencyKey, tx.id)
-    this.idempotencyDay.set(cmd.idempotencyKey, cmd.day)
-    this.pruneIdempotency(cmd.day)
-    return ok(tx)
   }
 
+  /** 批量入账：委托账本的批量事务（失败整批回滚，与旧实现一致）。 */
   bulkPostTransactions(
     cmds: PostTransactionCmd[],
     options: PostTransactionOptions = {},
   ): CommandResult<Transaction[]> {
-    // 增量回滚：只记录起始长度与余额快照，失败时截断并删除本批新增的索引项。
-    // 不再整表复制 transactions / 幂等索引（十万级流水下这是每日 O(n) 的主要开销）。
-    const startLen = this.transactions.length
-    const prevBal = new Map(this.balanceByCompany)
-    const prevIdxSize = this.idempotencyIndex.size
-    const prunedBefore = prevIdxSize >= 1024
-    const results: Transaction[] = []
-    for (const cmd of cmds) {
-      const r = this.postTransaction(cmd, options)
-      if (!r.success || !r.result) {
-        for (let i = startLen; i < this.transactions.length; i++) {
-          const tx = this.transactions[i]
-          if (tx === undefined) continue
-          this.transactionById.delete(tx.id)
-          this.transactionByKey.delete(tx.idempotencyKey)
-          this.idempotencyIndex.delete(tx.idempotencyKey)
-          this.idempotencyDay.delete(tx.idempotencyKey)
-        }
-        this.transactions.length = startLen
-        this.balanceByCompany = prevBal
-        // 保留策略在本批内最多清理一次旧键；为保持回滚严格性，失败时重建索引
-        this.rebuildIdempotencyIndex(prunedBefore)
-        return fail(
-          r.errorCode ?? 'FIN_BULK_POST_FAILED',
-          r.errorMessage ?? `Bulk transaction failed after ${results.length}`,
-        )
-      }
-      results.push(r.result)
+    const posted = this.ledger.bulkPostTransactions(
+      cmds.map((cmd) => ({
+        idempotencyKey: cmd.idempotencyKey,
+        companyId: cmd.companyId,
+        day: cmd.day,
+        category: cmd.category,
+        amountCents: cmd.amountCents,
+        description: cmd.description,
+        ...(cmd.referenceId !== undefined ? { referenceId: cmd.referenceId } : {}),
+        source: 'system_auto' as const,
+      })),
+      { allowNegativeBalance: options.allowNegativeBalance === true },
+    )
+    if (!posted.success || !posted.result) {
+      return fail(posted.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, posted.errorMessage ?? 'bulk post failed')
     }
-    return ok(results)
+    return ok(posted.result.map((r) => toLegacyTransaction(r.transaction)))
   }
 
+  /** 冲销：委托账本新增反向交易（原交易保留 status='posted'，审计链见反向交易 reversalOf）。 */
   reverseTransaction(
     transactionId: string,
     reason: string,
     newKey: string,
   ): CommandResult<Transaction> {
-    const target = this.transactions.find((t) => t.id === transactionId && t.status === 'posted')
-    if (!target) {
-      return fail('FIN_TX_NOT_FOUND', `No posted transaction ${transactionId}`)
+    const rev = this.ledger.reverseTransaction(transactionId, reason, newKey, { allowNegativeBalance: true })
+    if (!rev.success || !rev.result) {
+      return fail(rev.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, rev.errorMessage ?? 'reverse failed')
     }
-    const rev: Transaction = {
-      id: uuid(),
-      idempotencyKey: newKey,
-      companyId: target.companyId,
-      day: target.day,
-      category: target.category,
-      amountCents: -target.amountCents,
-      balanceAfterCents: this.getBalance(target.companyId) - target.amountCents,
-      referenceId: target.id,
-      description: `REVERSE ${reason}: ${target.description}`,
-      status: 'reversed',
-      reversedBy: target.id,
-    }
-    this.transactions.push(rev)
-    this.transactionById.set(rev.id, rev)
-    this.transactionByKey.set(rev.idempotencyKey, rev)
-    this.balanceByCompany.set(target.companyId, rev.balanceAfterCents)
-    target.status = 'reversed'
-    target.reversedBy = rev.id
-    return ok(rev)
+    return { success: true, result: toLegacyTransaction(rev.result) }
   }
 
   getCashBalance(companyId: string): number {
-    return this.getBalance(companyId)
+    return this.ledger.getCashBalance(companyId)
   }
 
   isInFinancialDistress(companyId: string): boolean {
-    return this.getBalance(companyId) < 0
+    return this.ledger.getCashBalance(companyId) < 0
   }
 
   getTransactionsByCompany(
     companyId: string,
     range?: { fromDay?: number; toDay?: number },
   ): Transaction[] {
-    return this.transactions
-      .filter((t) => t.companyId === companyId)
+    return this.ledger
+      .getTransactionsByCompany(companyId)
       .filter((t) => {
         if (range?.fromDay !== undefined && t.day < range.fromDay) return false
         if (range?.toDay !== undefined && t.day > range.toDay) return false
         return true
       })
+      .slice()
       .sort((a, b) => a.day - b.day)
+      .map(toLegacyTransaction)
   }
 
   getAllTransactions(): Transaction[] {
-    return [...this.transactions]
+    return this.ledger.getAllTransactions().map(toLegacyTransaction)
   }
 
-  hasTransaction(idempotencyKey: string): boolean {
-    return this.idempotencyIndex.has(idempotencyKey)
-  }
-
-  /** 按幂等键取交易（跨期可靠，不受 30 天索引清理影响） */
-  getTransactionByKey(idempotencyKey: string): Transaction | undefined {
-    return this.transactionByKey.get(idempotencyKey)
+  /** 幂等键是否已被**某家公司**使用（仅用于审计/诊断；判定请用带 companyId 的查询）。 */
+  hasTransaction(idempotencyKey: string, companyId?: string): boolean {
+    if (companyId !== undefined) {
+      return this.ledger.getTransactionByKeyInCompany(companyId, idempotencyKey) !== undefined
+    }
+    return this.ledger.getAllTransactions().some((t) => t.idempotencyKey === idempotencyKey)
   }
 
   /**
-   * 从存档交易重放余额。仅用于读档，不做余额检查。
-   * 返回重放后的余额表，供调用方做一致性校验。
+   * 按幂等键取交易（跨期可靠，不受 30 天观测窗口清理影响）。
+   * 兼容签名：不传 companyId 时只在**唯一命中**时返回，多公司同键返回 undefined
+   * （P3-05 的教训：多公司同键不应当作"取到某一笔"）。新代码请传 companyId。
    */
-  replay(transactions: Transaction[], companyIds: string[]): Map<string, number> {
-    this.transactions = []
-    this.balanceByCompany = new Map()
-    this.idempotencyIndex = new Map()
-    this.idempotencyDay = new Map()
-    this.transactionById = new Map()
-    this.transactionByKey = new Map()
-    for (const id of companyIds) this.balanceByCompany.set(id, 0)
-    for (const tx of transactions) {
-      const prev = this.getBalance(tx.companyId)
-      const next = prev + tx.amountCents
-      this.transactions.push({ ...tx, balanceAfterCents: next })
-      this.transactionById.set(tx.id, { ...tx, balanceAfterCents: next })
-      this.transactionByKey.set(tx.idempotencyKey, { ...tx, balanceAfterCents: next })
-      this.balanceByCompany.set(tx.companyId, next)
-      this.idempotencyIndex.set(tx.idempotencyKey, tx.id)
+  getTransactionByKey(idempotencyKey: string, companyId?: string): Transaction | undefined {
+    if (companyId !== undefined) {
+      const hit = this.ledger.getTransactionByKeyInCompany(companyId, idempotencyKey)
+      return hit === undefined ? undefined : toLegacyTransaction(hit)
     }
-    return new Map(this.balanceByCompany)
+    const hits = this.ledger.getAllTransactions().filter((t) => t.idempotencyKey === idempotencyKey)
+    if (hits.length !== 1) return undefined
+    return toLegacyTransaction(hits[0] as LedgerTransaction)
   }
 
-  private rebuildIdempotencyIndex(onlyIfPruned: boolean): void {
-    if (!onlyIfPruned) return
-    this.idempotencyIndex = new Map()
-    this.idempotencyDay = new Map()
-    for (const t of this.transactions) {
-      this.idempotencyIndex.set(t.idempotencyKey, t.id)
-      this.idempotencyDay.set(t.idempotencyKey, t.day)
-    }
-  }
-
-  private getBalance(companyId: string): number {
-    return this.balanceByCompany.get(companyId) ?? 0
-  }
-
-  private pruneIdempotency(currentDay: number): void {
-    if (this.idempotencyIndex.size < 1024) return
-    const cutoff = currentDay - this.IDEMPOTENCY_RETENTION_DAYS
-    for (const [key, day] of this.idempotencyDay) {
-      if (day < cutoff) {
-        this.idempotencyIndex.delete(key)
-        this.idempotencyDay.delete(key)
+  /**
+   * 从存档交易重放余额（仅读档，不做余额检查）。
+   *
+   * `balanceAfterCents` 是**派生快照**（FIN §3.1：= 入账前余额 + amountCents），
+   * 不是独立事实；以交易顺序重算并按公司重写该字段后交给 `ledger.replay`，
+   * 既保留账本的 FIN-T5 上限检查，又不会因历史存档的字段漂移误判。
+   * 真正的现金一致性由 `GameWorld.restore` 的 `assertCashConsistent`（对比
+   * `Company.cashBalanceCents`）与 `save-schema` 的 `SAVE_CASH_MISMATCH` 负责。
+   */
+  replay(
+    transactions: Transaction[],
+    companyIds: string[],
+    commitments: ReadonlyArray<BudgetCommitment> = [],
+  ): Map<string, number> {
+    const running = new Map<string, number>(companyIds.map((id) => [id, 0]))
+    const ledgerTxs: LedgerTransaction[] = transactions.map((t) => {
+      const balanceAfterCents = (running.get(t.companyId) ?? 0) + t.amountCents
+      running.set(t.companyId, balanceAfterCents)
+      return {
+        transactionId: t.id,
+        idempotencyKey: t.idempotencyKey,
+        companyId: t.companyId,
+        day: t.day,
+        category: t.category,
+        cashFlowType: resolveCashFlowType(t.category, DEFAULT_FINANCE_TUNING),
+        amountCents: t.amountCents,
+        balanceAfterCents,
+        referenceId: t.referenceId ?? null,
+        source: 'system_auto',
+        description: t.description,
+        status: t.status,
+        reversedBy: t.reversedBy ?? null,
+        reversalOf: null,
+        postedAt: t.day,
       }
-    }
+    })
+    const balances = this.ledger.replay(ledgerTxs, companyIds, commitments)
+    return new Map(balances)
+  }
+
+  /**
+   * 兼容字段单点回写（A-2 / F-10）：把账本权威余额写入本公司 `cashBalanceCents`。
+   * 全仓库**只有**这里与 `GameWorld` 读档 hydrate 会写该字段，且每次都从账本派生。
+   */
+  syncCash(company: CashCarrier): void {
+    company.cashBalanceCents = this.ledger.getCashBalance(company.id)
+  }
+
+  /**
+   * A-3 一致性断言：`company.cashBalanceCents == ledger Σ amountCents`（status 不参与）。
+   * 不一致时 fail-loud 抛 `FIN_CASH_MISMATCH`，**不静默对齐**。
+   */
+  assertCashConsistent(company: CashCarrier): void {
+    this.ledger.assertLedgerInvariant(company.id, company.cashBalanceCents)
   }
 }

@@ -488,6 +488,31 @@ export class UnifiedLedger {
   }
 
   /**
+   * R9-P1-02：幂等命中时从账本**重建**义务摘要，不信任调用方传入的（可能过期的）快照。
+   * `settledCents` = 账本中该义务（referenceId == itemId）已结算交易额之和
+   * （payable 取 |负额交易|、receivable 取正额交易）；`state` 按剩余未结算额判定；
+   * `settlementTxIds` 同步从账本重算，避免"金额已重建、交易清单还是旧快照"的半新半旧摘要。
+   */
+  private rebuildItemSummary(item: PayableReceivable): PayableReceivable {
+    const settlementTxIds: string[] = []
+    let settledCents = 0
+    for (const tx of this.transactions) {
+      if (tx.companyId !== item.companyId || tx.referenceId !== item.itemId) continue
+      if (item.direction === 'payable' ? tx.amountCents < 0 : tx.amountCents > 0) {
+        settledCents += item.direction === 'payable' ? -tx.amountCents : tx.amountCents
+        settlementTxIds.push(tx.transactionId)
+      }
+    }
+    const state: PayableReceivable['state'] =
+      settledCents >= item.amountCents
+        ? 'settled'
+        : settledCents > 0
+          ? 'partially_settled'
+          : item.state
+    return { ...item, settledCents, state, settlementTxIds }
+  }
+
+  /**
    * BR-4 应付/应收结算：同一义务由幂等键去重，只允许一次成功结算。
    * payable 流出（负）、receivable 流入（正）；更新 settledCents / state / settlementTxIds。
    *
@@ -495,6 +520,7 @@ export class UnifiedLedger {
    * 同键重试（结算完成后再次提交同一笔）必须返回幂等成功，而不是 `PAYABLE_OVER_SETTLED`
    * ——后者会让调用方误以为"这次重试失败了"，进而在上层重试/报错。
    * 命中后校验 `itemId` 一致（同一键不得指向另一笔义务），不一致报 `IDEMPOTENCY_KEY_CONFLICT`。
+   * R9-P1-02：命中返回的摘要从账本重建（`rebuildItemSummary`），不是调用方的过期快照。
    */
   settleItem(
     item: PayableReceivable,
@@ -519,7 +545,7 @@ export class UnifiedLedger {
       }
       return {
         success: true,
-        result: { item: { ...item }, transaction: hit, idempotent: true },
+        result: { item: this.rebuildItemSummary(item), transaction: hit, idempotent: true },
         idempotent: true,
       }
     }

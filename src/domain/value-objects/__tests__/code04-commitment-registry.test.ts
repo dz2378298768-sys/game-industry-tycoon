@@ -91,6 +91,9 @@ describe('C / FIN-INT-01 基准：cancelCommitment(commitment, effectiveMonth)',
     expect(r.result!.commitment.cancelEffectiveMonth).toBe('2026-05')
   })
 
+  // M-05 标注：本用例兑现的是 2026-02、2026-03 两期后于 2026-04 取消——
+  // 属"3 月内离职、4 月取消"的一般场景，**不是** D-03 §7.2 的锚点场景
+  // （锚点为 02/03/04 三期已 post + 2026-05 取消，见上方 ADJ-09 用例）。
   it('TC-19 回归：中途取消只停未来周期，已入账不冲回（现金不变）', () => {
     const { ledger, c: registered } = makeLedgerWithSalary()
     const c = registered

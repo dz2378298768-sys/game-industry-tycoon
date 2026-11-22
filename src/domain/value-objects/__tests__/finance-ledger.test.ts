@@ -277,6 +277,35 @@ describe('TC-16 / §10.5：读档重放与一致性', () => {
     expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === key)).toHaveLength(1)
     expect(ledger.getCashBalance('c1')).toBe(700)
   })
+
+  it('R9-P1-02：幂等命中返回账本重建摘要，而非调用方传入的过期快照', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 1_000, 0)
+    const item = {
+      itemId: 'ap-1', direction: 'payable' as const, companyId: 'c1',
+      counterpartyId: 'vendor', amountCents: 300, settledCents: 0, dueDate: 30,
+      sourceRef: 'contract-1', state: 'open' as const, settlementTxIds: [],
+    }
+    const key = 'settle:ap-1:2026-01'
+    const first = ledger.settleItem(item, 300, key, 30)
+    expect(first.success).toBe(true)
+    // 调用方持有"未结算的原始对象"（settledCents=0 / open / 无交易清单）——它已过期。
+    const staleOriginal = item
+    expect(staleOriginal.settledCents).toBe(0)
+    expect(staleOriginal.state).toBe('open')
+
+    // 用同一幂等键 + 过期原始对象重试：返回的必须是账本重建后的最新摘要。
+    const retry = ledger.settleItem(staleOriginal, 300, key, 30)
+    expect(retry.success).toBe(true)
+    expect(retry.idempotent).toBe(true)
+    const rebuilt = retry.result!.item
+    expect(rebuilt.settledCents).toBe(300)
+    expect(rebuilt.state).toBe('settled')
+    expect(rebuilt.settlementTxIds).toEqual([first.result!.transaction.transactionId])
+    // 不得回显入参快照（旧实现返回 `{ ...item }`，会把 open/0 当结果返回）
+    expect(rebuilt).not.toBe(staleOriginal)
+    expect(rebuilt).not.toEqual(staleOriginal)
+  })
 })
 
 describe('CODE-02 C-1：幂等键按公司隔离（P1-01）', () => {

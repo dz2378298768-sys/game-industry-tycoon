@@ -15,7 +15,7 @@ import {
   realizeCommitment,
   remainingPlannedCents,
 } from '@domain/value-objects/finance-commitment'
-import { CommitmentOverRealizedError, SandboxCommitmentBlockedError } from '@domain/entities/finance'
+import { CommitmentOverRealizedError, FIN_ERROR, SandboxCommitmentBlockedError } from '@domain/entities/finance'
 import { makeLedger, postAdvance } from './finance-fixtures'
 
 const d = (m: number, day = 15) => gregorianToDayIndex(2026, m, day)
@@ -127,6 +127,35 @@ describe('TC-19 跨月月薪承诺：6 月 6 笔逐月兑现无遗漏（F-02）'
     const r = realizeCommitment({ commitment: cancelled, ledger, day: d(1) })
     expect(r.success).toBe(false)
     expect(ledger.getCashBalance('c1')).toBe(2_000_000)
+  })
+
+  // M-07（PATCH2）：R1 的直接正向用例——cancelled 承诺的"已赚取周期"可经
+  // realizeCommitment 补记（不只在 ledger.settleCommitment 路径成立）。
+  it('【R1 正向】cancelled 承诺的已赚取周期可经 realizeCommitment 直接补记', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 2_000_000, 0)
+    const c = createCommitment({
+      commitmentId: 'cm-earned', companyId: 'c1', sourceType: 'employment_salary',
+      sourceRef: 'emp-team', amountCents: 100_000, period: 'monthly', startAt: d(1), endAt: d(6),
+    }, { ledger })
+    // 2026-02 整段取消（未 post 任何一期）：01 月为已赚取但未 post 的周期
+    const cancelled = cancelCommitment(c, '2026-02').commitment
+    expect(cancelled.state).toBe('cancelled')
+    expect(cancelled.realizedCents).toBe(0)
+
+    const r = realizeCommitment({ commitment: cancelled, ledger, day: d(1) })
+    expect(r.success).toBe(true)
+    expect(r.result!.periodKey).toBe('2026-01')
+    expect(r.result!.idempotent).toBe(false)
+    // 唯一现金入口真实 post：现金 -100,000，realizedCents 累加
+    expect(ledger.getCashBalance('c1')).toBe(1_900_000)
+    expect(r.result!.commitment.realizedCents).toBe(100_000)
+
+    // 生效月（2026-02）及之后仍拒绝，错误码可区分（R5）
+    const future = realizeCommitment({ commitment: r.result!.commitment, ledger, day: d(2) })
+    expect(future.success).toBe(false)
+    expect(future.errorCode).toBe(FIN_ERROR.COMMITMENT_PERIOD_CANCELLED)
+    expect(ledger.getCashBalance('c1')).toBe(1_900_000)
   })
 })
 

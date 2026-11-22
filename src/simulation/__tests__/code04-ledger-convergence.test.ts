@@ -9,6 +9,7 @@
  *  - `FinanceService` 与 `UnifiedLedger` 共享同一账本，全部读操作从账本派生。
  */
 import { describe, it, expect } from 'vitest'
+import { GameWorld } from '@application/mediators/game-world'
 import { UnifiedLedger, type LedgerTransaction } from '@domain/entities/finance'
 import { FinanceService } from '@simulation/services/finance-service'
 import { makeCompany } from '../../__tests__/helpers'
@@ -234,5 +235,27 @@ describe('INV-1 随机 200 笔混合交易（含冲销 / 退款 / 承诺兑现�
     const balances = rebuilt.replay(ledger.getAllTransactions(), [companyId], ledger.getCommitments(companyId))
     expect(balances.get(companyId)).toBe(sum)
     expect(() => rebuilt.verifyInvariant(companyId, sum)).not.toThrow()
+  })
+})
+
+/**
+ * A3 运行时反证（端到端，R7 收尾 / PATCH2 M-01）：
+ * 单元级的 `assertCashConsistent` 反证（上方 A-2/A-3 describe）只证明"断言函数会抛"；
+ * 本用例证明**日推进主链路真的会调用它**——第二写源在运行期必须暴露。
+ *
+ * 先红后绿判别：正确实现（fail-loud）下本用例绿；
+ * 若有人把 `daily-scheduler.syncCompanyCash` 改回"无条件静默覆盖"（R7 之前的旧行为），
+ * 污染值会被账本余额悄悄修回、`advanceSimulation(1)` 不再抛错，本用例**必须变红**。
+ */
+describe('A3 运行时反证：现金第二写源必须在日推进中暴露（fail-loud，不静默覆盖）', () => {
+  it('污染 Company.cashBalanceCents 后 advanceSimulation(1) 抛 FIN_CASH_MISMATCH', () => {
+    const gw = new GameWorld(123)
+    const company = gw.createCompany({ name: 'Counter-Evidence Studio', cityId: 'san_francisco' })
+    // createCompany 已经 syncCash 登记基线；这里模拟"第二个写入者"绕过账本直改现金。
+    company.cashBalanceCents = company.cashBalanceCents + 777_777
+
+    expect(() => gw.advanceSimulation(1)).toThrow(/FIN_CASH_MISMATCH/)
+    // fail-loud 不静默对齐：污染值不被账本余额覆盖，账本求和仍是真实值
+    expect(gw.finance.getCashBalance(company.id)).not.toBe(company.cashBalanceCents)
   })
 })

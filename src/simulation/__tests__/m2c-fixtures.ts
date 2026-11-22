@@ -157,6 +157,8 @@ export function makeFinance(world: WorldState, register = true): FinanceService 
   const finance = new FinanceService()
   if (register) {
     finance.replay(world.transactions, world.companies.map((c) => c.id))
+    // R7：账本是现金唯一真值 —— 按账本 hydrate 公司对象并登记基线（与生产 restore 同形）。
+    for (const c of world.companies) finance.syncCash(c)
   }
   return finance
 }

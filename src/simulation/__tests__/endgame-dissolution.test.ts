@@ -35,6 +35,8 @@ function schedule(world: ReturnType<typeof makeWorld>, balanceCents = -500_000) 
     },
     { allowNegativeBalance: true },
   )
+  // R7：世界公司现金必须与账本同源（seed 入账后按账本 hydrate，登记基线）。
+  for (const c of world.companies) finance.syncCash(c)
   const scheduler = new DailyScheduler({ finance })
   return { scheduler, finance }
 }
@@ -113,6 +115,8 @@ describe('M3-A1 终局解散', () => {
       projects: [],
     })
     gw.finance.registerCompany('company-1')
+    // R7：替换后先按账本 hydrate（0 == 账本 0），登记现金基线。
+    gw.finance.syncCash(gw.world.companies[0]!)
     gw.finance.postTransaction(
       {
         idempotencyKey: 'revive',

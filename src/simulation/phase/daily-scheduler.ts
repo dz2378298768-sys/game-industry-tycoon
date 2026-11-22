@@ -495,9 +495,36 @@ export class DailyScheduler {
     }
   }
 
+  /**
+   * 每日现金派发（R7 / CRT-01）：**先识别第二写入者，再按账本回写**，不静默修正。
+   *
+   * 调度期间所有现金变动都经唯一入口 `FinanceService`（账本求和），但它只把余额回写到
+   * **被操作的那一个对象**上；而 `executeDay` 各步骤会重建相当一部分公司对象
+   * （`applyBankruptcyCheck` / `applyRestructuringClock` / `applyDissolutionCheck` / `applyClearanceMode`），
+   * 破产检查本身又直接读账本余额。因此本步的职责是：把账本余额**派发**到当前世界状态的公司对象上。
+   *
+   * 但"无条件覆盖"会把任何被篡改的 `cashBalanceCents` 悄悄修回去，使"第二写入者 ⇒ fail-loud"
+   * 在运行期永不触发。故用**基线值**识别：
+   *  - 有基线且对象现金 == 基线 ⇒ 对象仍是上次账本回写的值（账本此后可能因交易变化），直接派发新值；
+   *  - 有基线但对象现金 != 基线 ⇒ 有人在账本之外改了它（第二写入者）⇒ 断言并 fail-loud；
+   *  - 无基线（新建公司 / 读档 / AI 入场等桥接路径）⇒ 必须先账实一致，否则 fail-loud，
+   *    一致才接管并登记基线。
+   *
+   * 因此"篡改一个已由账本回写过的公司对象"会在本步当场抛 `FIN_CASH_MISMATCH`（A3 运行时反证）。
+   * 基线按公司 id 记录，故步骤重建对象（`{ ...c }`）不会丢失判定能力。
+   */
   private syncCompanyCash(state: WorldState): WorldState {
     const companies = state.companies.map((c) => {
+      // 已解散公司是终态：账本不再接受其任何交易，`cashBalanceCents` 已被清算置 0，
+      // 是一个冻结的展示值，不再参与 INV-1（否则"解散即归零"必然与账本求和冲突）。
+      if (c.status === 'dissolved') return c
+      const baseline = this.deps.finance.getSyncedCash(c.id)
+      if (baseline === undefined || c.cashBalanceCents !== baseline) {
+        // 桥接路径（无基线）或第二写入者：都必须账实一致，否则抛 FIN_CASH_MISMATCH（不静默对齐）。
+        this.deps.finance.assertCashConsistent(c)
+      }
       const balance = this.deps.finance.getCashBalance(c.id)
+      this.deps.finance.rememberSyncedCash(c.id, balance)
       return balance === c.cashBalanceCents ? c : { ...c, cashBalanceCents: balance }
     })
     return { ...state, companies }

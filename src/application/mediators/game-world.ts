@@ -1269,6 +1269,14 @@ export class GameWorld {
         events.push(...this.world.events.slice(beforeEvents))
       }
     }
+    // CRT-01 / P1-03：推进结束后对全部公司再断言一次"任意时刻一致"（fail-loud，不静默对齐）。
+    // 已解散公司为终态：清算已把 cashBalanceCents 置 0 且不再接受交易，不参与 INV-1。
+    if (days > 0) {
+      for (const company of this.world.companies) {
+        if (company.status === 'dissolved') continue
+        this.finance.assertCashConsistent(company)
+      }
+    }
     this.projects.reset(this.world.projects)
     this.employees.reset(this.world.employees)
     return { totalDays: days, events }

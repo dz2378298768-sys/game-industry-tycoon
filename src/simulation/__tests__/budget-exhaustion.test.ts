@@ -3,7 +3,7 @@ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
 import { ProjectService } from '@simulation/services/project-service'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
 import type { WorldState } from '@simulation/services/world-state'
 import type { Project } from '@domain/entities/project'
 import type { DomainEvent } from '@domain/events'
@@ -22,7 +22,13 @@ function makeScheduler() {
     amountCents: 5_000_000,
     description: 'opening',
   })
-  return { finance, scheduler: new DailyScheduler({ finance }) }
+  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
+  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    seedOpeningCash(finance, world.companies)
+    return world
+  }
+  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
 }
 
 /** remainingCap 恰好为 0（判据 <=0 含等号）的 active 项目 */
@@ -41,8 +47,8 @@ function budgetExhaustedEvents(world: WorldState): DomainEvent[] {
 
 describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => {
   it('耗尽触发：remainingCap<=0 置耗尽态、phase 不变、事件唯一且不自动取消', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [exhaustedProject()] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [exhaustedProject()] })
 
     const next = scheduler.executeDay(world, 1)
     const p = next.projects[0]!
@@ -66,7 +72,7 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
   })
 
   it('耗尽后既有义务继续：研发产出=0，工资仍按原比例分摊', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 300 })
     const project = makeProject({
       id: 'project-1',
@@ -75,7 +81,7 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
         { employeeId: 'emp-1', projectId: 'project-1', allocationRatio: 1, roleOnProject: 'generalist' },
       ],
     })
-    const world = makeWorld({ employees: [emp], projects: [project] })
+    const world = worldOf({ employees: [emp], projects: [project] })
 
     // 月末：工资 300 分摊使 remainingCap = 100 - 300 = -200，触发耗尽
     const exhausted = scheduler.executeDay(world, JAN_END)
@@ -100,8 +106,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
   })
 
   it('事件幂等：同一恢复周期仅一次；resume 后 resumeSeq+1 可再次触发', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [exhaustedProject()] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [exhaustedProject()] })
 
     const first = scheduler.executeDay(world, 1)
     expect(budgetExhaustedEvents(first)).toHaveLength(1)
@@ -135,8 +141,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
   })
 
   it('不自动取消且终态项目不判定耗尽；耗尽暂停计入 D01 计数', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [
         exhaustedProject({ id: 'active' }),
         exhaustedProject({ id: 'launched', phase: 'LAUNCHED' }),
@@ -168,8 +174,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
   })
 
   it('手动暂停项目仍参与耗尽判定（active 含暂停项目，GDR 边界）', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [
         makeProject({
           id: 'manual-paused',

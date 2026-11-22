@@ -20,6 +20,8 @@ function boot(): GameWorld {
   })
   gw.world = { ...gw.world, companies: [company], employees: [], projects: [], products: [] }
   gw.finance.registerCompany(ID)
+  // R7：替换夹具公司后按账本 hydrate（余额 0 == 账本 0），登记现金基线。
+  gw.finance.syncCash(company)
   return gw
 }
 
@@ -142,6 +144,8 @@ describe('M3-C1-T8 破产重整', () => {
       { idempotencyKey: 'seed', companyId: ID, day: 0, category: 'advance', amountCents: 500_000, description: 'seed' },
       { allowNegativeBalance: true },
     )
+    // R7：夹具现金必须与账本一致（seed 入账后按账本 hydrate）。
+    gw.finance.syncCash(company(gw))
     gw.advanceSimulation(31)
     expect(company(gw).status).toBe('bankrupt')
     earn(gw, 800_000)
@@ -180,6 +184,8 @@ describe('M3-C1-T8 破产重整', () => {
         { allowNegativeBalance: true },
       )
     }
+    // R7：账本是现金唯一真值 —— seed 与两笔已入账销售收入合计 4,000,000，夹具按账本 hydrate。
+    gw.finance.syncCash(company(gw))
     gw.advanceSimulation(91)
     const c = company(gw)
     expect(c.status).toBe('bankrupt')

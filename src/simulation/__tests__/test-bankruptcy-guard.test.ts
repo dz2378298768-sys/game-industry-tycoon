@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
 import { ProjectService } from '@simulation/services/project-service'
-import { makeEmployee, makeProject, makeWorld } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, syncWorldCash } from '../../__tests__/helpers'
 import type { WorldState } from '@simulation/services/world-state'
 import type { DomainEvent } from '@domain/events'
 import { parseSave } from '@infrastructure/storage/save-schema'
@@ -14,30 +14,38 @@ import { GameWorld } from '@application/mediators/game-world'
  */
 function makeBankruptSetup() {
   const finance = new FinanceService()
-  finance.registerCompany('company-1')
-  // 先入账 $5M
-  finance.postTransaction({
-    idempotencyKey: 'opening',
-    companyId: 'company-1',
-    day: 0,
-    category: 'advance',
-    amountCents: 5_000_000,
-    description: 'opening',
-  })
-  // 再用 allowNegativeBalance 支出 $6M → 现金 -$1M
-  finance.postTransaction(
-    {
-      idempotencyKey: 'big-expense',
-      companyId: 'company-1',
-      day: 0,
-      category: 'project_expense',
-      amountCents: -6_000_000,
-      description: '手动巨额支出',
-    },
-    { allowNegativeBalance: true },
-  )
+  // R7：世界状态里的公司现金必须与账本一致 —— 先建世界，再按公司 id 入账。
+  const worldWith = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    for (const company of world.companies) {
+      // 公司对象自带的启动现金先记进账本（R7：不得绕过账本直接构造现金）
+      finance.registerCompany(company.id)
+      finance.postTransaction({
+        idempotencyKey: `opening:${company.id}`,
+        companyId: company.id,
+        day: 0,
+        category: 'advance',
+        amountCents: company.cashBalanceCents,
+        description: 'opening',
+      })
+      // 再用 allowNegativeBalance 支出 $6M → 现金 -$1M
+      finance.postTransaction(
+        {
+          idempotencyKey: `big-expense:${company.id}`,
+          companyId: company.id,
+          day: 0,
+          category: 'project_expense',
+          amountCents: -6_000_000,
+          description: '手动巨额支出',
+        },
+        { allowNegativeBalance: true },
+      )
+    }
+    syncWorldCash(finance, world.companies)
+    return world
+  }
   const scheduler = new DailyScheduler({ finance })
-  return { finance, scheduler }
+  return { finance, scheduler, worldWith }
 }
 
 function bankruptEvents(world: WorldState): DomainEvent[] {
@@ -51,8 +59,8 @@ function rawPlayer(gw: GameWorld) {
 
 describe('OI-21 破产守卫 V1~V3', () => {
   it('V1：负现金触发破产，company.status 从 active 变为 bankrupt', () => {
-    const { scheduler } = makeBankruptSetup()
-    const world = makeWorld()
+    const { scheduler, worldWith } = makeBankruptSetup()
+    const world = worldWith()
 
     // 前置 sanity：执行前 status 还是 active
     expect(world.companies[0]!.status).toBe('active')
@@ -96,8 +104,8 @@ describe('OI-21 破产守卫 V1~V3', () => {
   })
 
   it('V3：破产事件被派发，payload 含 companyId / day / balanceAtBankruptcy', () => {
-    const { scheduler, finance } = makeBankruptSetup()
-    const world = makeWorld()
+    const { scheduler, finance, worldWith } = makeBankruptSetup()
+    const world = worldWith()
 
     const balanceBefore = finance.getCashBalance('company-1')
     const next = scheduler.executeDay(world, 1)
@@ -114,8 +122,8 @@ describe('OI-21 破产守卫 V1~V3', () => {
   })
 
   it('V3 幂等：同一 active 公司在破产判定后，后续调度不再重复派发破产事件', () => {
-    const { scheduler } = makeBankruptSetup()
-    const world = makeWorld()
+    const { scheduler, worldWith } = makeBankruptSetup()
+    const world = worldWith()
 
     const first = scheduler.executeDay(world, 1)
     expect(bankruptEvents(first)).toHaveLength(1)

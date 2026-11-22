@@ -56,6 +56,14 @@ export interface CashCarrier {
 
 export class FinanceService {
   /**
+   * 每个公司"上一次由账本回写的余额"基线（R7 / CRT-01）。
+   * 不是余额真值（真值只有账本），只用于识别**第二写入者**：若对象现金偏离基线，
+   * 说明有人在账本之外改过它，调度器必须 fail-loud 而不是静默覆盖回账本值。
+   * 以公司 id 为键（而非对象引用），因为调度步骤会重建公司对象、旧引用会失效。
+   */
+  private readonly syncedCashBaseline = new Map<string, number>()
+
+  /**
    * @param ledger 统一账本；缺省自建一个（测试便利）。生产装配应在 `GameWorld`
    *   构造时显式传入同一实例，保证"账本唯一"。
    */
@@ -229,9 +237,23 @@ export class FinanceService {
   /**
    * 兼容字段单点回写（A-2 / F-10）：把账本权威余额写入本公司 `cashBalanceCents`。
    * 全仓库**只有**这里与 `GameWorld` 读档 hydrate 会写该字段，且每次都从账本派生。
+   * 回写后登记基线，供每日调度识别"第二写入者"（`getSyncedCash`）。
    */
   syncCash(company: CashCarrier): void {
     company.cashBalanceCents = this.ledger.getCashBalance(company.id)
+    this.syncedCashBaseline.set(company.id, company.cashBalanceCents)
+  }
+
+  /**
+   * 上次由账本回写给该公司的余额；从未回写过（新建 / 读档 / AI 入场等桥接路径）返回 `undefined`。
+   */
+  getSyncedCash(companyId: string): number | undefined {
+    return this.syncedCashBaseline.get(companyId)
+  }
+
+  /** 登记"该公司的现金字段已是账本派生值"（值未变更时也需刷新基线）。 */
+  rememberSyncedCash(companyId: string, cashBalanceCents: number): void {
+    this.syncedCashBaseline.set(companyId, cashBalanceCents)
   }
 
   /**

@@ -188,10 +188,22 @@ function monthOrdinal(monthKey: string): number {
  *
  * - `effectiveMonth` 早于承诺起始月 ⇒ 全额释放（realizedPeriods=0）。
  * - `effectiveMonth` 晚于承诺结束月 ⇒ 全额已兑现（releasedPeriods=0）。
- * - 其余 ⇒ 生效月之前的周期为"已兑现"（其中已有交易的部分计入 realizedCents），
+ * - 其余 ⇒ 生效月之前的周期为**已赚取周期**（其中已 post 的部分计入 realizedCents），
  *   生效月及之后的周期一律释放。
- * - 恒等式：`realizedCents + releasedCents == totalPlannedCents`，
+ * - **终态恒等式**：所有已赚取周期都 post 完之后 `realizedCents + releasedCents == totalPlannedCents`，
  *   `realizedPeriods + releasedPeriods == periodCount`。
+ *   收敛期间（已赚取未 post）两者之和小于总额，差额正是"已赚取但尚未入账"的金额。
+ *
+ * ⚠️ `realizedCents` **只由真实交易驱动**（ADJ-2026-11-22-10 §1.5 / R2）：
+ * 本函数直接返回 `c.realizedCents`（已实际 post 的累计额），**不按月份差推算、不做 Math.max 抬升**。
+ * `realizedPeriods` 表达"已赚取应付费的期数"，仅用于恒等式与释放计算，**不得用来推金额**。
+ * 两者在"月中取消、当月尚未 post"时**故意不等**（`realizedPeriods × amountCents > realizedCents`），
+ * 这是正确状态：该期随后仍可在 `settlementDay` 照常兑现（见 `realizeCommitment` 的 R1 分支）。
+ *
+ * ⚠️ `releasedCents` = **被释放的（未来）周期金额** = `releasedPeriods × amountCents`，
+ * **不是** `totalPlannedCents − realizedCents`：后者会把"已赚取但尚未 post"的那一期也算进"已释放"，
+ * 使 R3 的扣除项 `max(0, total − realized − released)` 恒为 0，从而高估 `AvailableCash`（危险方向）。
+ * 两者在"取消时已全部 post"的场景下数值相同。
  */
 export function cancelCommitment(
   c: BudgetCommitment,
@@ -202,14 +214,14 @@ export function cancelCommitment(
 
   const realizedPeriods = Math.min(c.periodCount, Math.max(0, effIdx - startIdx))
   const releasedPeriods = c.periodCount - realizedPeriods
-  const realizedCents = Math.min(c.totalPlannedCents, realizedPeriods * c.amountCents)
-  const releasedCents = c.totalPlannedCents - realizedCents
+  const realizedCents = c.realizedCents
+  const releasedCents = releasedPeriods * c.amountCents
 
   const commitment: BudgetCommitment = {
     ...c,
     state: 'cancelled',
-    // 生效期之前的周期视为已兑现：realizedCents 不得低于该口径（已记账部分本就在其中）。
-    realizedCents: Math.max(c.realizedCents, realizedCents),
+    // R2：保持真实已 post 累计值，不因取消而改写（CRT-02）。
+    realizedCents,
     cancelEffectiveMonth: effectiveMonth,
     releasedPeriods,
     releasedCents,
@@ -223,6 +235,19 @@ export function cancelCommitment(
     effectiveMonth,
     commitment,
   }
+}
+
+/**
+ * R1 / O-1：该周期（`YYYY-MM`）是否属于已取消承诺的**已赚取周期**。
+ *
+ * `cancelled` 拒绝的是 `effectiveMonth` **及之后**的周期，不是"全部兑现"：生效月之前已赚取、
+ * 只是尚未到 `settlementDay` 的周期，仍须照常兑现（ADJ-2026-11-22-10 §1.2）。
+ * 判据统一用月序（`monthOrdinal`），不做字符串/日期比较；未记录生效月视为无已赚取周期。
+ */
+export function isEarnedPeriodOfCancelled(c: BudgetCommitment, periodMonth: MonthKey): boolean {
+  const effMonth = c.cancelEffectiveMonth
+  if (effMonth === null) return false
+  return monthOrdinal(periodMonth) < monthOrdinal(effMonth)
 }
 
 export interface RealizeCommitmentInput {
@@ -245,18 +270,30 @@ export interface RealizeCommitmentResult {
 /**
  * 兑现一个周期：经唯一现金入口提交一笔交易，追加 linkedTxIds 并累加 realizedCents。
  * 重复兑现（同 id 同月）命中幂等键 → 返回原交易，承诺不更新（不双算）。
+ *
+ * 已取消承诺（ADJ-2026-11-22-10 §1 / R1）：`cancelled` 拒绝的是 `effectiveMonth` **及之后**的周期，
+ * 不是"全部兑现"。本次兑现的归属月（`monthKeyOf(input.day)`，即结算日所在月）
+ * `< cancelEffectiveMonth` ⇒ 该期属**已赚取周期**，照常 post；否则拒绝并返回
+ * `FIN_COMMITMENT_PERIOD_CANCELLED`（R5，CODE-07 据此区分"这个月已取消"与"数据不对"）。
  */
 export function realizeCommitment(input: RealizeCommitmentInput): CommandResult<RealizeCommitmentResult> {
   const c = input.commitment
-  if (c.state === 'cancelled') {
-    return fail(FIN_ERROR.COMMITMENT_MISMATCH, `Commitment ${c.commitmentId} is cancelled`)
-  }
   if (c.period === 'monthly') {
     if (input.day < c.startAt || input.day > c.endAt) {
       return fail(FIN_ERROR.COMMITMENT_MISMATCH, `Day ${input.day} outside commitment window`)
     }
   }
   const periodKey = c.period === 'monthly' ? monthKeyOf(input.day) : 'one_off'
+  if (c.state === 'cancelled') {
+    // 归属月 = 结算日所在月；只有 `effectiveMonth` 之前的已赚取周期才允许补记。
+    const periodMonth = monthKeyOf(input.day)
+    if (!isEarnedPeriodOfCancelled(c, periodMonth)) {
+      return fail(
+        FIN_ERROR.COMMITMENT_PERIOD_CANCELLED,
+        `Commitment ${c.commitmentId} cancelled effective ${c.cancelEffectiveMonth ?? 'unknown'}; period ${periodMonth} is not an earned period`,
+      )
+    }
+  }
   const key = commitmentIdempotencyKey(c.commitmentId, periodKey)
 
   const existing = input.ledger.getTransactionByKeyInCompany(c.companyId, key)

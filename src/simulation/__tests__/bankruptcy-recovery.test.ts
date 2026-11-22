@@ -23,6 +23,9 @@ function bootstrap(seed = 42) {
   const company = makeCompany({ id: COMPANY_ID, cashBalanceCents: 0, status: 'active', monthlyFixedExpenseCents: 0 })
   gw.world = { ...gw.world, companies: [company], employees: [], projects: [], products: [] }
   gw.finance.registerCompany(COMPANY_ID)
+  // R7：夹具公司替换后先按账本 hydrate（余额 0 == 账本 0），登记基线；
+  // 之后每笔 fixture 支出/收入都经账本，调度器即可按基线识别第二写入者。
+  gw.finance.syncCash(company)
   return gw
 }
 

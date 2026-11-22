@@ -10,6 +10,7 @@ import { PRODUCT_LIFECYCLE_CHANGED_EVENT, PRODUCT_RETIRED_EVENT } from '@domain/
 import { makeAutoBatch, makeFixtureWorld, makeService } from './m2c-fixtures'
 import { makeProduct, makeRecord, makeWorld, D_PRODUCT_ID } from './m2d-pricing-fixtures'
 import { FIXTURE, SALES_DAY, makeSalesProduct, makeSalesService, makeSalesWorld, makeStubRng } from './sales-fixtures'
+import { seedOpeningCash } from '../../__tests__/helpers'
 
 const service = new ProductPricingService()
 
@@ -143,12 +144,19 @@ describe('自动退市与存档（D35–D36）', () => {
 
 describe('链路与接线（调度器 / 命令入口 / 退款不受退市影响）', () => {
   it('调度器注入 pricing 后自动推进阶段；未注入则保持 launch', () => {
-    const withPricing = new DailyScheduler({ finance: new FinanceService(), pricing: service })
-    const advanced = withPricing.executeDay({ ...makeWorld([makeProduct()], 20), currentDayIndex: 20 }, 21)
+    // R7：调度器会断言"公司现金 == 账本求和"，故世界自带的 5,000,000 必须先作为期初资本入账。
+    const financeWith = new FinanceService()
+    const worldWith = makeWorld([makeProduct()], 20)
+    seedOpeningCash(financeWith, worldWith.companies)
+    const withPricing = new DailyScheduler({ finance: financeWith, pricing: service })
+    const advanced = withPricing.executeDay({ ...worldWith, currentDayIndex: 20 }, 21)
     expect(advanced.products[0]?.lifecycleStage).toBe('growth')
 
-    const withoutPricing = new DailyScheduler({ finance: new FinanceService() })
-    const frozen = withoutPricing.executeDay({ ...makeWorld([makeProduct()], 20), currentDayIndex: 20 }, 21)
+    const financeWithout = new FinanceService()
+    const worldWithout = makeWorld([makeProduct()], 20)
+    seedOpeningCash(financeWithout, worldWithout.companies)
+    const withoutPricing = new DailyScheduler({ finance: financeWithout })
+    const frozen = withoutPricing.executeDay({ ...worldWithout, currentDayIndex: 20 }, 21)
     expect(frozen.products[0]?.lifecycleStage).toBe('launch')
   })
 

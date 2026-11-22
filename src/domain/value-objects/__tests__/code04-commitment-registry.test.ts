@@ -2,10 +2,15 @@
  * CODE-04 C 段（FIN-INT-01）+ D 段（承诺注册表）。
  *
  * C：`cancelCommitment(commitment, effectiveMonth)` 必填生效期、返回结构化笔数，
- *    并锁死 D-03 §7.2 / FIN TC-19 锚点（2026-02~07、effectiveMonth=2026-04 ⇒ 2 笔 / 1_000_000）。
+ *    锚点按 ADJ-2026-11-22-09（唯一权威）：`effectiveMonth = monthOf(endDay) + 1`，
+ *    2026-02~07 共 6 笔、04-10 离职 ⇒ `effectiveMonth=2026-05` ⇒ **3 笔 / 1,500,000**。
+ *    旧锚点「2026-04 ⇒ 2 笔」已由 ADJ-09 §2 作废，不得再作为断言值。
  * D：`registerCommitment` / `getCommitments` / `getCommitment` / `settleCommitment` /
  *    `releaseCommitment`，幂等键 `commitment:${companyId}:${commitmentId}`（跨公司隔离）、
  *    参与 `AvailableCash`、随 `replay` / `LedgerSnapshot` 重建、释放后可用现金回升。
+ *
+ * R2（ADJ-10 §1.5）：`realizedCents` **只由真实交易驱动**，故凡断言非零 `realizedCents`
+ * 的用例都必须先真的 post 过对应期数的兑现交易——直接 `cancelCommitment` 而未 post，正确结果就是 0。
  */
 import { describe, it, expect } from 'vitest'
 import { UnifiedLedger, FIN_ERROR, SandboxCommitmentBlockedError } from '@domain/entities/finance'
@@ -55,22 +60,35 @@ function makeLedgerWithSalary(minutes = 6_000_000): { ledger: UnifiedLedger; c: 
 describe('C / FIN-INT-01 基准：cancelCommitment(commitment, effectiveMonth)', () => {
   const base = () => salaryCommitment()
 
-  it('签名必填 effectiveMonth：2026-02~07 共 6 笔，effectiveMonth=2026-04 ⇒ realized=2 笔 / 1,000,000（D-03 §7.2 锚点）', () => {
-    const c = base()
+  it('【规范锚点 ADJ-09】2026-02~07 共 6 笔，员工 04-10 离职 ⇒ effectiveMonth=2026-05 ⇒ 已 post 3 笔 / 1,500,000（D-03 §7.2）', () => {
+    const { ledger, c: registered } = makeLedgerWithSalary()
+    const c = registered
     expect(c.periodCount).toBe(6)
     expect(c.totalPlannedCents).toBe(3_000_000)
 
-    const r = cancelCommitment(c, '2026-04')
-    expect(r.realizedPeriods).toBe(2)
-    expect(r.releasedPeriods).toBe(4)
-    expect(r.realizedCents).toBe(1_000_000)
-    expect(r.releasedCents).toBe(2_000_000)
-    expect(r.effectiveMonth).toBe('2026-04')
-    // 恒等式
-    expect(r.realizedCents + r.releasedCents).toBe(c.totalPlannedCents)
-    expect(r.realizedPeriods + r.releasedPeriods).toBe(c.periodCount)
-    expect(r.commitment.state).toBe('cancelled')
-    expect(r.commitment.cancelEffectiveMonth).toBe('2026-04')
+    // 真实兑现 02/03/04 三期（04-10 离职，04 月已赚取，按 ADJ-09 必须照常兑现）
+    for (const m of [2, 3, 4]) {
+      const tx = ledger.postTransaction({
+        idempotencyKey: `${c.commitmentId}:2026-0${m}`, companyId: 'c1', day: d(2026, m),
+        category: 'salary', amountCents: -500_000, description: `薪水 ${m}`, referenceId: c.commitmentId,
+        source: 'system_auto',
+      }, { allowNegativeBalance: true })
+      expect(ledger.settleCommitment('c1', c.commitmentId, 500_000, tx.result!.transaction.transactionId).success).toBe(true)
+    }
+    // 04-10 离职 ⇒ effectiveMonth = monthOf(endDay) + 1 = 2026-05
+    // 必须走 ledger（读最新承诺），不能用注册时返回的快照 c
+    const r = ledger.releaseCommitment('c1', c.commitmentId, '2026-05')
+    expect(r.success).toBe(true)
+    expect(r.result!.realizedPeriods).toBe(3)
+    expect(r.result!.releasedPeriods).toBe(3)
+    expect(r.result!.realizedCents).toBe(1_500_000)
+    expect(r.result!.releasedCents).toBe(1_500_000)
+    expect(r.result!.effectiveMonth).toBe('2026-05')
+    // 恒等式（realizedCents 为真实 post 额，必须 == 已 post 期数 × 月薪）
+    expect(r.result!.realizedCents + r.result!.releasedCents).toBe(c.totalPlannedCents)
+    expect(r.result!.realizedPeriods + r.result!.releasedPeriods).toBe(c.periodCount)
+    expect(r.result!.commitment.state).toBe('cancelled')
+    expect(r.result!.commitment.cancelEffectiveMonth).toBe('2026-05')
   })
 
   it('TC-19 回归：中途取消只停未来周期，已入账不冲回（现金不变）', () => {
@@ -99,7 +117,8 @@ describe('C / FIN-INT-01 基准：cancelCommitment(commitment, effectiveMonth)',
       category: 'salary', amountCents: -500_000, description: '薪水 4', source: 'system_auto',
     }, { allowNegativeBalance: true })
     expect(ledger.settleCommitment('c1', c.commitmentId, 500_000, after.result!.transaction.transactionId).errorCode)
-      .toBe(FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID)
+      // R1 生效后：已赚取周期允许补记，未来周期走专用错误码（比 SETTLEMENT_INVALID 更精确）
+      .toBe(FIN_ERROR.COMMITMENT_PERIOD_CANCELLED)
   })
 
   it('边界：effectiveMonth 早于起始月 ⇒ 全额释放（realized=0）', () => {
@@ -111,11 +130,13 @@ describe('C / FIN-INT-01 基准：cancelCommitment(commitment, effectiveMonth)',
     expect(r.releasedCents).toBe(3_000_000)
   })
 
-  it('边界：effectiveMonth 晚于结束月 ⇒ 全额已兑现（released=0）', () => {
+  it('边界：effectiveMonth 晚于结束月 ⇒ 期数全额已赚取（released=0），但 realizedCents 只反映真实 post', () => {
     const c = base()
     const r = cancelCommitment(c, '2026-08')
     expect(r.realizedPeriods).toBe(6)
-    expect(r.realizedCents).toBe(3_000_000)
+    // R2：realizedCents 恒等于真实已 post 金额。本用例未 post 任何交易 ⇒ 0。
+    // realizedPeriods × 月薪 = 3,000,000 是「应付费期数」口径，不得用它推算金额（CRT-02 反证）。
+    expect(r.realizedCents).toBe(0)
     expect(r.releasedPeriods).toBe(0)
     expect(r.releasedCents).toBe(0)
   })
@@ -237,16 +258,28 @@ describe('D / 承诺参与 AvailableCash + 释放链（CODE-03 P1-4 的解药）
     const released = ledger.releaseCommitment('c1', 'cm-salary', '2026-04')
     expect(released.success).toBe(true)
     expect(released.result!.releasedCents).toBe(2_000_000)
-    // 取消后承诺不再计入（AvailableCash 完全回到账面现金）
-    expect(availableOf()).toBe(10_000_000)
+    // R3（PATCH1）：cancelled 承诺只扣「已赚取但尚未 post」的差额，
+    // 本例 = totalPlanned 3,000,000 − realized 0（未 post）− released 2,000,000 = 1,000,000。
+    // 回升 = 7,000,000 → 9,000,000，恰为 2,000,000 == releasedCents ✓
+    // 未整体归零是有意的：若整体不扣，会高估可用现金，让 HRB 放行付不起的预算。
+    expect(availableOf()).toBe(9_000_000)
 
-    // 结论说明（为审核者留痕）：释放后承诺 state='cancelled'，FIN §6.2 对 cancelled 整体不计入
-    // `AvailableCash`，因此回升额（2,000,000）**大于**释放额（1,000,000，即 2 期 × 500,000）。
-    // 这是"取消即停止一切未来占用"的直接推论，不是重复扣减；`releasedCents` 只统计生效月之后的期数。
+    // 补记 2026-02 那一期：账面现金 -500,000，同时承诺占用也 -500,000
+    // （realizedCents 0→500,000），两者相抵 ⇒ AvailableCash **不变**，仍为 9,000,000。
+    // 这正是 R3 的目的：钱从「资源预留」转为「真实支出」，既不重复扣减，也不凭空增加可用额度。
+    const txFeb = ledger.postTransaction({
+      idempotencyKey: 'cm-salary:2026-02-backfill', companyId: 'c1', day: d(2026, 2),
+      category: 'salary', amountCents: -500_000, description: '薪水 2（取消后补记）',
+      referenceId: 'cm-salary', source: 'system_auto',
+    }, { allowNegativeBalance: true })
+    expect(ledger.settleCommitment('c1', 'cm-salary', 500_000, txFeb.result!.transaction.transactionId).success).toBe(true)
+    expect(ledger.getCashBalance('c1')).toBe(9_500_000)
+    expect(availableOf()).toBe(9_000_000)
+
     // 幂等：同 effectiveMonth 再释放 ⇒ idempotent，金额不变
     const again = ledger.releaseCommitment('c1', 'cm-salary', '2026-04')
     expect(again.idempotent).toBe(true)
-    expect(availableOf()).toBe(10_000_000)
+    expect(availableOf()).toBe(9_000_000)
     // 不同生效月 ⇒ 冲突（不得悄悄改释放口径）
     expect(ledger.releaseCommitment('c1', 'cm-salary', '2026-05').errorCode)
       .toBe(FIN_ERROR.COMMITMENT_MISMATCH)

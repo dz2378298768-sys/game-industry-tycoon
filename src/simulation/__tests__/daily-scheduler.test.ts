@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
+import { makeWorld, makeProject, makeEmployee, seedOpeningCash } from '../../__tests__/helpers'
 
 function makeScheduler() {
   const finance = new FinanceService()
@@ -14,14 +14,20 @@ function makeScheduler() {
     amountCents: 5_000_000,
     description: 'opening',
   })
-  return { finance, scheduler: new DailyScheduler({ finance }) }
+  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出
+  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    seedOpeningCash(finance, world.companies)
+    return world
+  }
+  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
 }
 
 describe('DailyScheduler 阶段门控', () => {
   it('CONCEPT 阶段不累计工作量', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const project = makeProject({ phase: 'CONCEPT' })
-    const world = makeWorld({ projects: [project] })
+    const world = worldOf({ projects: [project] })
 
     const next = scheduler.executeDay(world, 1)
     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
@@ -29,15 +35,15 @@ describe('DailyScheduler 阶段门控', () => {
   })
 
   it('PRE_PRODUCTION 阶段不累计工作量', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject({ phase: 'PRE_PRODUCTION' })] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject({ phase: 'PRE_PRODUCTION' })] })
     const next = scheduler.executeDay(world, 1)
     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
   })
 
   it('PRODUCTION 阶段按岗位学科累计工作量', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject({ phase: 'PRODUCTION' })] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject({ phase: 'PRODUCTION' })] })
 
     const next = scheduler.executeDay(world, 1)
     const p = next.projects[0]
@@ -48,7 +54,7 @@ describe('DailyScheduler 阶段门控', () => {
   })
 
   it('QA 阶段只累计 QA 工作量', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const qaEmp = makeEmployee({ id: 'qa-1', role: 'qa' })
     const project = makeProject({
       phase: 'QA',
@@ -58,7 +64,7 @@ describe('DailyScheduler 阶段门控', () => {
       workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 100 },
       workTotalByDiscipline: { design: 100, programming: 100, art: 100, qa: 100 },
     })
-    const world = makeWorld({ employees: [qaEmp], projects: [project] })
+    const world = worldOf({ employees: [qaEmp], projects: [project] })
 
     const next = scheduler.executeDay(world, 1)
     const p = next.projects[0]
@@ -67,8 +73,8 @@ describe('DailyScheduler 阶段门控', () => {
   })
 
   it('READY_TO_LAUNCH 阶段不累计工作量', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [
         makeProject({
           phase: 'READY_TO_LAUNCH',
@@ -82,8 +88,8 @@ describe('DailyScheduler 阶段门控', () => {
   })
 
   it('暂停项目不推进工作量', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject({ isPaused: true })] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject({ isPaused: true })] })
     const next = scheduler.executeDay(world, 1)
     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
   })
@@ -91,8 +97,8 @@ describe('DailyScheduler 阶段门控', () => {
 
 describe('DailyScheduler 幂等性', () => {
   it('同一天重复执行不会重复扣减工作量', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject()] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject()] })
 
     const day1 = scheduler.executeDay(world, 1)
     const again = scheduler.executeDay(day1, 1)
@@ -104,8 +110,8 @@ describe('DailyScheduler 幂等性', () => {
   })
 
   it('同一天重复执行不会重复产生财务交易', () => {
-    const { finance, scheduler } = makeScheduler()
-    const world = makeWorld()
+    const { finance, scheduler, worldOf } = makeScheduler()
+    const world = worldOf()
     // day 30 = 1 月 31 日，月末结算
     const next = scheduler.executeDay(world, 30)
     scheduler.executeDay(next, 30)
@@ -116,9 +122,9 @@ describe('DailyScheduler 幂等性', () => {
 
 describe('DailyScheduler 员工状态', () => {
   it('士气按浮点公式向 70 回归，不被取整抹掉', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ morale: 50, fatigue: 0 })
-    const world = makeWorld({ employees: [emp], projects: [] })
+    const world = worldOf({ employees: [emp], projects: [] })
 
     const next = scheduler.executeDay(world, 1)
     // 50 + (70-50)*0.02 = 50.4
@@ -126,23 +132,23 @@ describe('DailyScheduler 员工状态', () => {
   })
 
   it('有研发任务时疲劳按投入比例增加', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject()] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject()] })
     const next = scheduler.executeDay(world, 1)
     // 20 + 0.5 × 1.0 = 20.5
     expect(next.employees[0]?.fatigue).toBeCloseTo(20.5, 5)
   })
 
   it('未分配工作时疲劳恢复', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ employees: [makeEmployee({ fatigue: 40 })], projects: [] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ employees: [makeEmployee({ fatigue: 40 })], projects: [] })
     const next = scheduler.executeDay(world, 1)
     expect(next.employees[0]?.fatigue).toBe(39)
   })
 
   it('项目暂停时员工按休息规则恢复疲劳', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       employees: [makeEmployee({ fatigue: 40 })],
       projects: [makeProject({ isPaused: true })],
     })

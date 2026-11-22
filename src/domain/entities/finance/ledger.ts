@@ -37,6 +37,8 @@ import {
   cancelCommitment as computeCancelCommitment,
   createCommitment,
   deriveCommitmentState,
+  isEarnedPeriodOfCancelled,
+  monthKeyOf,
   remainingPlannedCents,
   type CreateCommitmentInput,
 } from '@domain/value-objects/finance-commitment'
@@ -729,31 +731,53 @@ export class UnifiedLedger {
     amountCents: Cents,
     txId: string,
   ): CommandResult<SettleCommitmentResult> {
-    const pending = this.requireSettlable(companyId, commitmentId, amountCents)
-    if ('errorCode' in pending) return fail(pending.errorCode, pending.errorMessage)
-    const c = pending.commitment
     const tx = this.transactionById.get(txId)
     if (!tx || tx.companyId !== companyId) {
       return fail(FIN_ERROR.TX_NOT_FOUND, `Transaction ${txId} not found for ${companyId}`)
     }
-    return this.applySettlement(c, amountCents, txId)
+    // R1 / O-1：取消后的补记按"交易归属月是否早于生效月"判定，故需先拿到交易。
+    const pending = this.requireSettlable(companyId, commitmentId, amountCents, monthKeyOf(tx.day))
+    if ('errorCode' in pending) return fail(pending.errorCode, pending.errorMessage)
+    return this.applySettlement(pending.commitment, amountCents, txId)
   }
 
   /**
    * 先校验、后入账的结算路径（给调用方"先 post 交易、再登记兑现"的场景用）：
    * 用 `requireSettlable` 在任何副作用前失败，避免"钱已经花了、承诺却登记不上"。
+   *
+   * R1 / O-1：`cancelled` 不再一律拒绝——`effectiveMonth` **之前**的已赚取周期照常可结算
+   * （离职当月已出勤但未到结算日的那一笔）；`effectiveMonth` 及之后拒绝，并返回可区分的
+   * `FIN_COMMITMENT_PERIOD_CANCELLED`。`settleMonth` 缺省时（调用方不给归属月）按旧口径拒绝。
    */
   requireSettlable(
     companyId: string,
     commitmentId: string,
     amountCents: Cents,
+    settleMonth?: MonthKey,
   ): { commitment: BudgetCommitment } | { errorCode: string; errorMessage: string } {
     const c = this.commitments.get(commitmentScopedKey(companyId, commitmentId))
     if (!c) {
       return { errorCode: FIN_ERROR.COMMITMENT_NOT_FOUND, errorMessage: `Commitment ${commitmentId} not found for ${companyId}` }
     }
-    // 已整段释放（无剩余额度）同样不可再兑现：取消、全部兑现、或"取消释放了剩余部分"。
-    if (c.state === 'cancelled' || c.state === 'realized' || remainingPlannedCents(c) <= 0) {
+    // 已取消：只允许补记生效月之前的已赚取周期，剩余额度 = 已赚取但尚未 post 的差额。
+    if (c.state === 'cancelled') {
+      if (settleMonth === undefined || !isEarnedPeriodOfCancelled(c, settleMonth)) {
+        return {
+          errorCode: FIN_ERROR.COMMITMENT_PERIOD_CANCELLED,
+          errorMessage: `Commitment ${commitmentId} cancelled effective ${c.cancelEffectiveMonth ?? 'unknown'}; period ${settleMonth ?? 'unknown'} is not an earned period`,
+        }
+      }
+      const earnedUnposted = Math.max(0, c.totalPlannedCents - c.realizedCents - c.releasedCents)
+      if (!Number.isInteger(amountCents) || amountCents <= 0 || amountCents > earnedUnposted) {
+        return {
+          errorCode: FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
+          errorMessage: `Settlement ${amountCents} invalid for earned-unposted ${earnedUnposted}`,
+        }
+      }
+      return { commitment: c }
+    }
+    // 已整段释放（无剩余额度）同样不可再兑现：全部兑现、或"取消释放了剩余部分"。
+    if (c.state === 'realized' || remainingPlannedCents(c) <= 0) {
       return {
         errorCode: FIN_ERROR.COMMITMENT_SETTLEMENT_INVALID,
         errorMessage: `Commitment ${commitmentId} is ${c.state}; cannot settle further`,
@@ -819,21 +843,30 @@ export class UnifiedLedger {
     return ok(result)
   }
 
-  /** 从既有交易回填承诺的已兑现金额（读档后若只持久化了交易，可在守卫校验下重新对齐）。 */
+  /**
+   * 从既有交易回填承诺的已兑现金额（读档后若只持久化了交易，可在守卫校验下重新对齐）。
+   *
+   * R4：**`cancelled` 也回填**。取消不改写 `realizedCents`（它只由真实交易驱动），但取消之后
+   * 仍可能发生"已赚取周期补记"（ADJ-2026-11-22-10 §1），若读档时跳过 `cancelled`，
+   * 这些已 post 的金额就再也重建不出来，`realizedCents` 与账本兑现交易额永久分叉。
+   * 回填只累加 `amountCents < 0` 的真实交易（与未取消承诺同口径）。
+   */
   reconcileCommitmentsFromTransactions(companyId: string): void {
     for (const id of this.commitmentIdsByCompany.get(companyId) ?? []) {
       const c = this.commitments.get(commitmentScopedKey(companyId, id))
-      if (!c || c.state === 'cancelled') continue
+      if (!c) continue
       let realized = 0
       for (const tx of this.transactions) {
         if (tx.companyId !== companyId || tx.referenceId !== c.commitmentId) continue
         if (tx.amountCents < 0) realized += -tx.amountCents
       }
       if (realized > c.realizedCents) {
+        const realizedCents = Math.min(c.totalPlannedCents, realized)
         this.storeCommitment({
           ...c,
-          realizedCents: Math.min(c.totalPlannedCents, realized),
-          state: deriveCommitmentState({ ...c, realizedCents: Math.min(c.totalPlannedCents, realized) }),
+          realizedCents,
+          // 取消为终态：不得因回填被 deriveCommitmentState 改写。
+          state: c.state === 'cancelled' ? 'cancelled' : deriveCommitmentState({ ...c, realizedCents }),
         })
       }
     }

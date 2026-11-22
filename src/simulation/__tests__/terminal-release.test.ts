@@ -5,7 +5,7 @@ import { FinanceService } from '@simulation/services/finance-service'
 import { GameWorld } from '@application/mediators/game-world'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 import { parseSave, SAVE_SCHEMA_VERSION } from '@infrastructure/storage/save-schema'
-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
 import type { Project } from '@domain/entities/project'
 import type { TeamAssignment } from '@domain/value-objects'
 
@@ -26,7 +26,13 @@ function makeScheduler() {
     amountCents: 5_000_000,
     description: 'opening',
   })
-  return { finance, scheduler: new DailyScheduler({ finance }) }
+  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
+  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    seedOpeningCash(finance, world.companies)
+    return world
+  }
+  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
 }
 
 describe('TASK-M1.1-TERMINAL-RELEASE-001 终态解除团队分配', () => {
@@ -64,10 +70,10 @@ describe('TASK-M1.1-TERMINAL-RELEASE-001 终态解除团队分配', () => {
   })
 
   it('③ 终态项目推进 30 天：budgetSpentCents 不变、costAllocations 不增（scheduler 双层防护）', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
     // 直接构造带残留分配的历史终态项目，绕过 F1，单独验证 F2 的调度器过滤
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [
         makeProject({ id: 'launched', phase: 'LAUNCHED', teamAssignments: assignment('launched') }),

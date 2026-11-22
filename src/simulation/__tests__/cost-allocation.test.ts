@@ -7,7 +7,7 @@ import {
   salaryAllocationIdempotencyKey,
 } from '@domain/entities/project-cost-allocation'
 import { parseSave } from '@infrastructure/storage/save-schema'
-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
 import type { Project } from '@domain/entities/project'
 
 const MONTH_END = gregorianToDayIndex(1970, 1, 31) // day 30
@@ -24,7 +24,13 @@ function makeScheduler() {
     amountCents: 5_000_000,
     description: 'opening',
   })
-  return { finance, scheduler: new DailyScheduler({ finance }) }
+  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
+  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    seedOpeningCash(finance, world.companies)
+    return world
+  }
+  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
 }
 
 function projectWith(
@@ -47,9 +53,9 @@ function allocationsOf(projects: Project[]) {
 
 describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   it('一笔工资交易多项目分摊：同一现金交易、按 60/40 归属、spent 累加', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
     })
@@ -85,9 +91,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('分摊取整守恒：月薪 100 分、三项目各 1/3，最大余数法分币不丢失', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 100 })
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [
         projectWith('project-a', 1 / 3),
@@ -109,9 +115,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('暂停项目工资仍按原比例归属（G05-R6）', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [
         projectWith('project-a', 0.6, { isPaused: true }),
@@ -128,9 +134,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('幂等重复分摊：同一周期重复结算不新增记录、不重复增加 spent', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
     })
@@ -169,9 +175,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('闲置工时（Σratio<1）不分摊到任何项目', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({ employees: [emp], projects: [projectWith('project-a', 0.5)] })
+    const world = worldOf({ employees: [emp], projects: [projectWith('project-a', 0.5)] })
 
     const next = scheduler.executeDay(world, MONTH_END)
 
@@ -185,9 +191,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('离职员工不参与分摊，也不产生工资交易', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', status: 'fired', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({ employees: [emp], projects: [projectWith('project-a', 1)] })
+    const world = worldOf({ employees: [emp], projects: [projectWith('project-a', 1)] })
 
     const next = scheduler.executeDay(world, MONTH_END)
 
@@ -196,9 +202,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
   })
 
   it('分摊记录随存档持久化，并通过现金交易引用完整性校验', () => {
-    const { finance, scheduler } = makeScheduler()
+    const { finance, scheduler, worldOf } = makeScheduler()
     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
-    const world = makeWorld({
+    const world = worldOf({
       employees: [emp],
       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
     })

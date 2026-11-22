@@ -139,6 +139,9 @@ export function makeSalesService(
         world.companies.map((company) => company.id),
       )
     }
+    // R7：账本是现金唯一真值 —— 夹具公司对象按账本 hydrate 并登记基线，
+    // 使调度器的"账实一致"断言不会把夹具判成第二写入者（与生产 restore 同形）。
+    for (const company of world.companies) finance.syncCash(company)
   }
   const rng = options.rng ?? new RandomService(world.saveSeed)
   const service = new MarketSimulationService({

@@ -3,7 +3,7 @@ import { GameWorld } from '@application/mediators/game-world'
 import { ProjectService } from '@simulation/services/project-service'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
-import { makeEmployee, makeProject, makeWorld } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
 
 function buildStudio() {
   const gw = new GameWorld(7)
@@ -164,7 +164,9 @@ describe('R-004 疲劳只按实际可执行的工作计算', () => {
       ],
       currentDayIndex: 0,
     })
-    const scheduler = new DailyScheduler({ finance: new FinanceService() })
+    const finance = new FinanceService()
+    seedOpeningCash(finance, world.companies)
+    const scheduler = new DailyScheduler({ finance })
     const next = scheduler.executeDay(world, 1)
 
     const byId = new Map(next.employees.map((e) => [e.id, e]))

@@ -6,7 +6,7 @@ import { GameWorld } from '@application/mediators/game-world'
 import { parseSave } from '@infrastructure/storage/save-schema'
 import { PAUSE_TIMEOUT_DAYS } from '@simulation/systems/phase-rules'
 import type { WorldState } from '@simulation/services/world-state'
-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
+import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
 
 function makeScheduler() {
   const finance = new FinanceService()
@@ -19,7 +19,13 @@ function makeScheduler() {
     amountCents: 5_000_000,
     description: 'opening',
   })
-  return { finance, scheduler: new DailyScheduler({ finance }) }
+  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
+  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
+    const world = makeWorld(parts)
+    seedOpeningCash(finance, world.companies)
+    return world
+  }
+  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
 }
 
 /** 连续推进 days 个游戏日（从 fromDay 起，每个 dayIndex 只调度一次） */
@@ -53,8 +59,8 @@ function saveSafeWorld(pausedDays: number): WorldState {
 
 describe('D-01 暂停计时与超时自动取消', () => {
   it(`连续暂停满 ${PAUSE_TIMEOUT_DAYS} 天在当日调度触发自动取消`, () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [makeProject({ isPaused: true, pauseReason: 'manual' })],
     })
 
@@ -76,8 +82,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('第 59 天仍暂停，不取消', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [makeProject({ isPaused: true, pausedDays: PAUSE_TIMEOUT_DAYS - 2 })],
     })
 
@@ -91,8 +97,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('进入暂停当天计 0，次日调度起 +1', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
 
     const sameDay = scheduler.executeDay(world, 0)
     expect(sameDay.projects[0]?.pausedDays).toBe(0)
@@ -102,7 +108,7 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('恢复后 pausedDays 清零，再次暂停重新累计', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     const service = new ProjectService()
     service.reset([makeProject({ isPaused: true, pausedDays: 30, pauseReason: 'manual' })])
 
@@ -112,7 +118,7 @@ describe('D-01 暂停计时与超时自动取消', () => {
     expect(resumed.result?.pauseReason).toBeNull()
 
     // 再次暂停后从 0 开始，旧的 30 天计数不会带入
-    const world = makeWorld({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
+    const world = worldOf({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
     const afterOneDay = scheduler.executeDay(world, 1)
     expect(afterOneDay.projects[0]?.pausedDays).toBe(1)
   })
@@ -128,8 +134,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('预算耗尽暂停（budget_exhausted）同样计入并在第 60 天取消', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [
         makeProject({ isPaused: true, pauseReason: 'budget_exhausted' }),
       ],
@@ -143,9 +149,9 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('超时自动取消清除预算耗尽过程态标记（终态清理口径 DESIGN-G05 §6.3）', () => {
-    const { scheduler } = makeScheduler()
+    const { scheduler, worldOf } = makeScheduler()
     // 预算耗尽态叠加暂停超时：次日起即达 60 天触发自动取消
-    const world = makeWorld({
+    const world = worldOf({
       projects: [
         makeProject({
           isPaused: true,
@@ -171,8 +177,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('终态项目（LAUNCHED/CANCELLED）不累计暂停也不判超时', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [
         makeProject({ id: 'launched', phase: 'LAUNCHED', isPaused: true, pausedDays: 0 }),
         makeProject({ id: 'cancelled', phase: 'CANCELLED', isPaused: true, pausedDays: 0 }),
@@ -186,8 +192,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('超过计划上市日不自动失败或取消', () => {
-    const { scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       projects: [makeProject({ isPaused: true, plannedLaunchDay: 10, pausedDays: 0 })],
     })
 
@@ -201,8 +207,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
   })
 
   it('取消后停止研发产出、人员项目产出与新支出', () => {
-    const { finance, scheduler } = makeScheduler()
-    const world = makeWorld({
+    const { finance, scheduler, worldOf } = makeScheduler()
+    const world = worldOf({
       employees: [makeEmployee({ fatigue: 40 })],
       projects: [makeProject({ isPaused: true, pausedDays: PAUSE_TIMEOUT_DAYS - 1 })],
     })

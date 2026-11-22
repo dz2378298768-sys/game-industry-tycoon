@@ -40,6 +40,11 @@ export const FIN_ERROR = {
   COMMITMENT_NOT_FOUND: 'FIN_COMMITMENT_NOT_FOUND',
   /** 承诺注册表：结算金额与周期不符 / 已取消仍试图结算。 */
   COMMITMENT_SETTLEMENT_INVALID: 'FIN_COMMITMENT_SETTLEMENT_INVALID',
+  /**
+   * 兑现被拒：该周期归属月已达/超过取消生效月（"这个月已取消"，ADJ-2026-11-22-10 §1.3 R5）。
+   * 与 `COMMITMENT_MISMATCH`（数据不对/出窗）区分，供 CODE-07 UI 按原因给不同提示。
+   */
+  COMMITMENT_PERIOD_CANCELLED: 'FIN_COMMITMENT_PERIOD_CANCELLED',
 } as const
 
 export type FinanceErrorCode = (typeof FIN_ERROR)[keyof typeof FIN_ERROR]

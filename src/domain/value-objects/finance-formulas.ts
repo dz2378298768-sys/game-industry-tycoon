@@ -40,7 +40,14 @@ export function computeAvailableCash(input: AvailableCashInput, tuning: FinanceT
   const anchor = input.startMonth ?? earliestCommitmentMonth(input.commitments)
   const windowEnd = anchor === undefined ? undefined : monthKeyFromOffset(anchor, Math.max(0, horizon - 1))
   for (const c of input.commitments) {
-    if (c.state === 'cancelled') continue
+    // 已取消承诺（R3）：只扣"已赚取但尚未 post"的差额，未兑现的未来周期不计。
+    // `releasedCents` 只是**被释放的未来周期金额**（`releasedPeriods × amountCents`），
+    // "已赚取但尚未 post"的一期不在其中，故差额恰为该期金额；补记后 `realizedCents` 上升、差额归零，
+    // 不会重复扣。**不得**整体跳过——否则"钱还没付却已不算占用"，会高估可用现金（危险方向）。
+    if (c.state === 'cancelled') {
+      available -= Math.max(0, c.totalPlannedCents - c.realizedCents - c.releasedCents)
+      continue
+    }
     available -=
       anchor === undefined || windowEnd === undefined
         ? remainingPlannedCents(c)

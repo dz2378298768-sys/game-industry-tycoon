@@ -26,3 +26,8 @@ export * from './finance'
 
 // ===== P1 Project / WorkPackage 执行内核（PROJ V0.1.1），独立目录，不覆盖 project.ts =====
 export * from './project-execution'
+
+// ===== P1 产品完整度与交付标准内核（D-02），独立目录，不覆盖 product.ts =====
+export * from './product-completeness'
+// D-02 与 project-execution 的 DeliveryForm 为同一字面量联合；显式指认 D-02 版本消除歧义。
+export type { DeliveryForm } from './product-completeness'

@@ -81,3 +81,11 @@ export * from './project-execution-daily'
 export * from './project-execution-rework'
 export * from './project-execution-rebaseline'
 export * from './project-execution-engine'
+
+// ===== P1 产品完整度与交付标准内核（D-02）纯函数 =====
+export * from './product-completeness-tuning'
+export * from './product-completeness-classification'
+export * from './product-completeness-predicates'
+export * from './product-completeness-checklists'
+export * from './product-completeness-quality'
+export * from './product-completeness-gate'

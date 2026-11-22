@@ -258,7 +258,17 @@ export class UnifiedLedger {
     if (!target) return fail(FIN_ERROR.TX_NOT_FOUND, `No transaction ${transactionId}`)
     // 幂等命中优先于"已冲销"守卫：重复提交同一退款键返回原反向交易，不双算（BR-7 / TC-04）。
     const hit = this.transactionByCompanyKey.get(companyScopedKey(target.companyId, newKey))
-    if (hit) return ok(hit)
+    if (hit) {
+      // P2-04：命中只说明键被本公司的某笔交易用过；必须校验它正是"本次目标交易"的反向交易，
+      // 否则同公司复用键会把第二笔冲销静默吞掉并假报成功（返回他笔交易）。
+      if (hit.reversalOf !== target.transactionId || hit.amountCents !== -target.amountCents) {
+        return fail(
+          FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+          `Idempotency key ${newKey} already used by a different reversal (target ${hit.reversalOf ?? 'none'})`,
+        )
+      }
+      return { success: true, result: hit, idempotent: true }
+    }
     // 同一冲销键被其他公司占用属调用方错误，不得静默复用他公司交易（P1-01）。
     const foreign = this.transactionByKey.get(newKey)
     if (foreign && foreign.companyId !== target.companyId) {
@@ -325,14 +335,39 @@ export class UnifiedLedger {
         )
       }
     }
+    // P2-04：命中不等于"同一次退款"。键已被本公司用于不同销售/不同退款额时，直接返回会
+    // 混合"当前销售 + 他笔反向"，调用方误判已退款；此处校验操作同一性后报明确冲突。
+    if (
+      refundHit &&
+      (refundHit.reversalOf !== sale.transactionId ||
+        refundHit.amountCents !== -params.refundAmountCents)
+    ) {
+      return fail(
+        FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+        `Idempotency key ${params.refundKey} already used by a different refund (target ${refundHit.reversalOf ?? 'none'})`,
+      )
+    }
+    if (
+      feeHit &&
+      (feeHit.reversalOf !== fee.transactionId || feeHit.amountCents !== feeRefund)
+    ) {
+      return fail(
+        FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+        `Idempotency key ${params.feeRefundKey} already used by a different fee reversal (target ${feeHit.reversalOf ?? 'none'})`,
+      )
+    }
     if (refundHit && (feeRefund === 0 || feeHit)) {
-      return ok({
-        original: sale,
-        reversal: refundHit,
-        feeOriginal: fee,
-        ...(feeHit ? { feeReversal: feeHit } : {}),
-        refundCashImpactCents: refundHit.amountCents + (feeHit?.amountCents ?? 0),
-      })
+      return {
+        success: true,
+        result: {
+          original: sale,
+          reversal: refundHit,
+          feeOriginal: fee,
+          ...(feeHit ? { feeReversal: feeHit } : {}),
+          refundCashImpactCents: refundHit.amountCents + (feeHit?.amountCents ?? 0),
+        },
+        idempotent: true,
+      }
     }
     // 半状态（退款已入账、手续费未入账）允许续做；由其他键完成的冲销明确拒绝。
     if (sale.status === 'reversed' && !refundHit) {
@@ -571,7 +606,16 @@ export class UnifiedLedger {
     day: number = target.day,
   ): CommandResult<LedgerTransaction> {
     const hit = this.transactionByCompanyKey.get(companyScopedKey(target.companyId, newKey))
-    if (hit) return ok(hit)
+    if (hit) {
+      // P2-04：与 reverseTransaction 同一判据——键命中必须是本目标的等额反向交易。
+      if (hit.reversalOf !== target.transactionId || hit.amountCents !== signedAmount) {
+        return fail(
+          FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT,
+          `Idempotency key ${newKey} already used by a different reversal (target ${hit.reversalOf ?? 'none'})`,
+        )
+      }
+      return { success: true, result: hit, idempotent: true }
+    }
     const foreign = this.transactionByKey.get(newKey)
     if (foreign && foreign.companyId !== target.companyId) {
       return fail(

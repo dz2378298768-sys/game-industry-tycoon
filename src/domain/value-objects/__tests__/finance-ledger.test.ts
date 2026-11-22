@@ -421,3 +421,127 @@ describe('CODE-02 C-3：结算守卫 / 退款半状态 / replay 上限（P3-02�
     }
   })
 })
+
+/**
+ * P2-04 反证：同公司复用冲销/退款键时，命中必须校验"就是本次目标操作"，
+ * 不得静默返回他笔交易并假报成功（漏冲销 / 混合结果）。
+ */
+describe('CODE-02 P2-04：同公司幂等键复用的操作同一性校验', () => {
+  it('P2-04-B2：同键冲销两笔不同交易 → 第二笔 FIN_IDEMPOTENCY_KEY_CONFLICT，目标仍 posted、余额不变', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 500_000, 0)
+    const t1 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:1', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 1',
+    })).result!.transaction
+    const t2 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:2', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 2',
+    })).result!.transaction
+
+    const first = ledger.reverseTransaction(t1.transactionId, '退款', 'refund:dup', { allowNegativeBalance: true })
+    expect(first.success).toBe(true)
+    const balanceAfterFirst = ledger.getCashBalance('c1')
+    expect(balanceAfterFirst).toBe(510_000)
+
+    const second = ledger.reverseTransaction(t2.transactionId, '退款', 'refund:dup', { allowNegativeBalance: true })
+    expect(second.success).toBe(false)
+    expect(second.errorCode).toBe(FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT)
+    // 不返回他笔交易（否则调用方会误以为 t2 已冲销）
+    expect(second.result).toBeUndefined()
+    expect(t1.status).toBe('reversed')
+    expect(t2.status).toBe('posted')
+    expect(t2.reversedBy).toBeNull()
+    expect(ledger.getCashBalance('c1')).toBe(balanceAfterFirst)
+    expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'refund:dup')).toHaveLength(1)
+  })
+
+  it('P2-04-B3：普通入账键被复用作冲销键 → FIN_IDEMPOTENCY_KEY_CONFLICT，不返回 advance 交易', () => {
+    const ledger = makeLedger()
+    const advance = postAdvance(ledger, 'c1', 500_000, 0).result!.transaction
+    const sale = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售',
+    })).result!.transaction
+    const balanceBefore = ledger.getCashBalance('c1')
+
+    const reused = ledger.reverseTransaction(sale.transactionId, '退款', 'advance', { allowNegativeBalance: true })
+    expect(reused.success).toBe(false)
+    expect(reused.errorCode).toBe(FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT)
+    expect(reused.result).toBeUndefined()
+    expect(sale.status).toBe('posted')
+    expect(advance.status).toBe('posted')
+    expect(ledger.getCashBalance('c1')).toBe(balanceBefore)
+  })
+
+  it('P2-04：同键冲销同一笔交易的真实重复仍幂等（同反向交易、单笔、余额不变）', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 500_000, 0)
+    const t1 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:1', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 1',
+    })).result!.transaction
+    ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:2', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 2',
+    }))
+
+    const first = ledger.reverseTransaction(t1.transactionId, '退款', 'refund:dup', { allowNegativeBalance: true })
+    const balanceAfterFirst = ledger.getCashBalance('c1')
+    const again = ledger.reverseTransaction(t1.transactionId, '重复退款', 'refund:dup', { allowNegativeBalance: true })
+
+    expect(again.success).toBe(true)
+    expect(again.idempotent).toBe(true)
+    expect(again.result!.transactionId).toBe(first.result!.transactionId)
+    expect(again.result!.reversalOf).toBe(t1.transactionId)
+    expect(again.result!.amountCents).toBe(-10_000)
+    expect(ledger.getCashBalance('c1')).toBe(balanceAfterFirst)
+    expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'refund:dup')).toHaveLength(1)
+  })
+
+  it('P2-04-B4：同键 refundSale 针对不同销售 → 冲突报错，不返回混合结果', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 200_000, 0)
+    const saleA = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:A', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 A',
+    })).result!.transaction
+    const feeA = ledger.postTransaction(makeInput({
+      idempotencyKey: 'fee:A', companyId: 'c1', day: 1,
+      category: 'platform_fee', amountCents: -2_000, description: '抽成 A',
+    })).result!.transaction
+    const saleB = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:B', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售 B',
+    })).result!.transaction
+    const feeB = ledger.postTransaction(makeInput({
+      idempotencyKey: 'fee:B', companyId: 'c1', day: 1,
+      category: 'platform_fee', amountCents: -2_000, description: '抽成 B',
+    })).result!.transaction
+
+    const refundA = ledger.refundSale({
+      saleTxId: saleA.transactionId, feeTxId: feeA.transactionId,
+      refundAmountCents: 10_000, refundKey: 'refund:dup', feeRefundKey: 'feeRefund:dup',
+      reason: 'A 退款', day: 5,
+    })
+    expect(refundA.success).toBe(true)
+    const balanceAfterA = ledger.getCashBalance('c1')
+    // 200,000 + A 净额 8,000 + B 净额 8,000 − A 退款净额 8,000
+    expect(balanceAfterA).toBe(208_000)
+
+    const refundB = ledger.refundSale({
+      saleTxId: saleB.transactionId, feeTxId: feeB.transactionId,
+      refundAmountCents: 10_000, refundKey: 'refund:dup', feeRefundKey: 'feeRefund:dup',
+      reason: 'B 退款', day: 5,
+    })
+    expect(refundB.success).toBe(false)
+    expect(refundB.errorCode).toBe(FIN_ERROR.IDEMPOTENCY_KEY_CONFLICT)
+    // 不返回"当前销售 + 他笔反向"的混合结果
+    expect(refundB.result).toBeUndefined()
+    expect(saleB.status).toBe('posted')
+    expect(feeB.status).toBe('posted')
+    expect(ledger.getCashBalance('c1')).toBe(balanceAfterA)
+    expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'refund:dup')).toHaveLength(1)
+    expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'feeRefund:dup')).toHaveLength(1)
+  })
+})

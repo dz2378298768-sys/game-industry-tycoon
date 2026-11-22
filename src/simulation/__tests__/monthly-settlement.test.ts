@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
+import { writeCompanyCashBalance } from '@domain/entities/company'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 import { TUNING } from '@content/tuning'
 import { cityRentMultiplier } from '@content/queries'
@@ -72,7 +73,7 @@ describe('财务月度结算 (D12-D15)', () => {
   it('负现金时禁止创建新项目', () => {
     const { gw, company } = setup()
     gw.advanceSimulation(800)
-    company.cashBalanceCents = gw.finance.getCashBalance(company.id)
+    writeCompanyCashBalance(company, gw.finance.getCashBalance(company.id))
 
     const out = gw.createProject({
       name: 'Blocked Game',

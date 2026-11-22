@@ -21,6 +21,7 @@ import { fail, ok } from '@domain/types'
 import {
   FIN_ERROR,
   UnifiedLedger,
+  writeCompanyCashBalance,
   type BudgetCommitment,
   type LedgerTransaction,
 } from '@domain/entities/finance'
@@ -48,10 +49,10 @@ export interface PostTransactionOptions {
   allowNegativeBalance?: boolean
 }
 
-/** 兼容字段单点回写目标（`Company.cashBalanceCents`）。 */
+/** 兼容字段单点回写目标（`Company.cashBalanceCents`，CODE-08 后类型层只读）。 */
 export interface CashCarrier {
   id: string
-  cashBalanceCents: number
+  readonly cashBalanceCents: number
 }
 
 export class FinanceService {
@@ -240,7 +241,8 @@ export class FinanceService {
    * 回写后登记基线，供每日调度识别"第二写入者"（`getSyncedCash`）。
    */
   syncCash(company: CashCarrier): void {
-    company.cashBalanceCents = this.ledger.getCashBalance(company.id)
+    // CODE-08：类型层封口后，全仓唯一运行期写入口（账本派生，domain 层 helper）。
+    writeCompanyCashBalance(company, this.ledger.getCashBalance(company.id))
     this.syncedCashBaseline.set(company.id, company.cashBalanceCents)
   }
 

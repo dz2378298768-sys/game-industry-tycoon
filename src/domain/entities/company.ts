@@ -16,7 +16,13 @@ export interface Company {
   brand: number                    // 0-100
   technologyCapacity: number       // 0-100
   managementCapacity: number       // 0-100
-  cashBalanceCents: number         // 整数分
+  /**
+   * 整数分。CODE-08 类型层封口（R8）：对**外部代码只读**——现金唯一事实源是
+   * `UnifiedLedger`（INV-1：本字段 == Σ 全部 amountCents），本字段只是兼容展示快照。
+   * 运行期唯一合法写路径：`writeCompanyCashBalance`（账本派生回写，见下）；
+   * 存档 hydrate / spread 重建（`{ ...c, cashBalanceCents }`）属对象字面量构造，不在此限。
+   */
+  readonly cashBalanceCents: number
   growthStage: GrowthStage
   isPlayer: boolean
   /** 仅 AI 公司：独立工作室 / 类型专精 / 综合研发发行（DECISION-M3-P0-AI-003 §2） */
@@ -39,6 +45,19 @@ export interface Company {
   version: number
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * CODE-08（R8）：`Company.cashBalanceCents` 的**唯一运行期写入口**。
+ * 仅限账本派生回写（调用方：`FinanceService.syncCash`；测试夹具播种亦可复用）。
+ * 业务代码若绕过本函数直改该字段，typecheck 直接报错（TS2540：readonly）——
+ * 与运行期 fail-loud（`FIN_CASH_MISMATCH`）构成"类型层 + 运行层"双层防线。
+ */
+export function writeCompanyCashBalance(
+  company: Pick<Company, 'id' | 'cashBalanceCents'>,
+  cashBalanceCents: number,
+): void {
+  ;(company as { cashBalanceCents: number }).cashBalanceCents = cashBalanceCents
 }
 
 export function createNewCompany(params: {

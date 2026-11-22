@@ -503,12 +503,18 @@ export class UnifiedLedger {
         settlementTxIds.push(tx.transactionId)
       }
     }
+    // O-1（PATCH2 审核）：settledCents===0 时不得原样保留 stale 的结算态——
+    // 若旧快照是 'settled' / 'partially_settled' 而账本查无任何结算交易（如全额冲销
+    // 后幂等重建），必须降级为 'open'；'open' / 'written_off' / 'overdue' 非
+    // 结算推导态，保持原样。
     const state: PayableReceivable['state'] =
       settledCents >= item.amountCents
         ? 'settled'
         : settledCents > 0
           ? 'partially_settled'
-          : item.state
+          : item.state === 'settled' || item.state === 'partially_settled'
+            ? 'open'
+            : item.state
     return { ...item, settledCents, state, settlementTxIds }
   }
 

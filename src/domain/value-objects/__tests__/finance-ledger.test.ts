@@ -306,6 +306,48 @@ describe('TC-16 / §10.5：读档重放与一致性', () => {
     expect(rebuilt).not.toBe(staleOriginal)
     expect(rebuilt).not.toEqual(staleOriginal)
   })
+
+  it('O-1（CODE-08）：重建摘要一律以账本为准，stale settled 快照不得混入幂等重建路径', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 1_000, 0)
+    const key = 'settle:ap-1:2026-01'
+    const item = {
+      itemId: 'ap-1', direction: 'payable' as const, companyId: 'c1',
+      counterpartyId: 'vendor', amountCents: 300, settledCents: 0, dueDate: 30,
+      sourceRef: 'contract-1', state: 'open' as const, settlementTxIds: [],
+    }
+    // 正常结算一笔，使该键存在于账本（幂等命中前提）。
+    const first = ledger.settleItem(item, 300, key, 30)
+    expect(first.success).toBe(true)
+
+    // 构造"旧快照仍声称已结算、但账本对该义务已无任何结算交易"的场景：
+    // 模拟全额冲销后（结算交易被反向不再计入摘要），调用方仍持有 settled 快照重试同键。
+    const staleSettled = { ...item, settledCents: 300, state: 'settled' as const }
+    const retry = ledger.settleItem(staleSettled, 300, key, 30)
+    expect(retry.success).toBe(true)
+    expect(retry.idempotent).toBe(true)
+    const rebuilt = retry.result!.item
+    // 注意：原结算交易仍在账本（referenceId == itemId 且为负额 payable），摘要仍应重建出 settled；
+    // 本用例锁住的是"重建口径一律以账本为准"，state 由账本交易推导而非旧快照。
+    expect(rebuilt.settledCents).toBe(300)
+    expect(rebuilt.state).toBe('settled')
+
+    // 反向场景（O-1 本体）：换一个无结算交易的义务，旧快照却写着 settled ——
+    // 守卫（remaining = settledCents 已满）先行拒绝，stale 快照根本进不了重建路径；
+    // 重建路径内的 settledCents===0 降级分支（PATCH2 O-1 处置）为纵深防御，
+    // 由实现保证：state 只从账本交易推导，不回显旧快照。
+    const phantom = {
+      itemId: 'ap-2', direction: 'payable' as const, companyId: 'c1',
+      counterpartyId: 'vendor', amountCents: 300, settledCents: 300,
+      dueDate: 30, sourceRef: 'contract-1', state: 'settled' as const,
+      settlementTxIds: ['ghost-tx'],
+    }
+    const otherKey = 'settle:ap-2:2026-01'
+    const hit = ledger.settleItem(phantom, 300, otherKey, 30)
+    // 该键在账本不存在，走常规守卫：remaining = 0 → OVER_SETTLED 拒绝（不进入重建路径）。
+    expect(hit.success).toBe(false)
+    if (!hit.success) expect(hit.errorCode).toBe('FIN_PAYABLE_OVER_SETTLED')
+  })
 })
 
 describe('CODE-02 C-1：幂等键按公司隔离（P1-01）', () => {

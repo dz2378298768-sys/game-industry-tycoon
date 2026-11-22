@@ -114,8 +114,10 @@ describe('A-2 / A-3 Company.cashBalanceCents 派生只读 + 一致性断言', ()
       amountCents: 2_000_000, description: '注资',
     })
     fin.syncCash(company)
-    // 模拟"第二个写入者"：任何绕过账本改 cash 的代码
-    company.cashBalanceCents = 9_999_999
+    // 模拟"第二个写入者"：任何绕过账本改 cash 的代码。
+    // CODE-08 后类型层已封口（readonly），此处显式 cast 模拟绕过类型系统的直改，
+    // 反证运行期 fail-loud（FIN_CASH_MISMATCH）防线仍独立生效，语义不变。
+    ;(company as { cashBalanceCents: number }).cashBalanceCents = 9_999_999
     expect(() => fin.assertCashConsistent(company)).toThrow(/FIN_CASH_MISMATCH/)
     // 断言不会静默修好它：字段保持被篡改的值（fail-loud，不对齐）
     expect(company.cashBalanceCents).toBe(9_999_999)
@@ -252,7 +254,9 @@ describe('A3 运行时反证：现金第二写源必须在日推进中暴露（f
     const gw = new GameWorld(123)
     const company = gw.createCompany({ name: 'Counter-Evidence Studio', cityId: 'san_francisco' })
     // createCompany 已经 syncCash 登记基线；这里模拟"第二个写入者"绕过账本直改现金。
-    company.cashBalanceCents = company.cashBalanceCents + 777_777
+    // CODE-08 后类型层已封口（readonly），显式 cast 模拟绕过类型系统的直改（反证语义不变）。
+    ;(company as { cashBalanceCents: number }).cashBalanceCents =
+      (company as { cashBalanceCents: number }).cashBalanceCents + 777_777
 
     expect(() => gw.advanceSimulation(1)).toThrow(/FIN_CASH_MISMATCH/)
     // fail-loud 不静默对齐：污染值不被账本余额覆盖，账本求和仍是真实值

@@ -47,6 +47,7 @@ export {
 export type { FinanceErrorCode } from './errors'
 
 export { UnifiedLedger, commitmentScopedKey, settlementIdempotencyKey } from './ledger'
+export { writeCompanyCashBalance } from '../company'
 export type {
   PostLedgerTxInput,
   PostLedgerTxOptions,

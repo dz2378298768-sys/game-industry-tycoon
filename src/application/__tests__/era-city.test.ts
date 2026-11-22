@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
+import { writeCompanyCashBalance } from '@domain/entities/company'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 import { citySalaryMultiplier, cityRentMultiplier } from '@content/queries'
 
@@ -27,7 +28,7 @@ function fund(gw: GameWorld, amountCents: number) {
     amountCents,
     description: 'test funding',
   })
-  company.cashBalanceCents = gw.finance.getCashBalance(company.id)
+  writeCompanyCashBalance(company, gw.finance.getCashBalance(company.id))
 }
 
 describe('年代准入 (F19)', () => {

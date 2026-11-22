@@ -64,7 +64,9 @@ describe('存档安全 (G10/G21)', () => {
   it('现金与流水不一致时拒绝加载', () => {
     const world = sampleWorld()
     const broken = structuredClone(world)
-    if (broken.companies[0]) broken.companies[0].cashBalanceCents = 1
+    // CODE-08 后 Company.cashBalanceCents 类型层只读；篡改存档用 cast（反证 SAVE_CASH_MISMATCH）。
+    if (broken.companies[0])
+      (broken.companies[0] as { cashBalanceCents: number }).cashBalanceCents = 1
     const r = parseSave(broken)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.errorCode).toBe('SAVE_CASH_MISMATCH')
@@ -258,5 +260,46 @@ describe('CODE-04：账本承诺集合的存档往返', () => {
     const restored = new GameWorld(9)
     restored.restore(r.state)
     expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(gw.getPlayerCompany()?.cashBalanceCents)
+  })
+
+  it('CODE-08 / P2-02：冲销场景存档往返——现金由账本重建、冲销对 status/reversedBy 双向一致', () => {
+    const gw = new GameWorld(9)
+    const company = gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
+    const ledger = gw.finance.getLedger()
+    const posted = gw.finance.postTransaction({
+      idempotencyKey: 'sale:prj-1', companyId: company.id, day: 5,
+      category: 'sales_revenue', amountCents: 800_000, description: '销售入账',
+    })
+    expect(posted.success).toBe(true)
+    const saleTxId = ledger.getTransactionByKeyInCompany(company.id, 'sale:prj-1')!.transactionId
+    const reversed = ledger.reverseTransaction(saleTxId, '全额退款', 'refund:prj-1')
+    expect(reversed.success).toBe(true)
+    // 冲销后账本净额回到开局注资基线 6_500_000；Company 展示字段由 syncCash
+    // 回写为账本派生值（CODE-08 唯一写入口）。
+    expect(ledger.getCashBalance(company.id)).toBe(6_500_000)
+    gw.finance.syncCash(company)
+    expect(company.cashBalanceCents).toBe(6_500_000)
+
+    const world = gw.serialize()
+    const salePersisted = world.transactions.find((t) => t.id === saleTxId)
+    expect(salePersisted?.status).toBe('reversed')
+    expect(salePersisted?.reversedBy).toBeTruthy()
+
+    const restored = new GameWorld(9)
+    restored.restore(structuredClone(world))
+    const restoredLedger = restored.finance.getLedger()
+    // INV-1：status 不参与求和，冲销对两侧均入账 → 余额保持 6_500_000；现金字段从账本重建且一致。
+    expect(restoredLedger.getCashBalance(company.id)).toBe(6_500_000)
+    expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(6_500_000)
+    expect(() => restored.finance.assertCashConsistent(restored.getPlayerCompany()!)).not.toThrow()
+    // P2-02 回归：冲销对经 status + reversedBy 双向一致（reversalOf 审计链不入档为既定形状）。
+    const restoredSale = restoredLedger.getTransactionById(saleTxId)
+    expect(restoredSale?.status).toBe('reversed')
+    expect(restoredSale?.reversedBy).toBe(salePersisted?.reversedBy)
+    const restoredReversal = restoredLedger.getTransactionById(salePersisted!.reversedBy!)
+    expect(restoredReversal?.amountCents).toBe(-800_000)
+    // P2-02 现状确认：reversalOf 审计链不入 v3 存档形状（读档 replay 后为 null），
+    // 冲销对以 status + reversedBy 往返保持一致；是否入档属 P2-02 设计裁定，不在 CODE-08 范围。
+    expect(restoredReversal?.reversalOf).toBeNull()
   })
 })

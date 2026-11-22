@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useGameStore } from '@ui/state/game-store'
 import type { GameWorld } from '@application/mediators/game-world'
 import type { Company } from '@domain/entities/company'
+import { writeCompanyCashBalance } from '@domain/entities/company'
 
 // V11：不 mock 任何对象，直接驱动真实 zustand store + 真实 GameWorld，
 // 只改 world.companies 中 isPlayer 公司的字段模拟破产（TASK-M1.2-UI-COVERAGE-FOLLOWUP §8.1）。
@@ -31,11 +32,11 @@ function playerCompany(gw: GameWorld): Company {
   return company
 }
 
-// 展示层字段：直接写 cashBalanceCents（OQ-4 口径），-50_000 = -$500
+// 展示层字段：经唯一写入口播种（OQ-4 口径），-50_000 = -$500
 function markBankrupt(gw: GameWorld, cashCents = -50_000): Company {
   const company = playerCompany(gw)
   company.status = 'bankrupt'
-  company.cashBalanceCents = cashCents
+  writeCompanyCashBalance(company, cashCents)
   return company
 }
 

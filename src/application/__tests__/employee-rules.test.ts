@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
+import { writeCompanyCashBalance } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
 
@@ -103,7 +104,7 @@ describe('员工规则 (E16/E17/E18)', () => {
       },
       { allowNegativeBalance: true },
     )
-    company.cashBalanceCents = gw.finance.getCashBalance(company.id)
+    writeCompanyCashBalance(company, gw.finance.getCashBalance(company.id))
 
     const out = gw.hireEmployee({ name: 'X', role: 'programmer', skillLevel: 3, salaryMonthlyCents: 100_000 })
     expect(out.success).toBe(false)

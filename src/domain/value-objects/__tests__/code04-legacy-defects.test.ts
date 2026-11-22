@@ -7,7 +7,8 @@
  *  - P3-06：`settleItem` remaining 守卫先于幂等 → 现键命中优先；
  *  - P3-07：`createCommitment` 守卫为选项式、不传默认放行 → 现 options 必填且必须带来源。
  *
- * 另含 ADJ-05 §2 的 OPEN-F3′ 症状锁用例（KNOWN-DEFECT，P2 修公式时必须同步修改）。
+ * 另含 ADJ-05 §2 的 OPEN-F3′ 用例——该双重扣减缺陷已由 ADJ-11 / CODE-FIN-RUNWAY 修复，
+ * 原症状锁已改写为修复回归断言（起点 CashBalance + inclusionMode 恰一次）。
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -133,29 +134,35 @@ describe('P3-04：窗口开始前已到期未兑现的 one_off 全额扣减（AD
   })
 })
 
-describe('OPEN-F3′ 症状锁（KNOWN-DEFECT，ADJ-2026-11-22-05 §2：P2 校准轮修正）', () => {
-  it('KNOWN-DEFECT OPEN-F3：现金 700,000 / 月净烧 100,000 / horizon 6 ⇒ runway 实算 1 个月（真实约 7 个月）', () => {
+describe('OPEN-F3′ 修复回归（ADJ-11 / CODE-FIN-RUNWAY：R-2 起点口径 + inclusionMode 恰一次）', () => {
+  it('现金 700,000 / 月净烧 100,000：horizon 6 内不 crossing ⇒ +∞；horizon 12 ⇒ 真实 7.0', () => {
     const monthly = commitment({
       commitmentId: 'cm-burn', amountCents: 100_000,
-      startAt: d(2026, 1), endAt: d(2026, 6),
+      startAt: d(2026, 1), endAt: d(2026, 12),
     })
     const available = computeAvailableCash({
       cashBalanceCents: 700_000, commitments: [monthly], payables: [], receivables: [],
       horizonMonths: 6, startMonth: '2026-01',
     }, T)
-    // AvailableCash 必须保持"已扣全部承诺"（HRB 依赖），故为 100,000
+    // AvailableCash 必须保持"已扣全部承诺"（HRB 依赖），故为 100,000（R-2 禁令：不得放松）
     expect(available).toBe(100_000)
-    const runway = computeRunwayMonths({
-      availableCashCents: available,
-      commitments: [monthly],
+    // 修复后：起点 = CashBalance（700,000），承诺经预测表恰好计一次（in_forecast）
+    // 真实跑道 700,000 / 100,000 = 7 个月 > 窗口 6 ⇒ +∞（不再虚报 1 个月）
+    expect(computeRunwayMonths({
+      cashBalanceCents: 700_000,
+      commitments: [{ ...monthly, inclusionMode: 'in_forecast' }],
       expectedInflowsByMonth: [],
       horizonMonths: 6,
       startMonth: '2026-01',
-    })
-    // 双重扣减的现存输出：100,000 / 100,000 / 月 = 1
-    expect(runway).toBe(1)
-    // 若按"未扣承诺的原始现金"起算，真实可支撑 7 个月——P2 修正公式后本断言应翻转
-    expect(700_000 / 100_000).toBe(7)
+    })).toBe(Number.POSITIVE_INFINITY)
+    // 放宽窗口到 12 个月：crossing 恰在 7.0（双重扣减的旧口径会得 1.0）
+    expect(computeRunwayMonths({
+      cashBalanceCents: 700_000,
+      commitments: [{ ...monthly, inclusionMode: 'in_forecast' }],
+      expectedInflowsByMonth: [],
+      horizonMonths: 12,
+      startMonth: '2026-01',
+    })).toBeCloseTo(7.0, 6)
   })
 })
 

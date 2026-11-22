@@ -118,9 +118,90 @@ function commitmentRemainingInWindow(
   return Math.min(periods * c.amountCents, remainingPlannedCents(c))
 }
 
+/**
+ * 支出侧承诺的 inclusionMode 三态（ADJ-11 §2.1，R-2/R-3）：
+ * 每项未来支出在现金流预测构建处显式标注，同一笔承诺在 runway 支出侧计**恰好一次**。
+ *  - `in_forecast`：经现金流预测表（netCashByMonth 同源）逐月计；
+ *    调用方不得再从承诺表重加。
+ *  - `reserved_only`：预测表不覆盖、但确将发生的支出（已取消承诺的已赚取未兑现差额、
+ *    窗口前已到期未兑现额），经承诺表补加恰好一次。
+ *  - `excluded`：整段在预测窗口之后，窗口内不计。
+ */
+export type CommitmentInclusionMode = 'in_forecast' | 'reserved_only' | 'excluded'
+
+/** 带显式 inclusionMode 标注的承诺（runway 输入契约）。 */
+export interface AnnotatedCommitment extends BudgetCommitment {
+  inclusionMode: CommitmentInclusionMode
+}
+
+/**
+ * 逐项判定 inclusionMode（ADJ-11 §2.1；与 computeAvailableCash 的窗口口径一致）。
+ *  - 已取消 → reserved_only：committedBurnForMonth 跳过 cancelled，其已赚取未兑现差额
+ *    （`total − realized − released`，与 AvailableCash R3 扣除口径一致）只经承诺表补加一次；
+ *  - 窗口内尚有未兑现周期 → in_forecast（经预测表逐月计）；
+ *  - 整段已结束于窗口起点之前且仍有未兑现额 → reserved_only（P3-04 补扣，口径同 AvailableCash）；
+ *  - 其余（整段在窗口之后）→ excluded。
+ */
+export function classifyCommitmentInclusion(
+  c: BudgetCommitment,
+  windowStart: string,
+  windowEnd: string,
+): CommitmentInclusionMode {
+  if (c.state === 'cancelled') return 'reserved_only'
+  const startIdx = monthIndex(monthKeyOf(c.startAt))
+  const endIdx = c.period === 'one_off' ? startIdx : monthIndex(monthKeyOf(c.endAt))
+  const wStart = monthIndex(windowStart)
+  const wEnd = monthIndex(windowEnd)
+  if (endIdx >= wStart && startIdx <= wEnd) return 'in_forecast'
+  if (endIdx < wStart && remainingPlannedCents(c) > 0) return 'reserved_only'
+  return 'excluded'
+}
+
+/** 现金流预测构建处（computeCashForecast）：为每项承诺显式标注 inclusionMode。 */
+export function annotateCommitmentsForRunway(
+  commitments: ReadonlyArray<BudgetCommitment>,
+  windowStart: string,
+  windowEnd: string,
+): AnnotatedCommitment[] {
+  return commitments.map((c) => ({
+    ...c,
+    inclusionMode: classifyCommitmentInclusion(c, windowStart, windowEnd),
+  }))
+}
+
+/** reserved_only 的补加额（恰一次；口径与 computeAvailableCash 对应分支一致）。 */
+function reservedExpenseForRunway(c: AnnotatedCommitment): number {
+  if (c.state === 'cancelled') {
+    return Math.max(0, c.totalPlannedCents - c.realizedCents - c.releasedCents)
+  }
+  return remainingPlannedCents(c)
+}
+
+/**
+ * in_forecast 承诺在窗口月份 m 的预测表支出：在期内的每期计 amountCents，
+ * 但**已 post 的周期不计**（其金额已含在账本 CashBalance 中；period 按 startAt 起的月序兑现）。
+ * 与 committedBurnForMonth 同源同窗口，仅多扣已兑现周期，避免"已付 + 预测"重复。
+ */
+function inForecastBurnForMonth(c: BudgetCommitment, month: string): number {
+  if (c.amountCents <= 0) return 0
+  const startIdx = monthIndex(monthKeyOf(c.startAt))
+  const endIdx = c.period === 'one_off' ? startIdx : monthIndex(monthKeyOf(c.endAt))
+  const mIdx = monthIndex(month)
+  if (mIdx < startIdx || mIdx > endIdx) return 0
+  const realizedPeriods = Math.min(c.periodCount, Math.floor(c.realizedCents / c.amountCents))
+  if (mIdx - startIdx < realizedPeriods) return 0
+  return c.amountCents
+}
+
 export interface RunwayInput {
-  availableCashCents: number
-  commitments: ReadonlyArray<BudgetCommitment>
+  /**
+   * R-2：起点 = 账本 CashBalance（ΣamountCents），**不是** AvailableCash。
+   * AvailableCash 已扣 horizon 内承诺，若再以其为起点并逐月扣 NetBurn，
+   * 同一承诺会被计两次（OPEN-F3′ 缺陷本体，ADJ-11 修复）。
+   */
+  cashBalanceCents: number
+  /** 每项承诺必须显式标注 inclusionMode（由 annotateCommitmentsForRunway 生成）。 */
+  commitments: ReadonlyArray<AnnotatedCommitment>
   /** 每月流入（应收到期 + 预计销售，已按 confidence 折减）。 */
   expectedInflowsByMonth: ReadonlyArray<{ month: string; amountCents: number }>
   horizonMonths: number
@@ -129,28 +210,29 @@ export interface RunwayInput {
 }
 
 /**
- * §6.1 跑道月数：CumAvailable(m)=AvailableCash−ΣNetBurn_i，NetBurn=max(0,CommittedBurn−ExpectedIn)。
+ * §6.1 跑道月数（ADJ-11 修复后口径）：
+ * 起点 = CashBalance − Σ(reserved_only 补加额)；逐月扣
+ * NetBurn_m = max(0, Σ(in_forecast 预测表支出) − ExpectedIn_m)。
+ * 同一笔承诺按 inclusionMode 计恰好一次：
+ *  - in_forecast 经预测表逐月计（与 netCashByMonth 同源，不从承诺表重加）；
+ *  - reserved_only 经承诺表补加一次（预测表不覆盖）；
+ *  - excluded 不计。
  * 首次 crossing 做小数插值；窗口内不 crossing 返回 +∞。
- *
- * ⚠ KNOWN-DEFECT `OPEN-F3′`（ADJ-2026-11-22-05 §2，**本函数按裁定不做修正**）：
- * 入参 `availableCashCents` 已扣除 horizon 内全部承诺，而下面又逐月扣 `NetBurn_i`
- * （其 `CommittedBurn_m` 含**同一批**承诺）⇒ 同一承诺被扣两次，跑道系统性偏短
- * （算例：现金 700,000 / 月净烧 100,000 / horizon 6 → 实算 1 个月，真实 7 个月）。
- *
- * 为什么不在这里修：跑道同时驱动危机状态机（warning/bankrupt 阈值）与 UI，
- * 改公式必须与 P2 数值校准一并做，否则会引入阈值错配。
- * 修正方向（已裁定，P2 执行时照此）：让调用方以**未扣承诺的原始现金**作为本函数入参，
- * **不得**放松 `AvailableCash` 的扣除范围（否则 HRB 会放行超额承诺）。
- * 症状已由 `finance-formulas.test.ts` 中 `KNOWN-DEFECT OPEN-F3` 用例锁死，修公式时必须一并改该用例。
  */
 export function computeRunwayMonths(input: RunwayInput): number {
-  if (input.availableCashCents <= 0) return 0
+  let cum = input.cashBalanceCents
+  for (const c of input.commitments) {
+    if (c.inclusionMode === 'reserved_only') cum -= reservedExpenseForRunway(c)
+  }
+  if (cum <= 0) return 0
   const inflow = new Map(input.expectedInflowsByMonth.map((x) => [x.month, x.amountCents]))
   const anchor = input.startMonth ?? input.expectedInflowsByMonth[0]?.month
-  let cum = input.availableCashCents
   for (let m = 1; m <= input.horizonMonths; m++) {
     const month = monthKeyFromOffset(anchor, m - 1)
-    const committed = committedBurnForMonthAny(input.commitments, month)
+    let committed = 0
+    for (const c of input.commitments) {
+      if (c.inclusionMode === 'in_forecast') committed += inForecastBurnForMonth(c, month)
+    }
     const expected = inflow.get(month) ?? 0
     const netBurn = Math.max(0, committed - expected)
     const prev = cum
@@ -170,13 +252,6 @@ function monthKeyFromOffset(anchor: string | undefined, offset: number): string 
   const year = Math.floor(base / 12)
   const month = (base % 12) + 1
   return `${year}-${String(month).padStart(2, '0')}`
-}
-
-function committedBurnForMonthAny(
-  commitments: ReadonlyArray<BudgetCommitment>,
-  month: string,
-): number {
-  return committedBurnForMonth(commitments, month)
 }
 
 /** §6.4 阈值与滞后带（参数来自注入快照）。 */
@@ -259,14 +334,6 @@ export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning)
     if (lowCashDate === null && low < tuning.cashWarningThresholdCents) lowCashDate = month
   }
 
-  const availableCash = computeAvailableCash({
-    cashBalanceCents: input.cashBalanceCents,
-    commitments: input.commitments,
-    payables: input.payables,
-    receivables: input.receivables,
-    horizonMonths,
-    startMonth: months[0],
-  }, tuning)
   return {
     forecastId: input.forecastId,
     companyId: input.companyId,
@@ -276,8 +343,13 @@ export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning)
     projectedOutflows,
     netCashByMonth,
     runwayMonths: computeRunwayMonths({
-      availableCashCents: availableCash,
-      commitments: input.commitments,
+      cashBalanceCents: input.cashBalanceCents,
+      // R-2/R-3：在预测构建处为每项承诺显式标注 inclusionMode，
+      // in_forecast 经预测表（netCashByMonth 同源）逐月计，不从承诺表重加；
+      // reserved_only（已取消差额 / 窗口前到期未兑现）经承诺表补加恰好一次。
+      commitments: annotateCommitmentsForRunway(
+        input.commitments, months[0]!, months[months.length - 1]!,
+      ),
       expectedInflowsByMonth: input.expectedInflowsByMonth,
       horizonMonths,
       startMonth: months[0],

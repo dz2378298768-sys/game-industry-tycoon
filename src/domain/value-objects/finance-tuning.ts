@@ -23,11 +23,22 @@ export interface FinanceTuning {
   cashBankruptThresholdCents: number
   /** 预算超支警告比例（消费 D-01 ratio）。1.0 = 100%。来源 §6.4。 */
   budgetOverrunWarnAt: number
-  /** 跑道低于此月数 → watch。默认候选值 3 月。来源 §6.4。 */
+  /**
+   * 跑道低于此月数 → watch。重标定（ADJ-11 R-3）默认候选值 4.0 月。
+   * 标定依据："玩家在真实 N 个月跑道时应收到预警"的推演——修复双重扣减后 runwayMonths
+   * 即真实跑道：4.0 保证真实跑道一旦进入 4 个月内玩家必然收到预警（严格小于，恰 4.0 不触发）；
+   * 给玩家留出完整的预警→决策（descope/裁员/融资）→见效的操作周期。
+   * 来源 §6.4 / ADJ-11 R-3。
+   */
   runwayWarningMonths: number
-  /** 跑道低于此月数 → critical。默认候选值 1 月。来源 §6.4。 */
+  /**
+   * 跑道低于此月数 → critical。重标定（ADJ-11 R-3）默认候选值 2.0 月。
+   * 标定依据：真实跑道 < 2 个月意味着按当前净烧正常运营两个月内现金耗尽，
+   * 必须升级为 critical（开补救窗口、解锁全部补救动作），预留两个月的紧急缓冲；
+   * 严格小于口径，恰 2.0 仅 watch。来源 §6.4 / ADJ-11 R-3。
+   */
   runwayCriticalMonths: number
-  /** critical 起补救窗口天数（必须有限）；重入不重置。默认候选值 60 天。来源 §6.4 / F-06。 */
+  /** critical 起补救窗口天数（必须有限）；重入不重置。默认候选值 60 天。来源 §6.4 / F-06 / ADJ-11 R-3。 */
   remediationWindowDays: number
   /** HRB 可行性结论 warn 阈值。1.0（D-01 §6.2.1 锚点，默认候选 TUNING）。来源 §6.4。 */
   hrbVerdictWarn: number
@@ -105,9 +116,9 @@ export const DEFAULT_FINANCE_TUNING: FinanceTuning = {
   cashRecoveryThresholdCents: 600_000, // $6,000（严格 > warning）
   cashBankruptThresholdCents: 0, // $0
   budgetOverrunWarnAt: 1.0,
-  runwayWarningMonths: 3,
-  runwayCriticalMonths: 1,
-  remediationWindowDays: 60,
+  runwayWarningMonths: 4, // ADJ-11 R-3 重标定（原 3）：真实跑道 4 个月内必预警
+  runwayCriticalMonths: 2, // ADJ-11 R-3 重标定（原 1）：真实跑道 < 2 个月进 critical
+  remediationWindowDays: 60, // 60 天补救窗口，自进入 critical 日起算
   hrbVerdictWarn: 1.0,
   hrbVerdictCut: 1.2,
 

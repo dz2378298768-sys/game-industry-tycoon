@@ -47,11 +47,11 @@ function payable(amount: number, dueDay: number, settled = 0): PayableReceivable
   }
 }
 
-describe('TC-10 / F-04：跑道公式（CumAvailable + 小数插值）', () => {
-  it('AvailableCash 为 CumAvailable(0) 起点；crossing 做小数插值', () => {
+describe('TC-10 / F-04：跑道公式（CumAvailable + 小数插值；ADJ-11 R-2 起点口径）', () => {
+  it('起点 CashBalance；in_forecast 承诺经预测表恰好计一次；crossing 做小数插值', () => {
     const r = computeRunwayMonths({
-      availableCashCents: 1_200_000,
-      commitments: [commitment(500_000, 6)],
+      cashBalanceCents: 1_200_000,
+      commitments: [{ ...commitment(500_000, 6), inclusionMode: 'in_forecast' }],
       expectedInflowsByMonth: [],
       horizonMonths: 6,
       startMonth: '2026-01',
@@ -62,8 +62,8 @@ describe('TC-10 / F-04：跑道公式（CumAvailable + 小数插值）', () => {
 
   it('预计流入折减 NetBurn；窗口内不 crossing → +∞', () => {
     const r = computeRunwayMonths({
-      availableCashCents: 1_200_000,
-      commitments: [commitment(500_000, 6)],
+      cashBalanceCents: 1_200_000,
+      commitments: [{ ...commitment(500_000, 6), inclusionMode: 'in_forecast' }],
       expectedInflowsByMonth: [
         { month: '2026-03', amountCents: 600_000 }, // NetBurn_m=0
       ],
@@ -72,24 +72,28 @@ describe('TC-10 / F-04：跑道公式（CumAvailable + 小数插值）', () => {
     })
     expect(r).toBeCloseTo(3.4, 6)
     const infinite = computeRunwayMonths({
-      availableCashCents: 1_000_000, commitments: [], expectedInflowsByMonth: [], horizonMonths: 6,
+      cashBalanceCents: 1_000_000, commitments: [], expectedInflowsByMonth: [], horizonMonths: 6,
     })
     expect(infinite).toBe(Number.POSITIVE_INFINITY)
   })
 
   it('场景 A：5 人月薪承诺创建后 AvailableCash 与 runway 同时下降（承诺不改现金）', () => {
-    const cash = 12_000_000 // $120,000
+    const cash = 4_000_000 // $40,000
     const before = computeRunwayMonths({
-      availableCashCents: cash, commitments: [], expectedInflowsByMonth: [], horizonMonths: 6,
+      cashBalanceCents: cash, commitments: [], expectedInflowsByMonth: [], horizonMonths: 6,
       startMonth: '2026-01',
     })
     const c = commitment(1_000_000, 6) // 5 人合计 $10,000/月
     const available = computeAvailableCash({ cashBalanceCents: cash, commitments: [c], payables: [], receivables: [] }, T)
     const after = computeRunwayMonths({
-      availableCashCents: available, commitments: [c], expectedInflowsByMonth: [], horizonMonths: 6,
+      cashBalanceCents: cash,
+      commitments: [{ ...c, inclusionMode: 'in_forecast' }],
+      expectedInflowsByMonth: [], horizonMonths: 6,
       startMonth: '2026-01',
     })
     expect(available).toBeLessThan(cash)
+    // 支出侧恰好一次（起点 CashBalance、预测表逐月计）：crossing 恰在 4.0
+    expect(after).toBeCloseTo(4.0, 6)
     expect(Number.isFinite(after)).toBe(true)
     expect(after).toBeLessThan(before) // before=+∞（无承诺无燃烧）
     expect(remainingPlannedCents(c)).toBe(6_000_000)

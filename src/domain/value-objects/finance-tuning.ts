@@ -140,7 +140,8 @@ export const DEFAULT_FINANCE_TUNING: FinanceTuning = {
   idempotencyRetentionDays: 30,
   replayMaxTransactions: 100_000,
 
-  formulaVersion: 'fin-formula-v0.2',
+  // ADJ-11：跑道公式语义变更（起点改 CashBalance + inclusionMode 三态 + 阈值重标定 4.0/2.0/60），版本随语义 bump
+  formulaVersion: 'fin-formula-v0.3',
   assumptionsVersion: 'fin-assumptions-v0.2',
   crisisRulesVersion: 'fin-crisis-v0.2',
 }

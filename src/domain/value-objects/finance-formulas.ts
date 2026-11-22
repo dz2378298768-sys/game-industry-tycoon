@@ -2,7 +2,9 @@
  * FIN V0.2 §6.1–§6.4：跑道 / 可用现金 / 预测三带 / 预警阈值公式。
  *
  * 纪律：公式层禁止直接读取 TUNING 全局值，所有参数来自调用方注入的 FinanceTuning 快照。
- * F-04：CumAvailable(0) = AvailableCash；小数插值消除歧义。
+ * ADJ-11（formulaVersion v0.3）：RunwayMonths 起点恒为 CashBalance（账面现金），
+ * 支出侧承诺经 inclusionMode（in_forecast / reserved_only / excluded）计入恰好一次；
+ * AvailableCash 扣除范围不变（R-2 红线）。F-04 的 CumAvailable(0)=AvailableCash 口径已被本裁定取代。
  * F-05：三带统一含应付，系数方向固定，low ≤ expected ≤ high。
  */
 import type {

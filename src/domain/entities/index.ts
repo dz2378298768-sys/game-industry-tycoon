@@ -23,3 +23,6 @@ export * from './product-blueprint'
 
 // ===== P1 统一账本领域内核（FIN V0.2），独立目录，不覆盖 transaction.ts / company.ts =====
 export * from './finance'
+
+// ===== P1 Project / WorkPackage 执行内核（PROJ V0.1.1），独立目录，不覆盖 project.ts =====
+export * from './project-execution'

@@ -15,7 +15,7 @@ import {
   realizeCommitment,
   remainingPlannedCents,
 } from '@domain/value-objects/finance-commitment'
-import { CommitmentOverRealizedError } from '@domain/entities/finance'
+import { CommitmentOverRealizedError, SandboxCommitmentBlockedError } from '@domain/entities/finance'
 import { makeLedger, postAdvance } from './finance-fixtures'
 
 const d = (m: number, day = 15) => gregorianToDayIndex(2026, m, day)
@@ -126,5 +126,36 @@ describe('TC-19 跨月月薪承诺：6 月 6 笔逐月兑现无遗漏（F-02）'
     const r = realizeCommitment({ commitment: cancelled, ledger, day: d(1) })
     expect(r.success).toBe(false)
     expect(ledger.getCashBalance('c1')).toBe(2_000_000)
+  })
+})
+
+describe('CODE-02 C-2：沙盒态拒绝新建承诺（P2-03 / §10.4）', () => {
+  const input = {
+    commitmentId: 'cm-sandbox', companyId: 'c1', sourceType: 'employment_salary' as const,
+    sourceRef: 'emp-new', amountCents: 100_000, period: 'monthly' as const,
+    startAt: d(1), endAt: d(3),
+  }
+
+  it('sandbox_observe 下经只读账本查询拒绝；非沙盒正常创建', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 2_000_000, 0)
+    expect(createCommitment(input, { ledger }).state).toBe('committed')
+
+    ledger.setSandboxObserved('c1', true)
+    expect(ledger.isSandboxObserved('c1')).toBe(true)
+    let thrown: unknown
+    try {
+      createCommitment(input, { ledger })
+    } catch (e) {
+      thrown = e
+    }
+    expect(thrown).toBeInstanceOf(SandboxCommitmentBlockedError)
+    expect((thrown as SandboxCommitmentBlockedError).code).toBe('FIN_SANDBOX_COMMITMENT_BLOCKED')
+
+    // 显式状态入参同样生效（不依赖账本实例）
+    expect(() => createCommitment(input, { sandboxActive: true }))
+      .toThrow(SandboxCommitmentBlockedError)
+    expect(createCommitment({ ...input, commitmentId: 'cm-other', companyId: 'c2' }, { ledger }).state)
+      .toBe('committed')
   })
 })

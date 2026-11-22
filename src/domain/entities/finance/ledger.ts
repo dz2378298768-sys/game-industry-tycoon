@@ -12,7 +12,7 @@
 import type { TransactionCategory } from '@domain/enums'
 import { fail, ok, uuid, type CommandResult } from '@domain/types'
 import { InsufficientCashError } from '@domain/errors'
-import { FIN_ERROR, LedgerInconsistentError } from './errors'
+import { FIN_ERROR, FinanceError, LedgerInconsistentError } from './errors'
 import type {
   Cents,
   CashFlowType,
@@ -77,6 +77,14 @@ export function settlementIdempotencyKey(itemId: string, period: string): string
   return `settle:${itemId}:${period}`
 }
 
+/**
+ * 幂等键按公司作用域（CODE-02 P1-01）：开局固定键 `advance` 等由各公司独立使用，
+ * 复合键避免两家公司互相命中。全局 transactionByKey 仅保留首笔供单参查询兼容。
+ */
+function companyScopedKey(companyId: string, idempotencyKey: string): string {
+  return `${companyId}\u0000${idempotencyKey}`
+}
+
 /** 结算类别由义务来源决定（§3.4 / §5.8）；不自建第二本账。 */
 function settlementCategory(item: PayableReceivable): TransactionCategory {
   if (item.direction === 'receivable') return 'sales_revenue'
@@ -93,6 +101,8 @@ export class UnifiedLedger {
   private readonly transactionById = new Map<string, LedgerTransaction>()
   /** 跨期保留（BR-7）：不随 30 天索引清理删除，供退款等跨期幂等命中。 */
   private readonly transactionByKey = new Map<string, LedgerTransaction>()
+  /** 复合键（companyId + idempotencyKey）：幂等判定按公司隔离（P1-01）。 */
+  private readonly transactionByCompanyKey = new Map<string, LedgerTransaction>()
   private readonly idempotencyIndex = new Map<string, string>()
   private readonly idempotencyDay = new Map<string, number>()
   private readonly registeredCompanies = new Map<string, number>()
@@ -174,7 +184,12 @@ export class UnifiedLedger {
     }
 
     const hit = this.transactionByKey.get(input.idempotencyKey)
-    if (hit) return ok({ transaction: hit, idempotent: true })
+    if (hit && hit.companyId === input.companyId) return ok({ transaction: hit, idempotent: true })
+    // 同名键属于其他公司（如两家公司都用固定键 advance）视为未命中，各自独立入账。
+    const scopedHit = this.transactionByCompanyKey.get(
+      companyScopedKey(input.companyId, input.idempotencyKey),
+    )
+    if (scopedHit) return ok({ transaction: scopedHit, idempotent: true })
 
     // §10.4 沙盒守卫：新增玩家授权支出被拒；既有固定结算(source=system_auto)继续。
     if (
@@ -214,7 +229,10 @@ export class UnifiedLedger {
         const added = this.transactions.slice(startLen)
         for (const tx of added) {
           this.transactionById.delete(tx.transactionId)
-          this.transactionByKey.delete(tx.idempotencyKey)
+          if (this.transactionByKey.get(tx.idempotencyKey) === tx) {
+            this.transactionByKey.delete(tx.idempotencyKey)
+          }
+          this.transactionByCompanyKey.delete(companyScopedKey(tx.companyId, tx.idempotencyKey))
           this.idempotencyIndex.delete(tx.idempotencyKey)
           this.idempotencyDay.delete(tx.idempotencyKey)
         }
@@ -239,8 +257,16 @@ export class UnifiedLedger {
     const target = this.transactionById.get(transactionId)
     if (!target) return fail(FIN_ERROR.TX_NOT_FOUND, `No transaction ${transactionId}`)
     // 幂等命中优先于"已冲销"守卫：重复提交同一退款键返回原反向交易，不双算（BR-7 / TC-04）。
-    const hit = this.transactionByKey.get(newKey)
+    const hit = this.transactionByCompanyKey.get(companyScopedKey(target.companyId, newKey))
     if (hit) return ok(hit)
+    // 同一冲销键被其他公司占用属调用方错误，不得静默复用他公司交易（P1-01）。
+    const foreign = this.transactionByKey.get(newKey)
+    if (foreign && foreign.companyId !== target.companyId) {
+      return fail(
+        FIN_ERROR.IDENTITY_MISMATCH,
+        `Idempotency key ${newKey} belongs to company ${foreign.companyId}`,
+      )
+    }
     if (target.status === 'reversed') {
       return fail(FIN_ERROR.TX_ALREADY_REVERSED, `Transaction ${transactionId} already reversed`)
     }
@@ -284,8 +310,21 @@ export class UnifiedLedger {
     const feeRefund = Math.round(-fee.amountCents * ratio)
     const opts: PostLedgerTxOptions = { allowNegativeBalance: true }
 
-    const refundHit = this.transactionByKey.get(params.refundKey)
-    const feeHit = this.transactionByKey.get(params.feeRefundKey)
+    const refundHit = this.transactionByCompanyKey.get(
+      companyScopedKey(sale.companyId, params.refundKey),
+    )
+    const feeHit = this.transactionByCompanyKey.get(
+      companyScopedKey(sale.companyId, params.feeRefundKey),
+    )
+    for (const key of [params.refundKey, params.feeRefundKey]) {
+      const foreign = this.transactionByKey.get(key)
+      if (foreign && foreign.companyId !== sale.companyId) {
+        return fail(
+          FIN_ERROR.IDENTITY_MISMATCH,
+          `Idempotency key ${key} belongs to company ${foreign.companyId}`,
+        )
+      }
+    }
     if (refundHit && (feeRefund === 0 || feeHit)) {
       return ok({
         original: sale,
@@ -295,28 +334,47 @@ export class UnifiedLedger {
         refundCashImpactCents: refundHit.amountCents + (feeHit?.amountCents ?? 0),
       })
     }
-    if (sale.status === 'reversed' || fee.status === 'reversed') {
-      return fail(FIN_ERROR.TX_ALREADY_REVERSED, 'Sale or fee already reversed')
+    // 半状态（退款已入账、手续费未入账）允许续做；由其他键完成的冲销明确拒绝。
+    if (sale.status === 'reversed' && !refundHit) {
+      return fail(FIN_ERROR.TX_ALREADY_REVERSED, 'Sale already reversed by another key')
+    }
+    if (fee.status === 'reversed' && feeRefund !== 0 && !feeHit) {
+      return fail(FIN_ERROR.TX_ALREADY_REVERSED, 'Fee already reversed by another key')
     }
 
-    const refund = this.appendReversal(
-      sale,
-      -params.refundAmountCents,
-      params.refundKey,
-      params.reason,
-      opts,
-      'customer_refund',
-      params.day,
-    )
-    if (!refund.success || !refund.result) {
-      return fail(refund.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, refund.errorMessage ?? 'refund failed')
+    let refundTx: LedgerTransaction
+    if (refundHit) {
+      refundTx = refundHit
+    } else {
+      const refund = this.appendReversal(
+        sale,
+        -params.refundAmountCents,
+        params.refundKey,
+        params.reason,
+        opts,
+        'customer_refund',
+        params.day,
+      )
+      if (!refund.success || !refund.result) {
+        return fail(refund.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, refund.errorMessage ?? 'refund failed')
+      }
+      refundTx = refund.result
     }
     if (feeRefund === 0) {
       return ok({
         original: sale,
-        reversal: refund.result,
+        reversal: refundTx,
         feeOriginal: fee,
-        refundCashImpactCents: refund.result.amountCents,
+        refundCashImpactCents: refundTx.amountCents,
+      })
+    }
+    if (feeHit) {
+      return ok({
+        original: sale,
+        reversal: refundTx,
+        feeOriginal: fee,
+        feeReversal: feeHit,
+        refundCashImpactCents: refundTx.amountCents + feeHit.amountCents,
       })
     }
     const feeRev = this.appendReversal(
@@ -333,10 +391,10 @@ export class UnifiedLedger {
     }
     return ok({
       original: sale,
-      reversal: refund.result,
+      reversal: refundTx,
       feeOriginal: fee,
       feeReversal: feeRev.result,
-      refundCashImpactCents: refund.result.amountCents + feeRev.result.amountCents,
+      refundCashImpactCents: refundTx.amountCents + feeRev.result.amountCents,
     })
   }
 
@@ -386,9 +444,17 @@ export class UnifiedLedger {
    * 逐笔校验持久化 balanceAfterCents 与重算值一致，不一致抛 LedgerInconsistentError（拒绝读档）。
    */
   replay(transactions: ReadonlyArray<LedgerTransaction>, companyIds: ReadonlyArray<string>): Map<string, Cents> {
+    // FIN-T5：读档规模上限（P3-02）。超限明确抛错，不静默截断，避免读档后状态不完整。
+    if (transactions.length > this.tuning.replayMaxTransactions) {
+      throw new FinanceError(
+        FIN_ERROR.REPLAY_LIMIT_EXCEEDED,
+        `replay ${transactions.length} transactions exceeds limit ${this.tuning.replayMaxTransactions}`,
+      )
+    }
     this.transactions = []
     this.transactionById.clear()
     this.transactionByKey.clear()
+    this.transactionByCompanyKey.clear()
     this.idempotencyIndex.clear()
     this.idempotencyDay.clear()
     this.registeredCompanies.clear()
@@ -408,6 +474,10 @@ export class UnifiedLedger {
       this.transactions.push(rebuilt)
       this.transactionById.set(rebuilt.transactionId, rebuilt)
       this.transactionByKey.set(rebuilt.idempotencyKey, rebuilt)
+      this.transactionByCompanyKey.set(
+        companyScopedKey(rebuilt.companyId, rebuilt.idempotencyKey),
+        rebuilt,
+      )
       this.idempotencyIndex.set(rebuilt.idempotencyKey, rebuilt.transactionId)
       this.idempotencyDay.set(rebuilt.idempotencyKey, rebuilt.day)
       running.set(tx.companyId, next)
@@ -427,7 +497,11 @@ export class UnifiedLedger {
     return [...this.transactions]
   }
 
-  getTransactionByKey(key: string): LedgerTransaction | undefined {
+  /** 单参查询保留全局语义（兼容既有调用）；传 companyId 时按公司作用域精确查询（P1-01）。 */
+  getTransactionByKey(key: string, companyId?: string): LedgerTransaction | undefined {
+    if (companyId !== undefined) {
+      return this.transactionByCompanyKey.get(companyScopedKey(companyId, key))
+    }
     return this.transactionByKey.get(key)
   }
 
@@ -450,6 +524,11 @@ export class UnifiedLedger {
   setSandboxObserved(companyId: string, enabled: boolean): void {
     if (enabled) this.sandboxCompanies.add(companyId)
     else this.sandboxCompanies.delete(companyId)
+  }
+
+  /** 只读查询沙盒态：供 createCommitment 等上游在新建义务前校验（P2-03）。 */
+  isSandboxObserved(companyId: string): boolean {
+    return this.sandboxCompanies.has(companyId)
   }
 
   // ===== 内部：唯一 append 路径 =====
@@ -475,6 +554,7 @@ export class UnifiedLedger {
     this.transactions.push(tx)
     this.transactionById.set(tx.transactionId, tx)
     this.transactionByKey.set(tx.idempotencyKey, tx)
+    this.transactionByCompanyKey.set(companyScopedKey(tx.companyId, tx.idempotencyKey), tx)
     this.idempotencyIndex.set(tx.idempotencyKey, tx.transactionId)
     this.idempotencyDay.set(tx.idempotencyKey, tx.day)
     this.pruneIdempotency(tx.day)
@@ -490,8 +570,15 @@ export class UnifiedLedger {
     category: TransactionCategory = target.category,
     day: number = target.day,
   ): CommandResult<LedgerTransaction> {
-    const hit = this.transactionByKey.get(newKey)
+    const hit = this.transactionByCompanyKey.get(companyScopedKey(target.companyId, newKey))
     if (hit) return ok(hit)
+    const foreign = this.transactionByKey.get(newKey)
+    if (foreign && foreign.companyId !== target.companyId) {
+      return fail(
+        FIN_ERROR.IDENTITY_MISMATCH,
+        `Idempotency key ${newKey} belongs to company ${foreign.companyId}`,
+      )
+    }
 
     const prev = this.sumTransactions(target.companyId)
     if (prev + signedAmount < 0 && options.allowNegativeBalance !== true) {

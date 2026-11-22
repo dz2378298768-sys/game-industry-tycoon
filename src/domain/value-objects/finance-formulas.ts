@@ -23,16 +23,28 @@ export interface AvailableCashInput {
   commitments: ReadonlyArray<BudgetCommitment>
   payables: ReadonlyArray<PayableReceivable>
   receivables: ReadonlyArray<ReceivableInput>
+  /** 预测窗口月数；缺省取注入的 tuning.horizonMonths（§6.2 仅扣 horizon 内周期）。 */
+  horizonMonths?: number
+  /** horizon 起点（YYYY-MM）；缺省取最早承诺起始月。 */
+  startMonth?: string | undefined
 }
 
 /**
- * §6.2 AvailableCash = 账面现金 − 未兑现承诺 − 未结算应付 (+ 高置信应收，FIN-T2 可选)。
+ * §6.2 AvailableCash = 账面现金 − 未兑现承诺（horizon 内） − 未结算应付 (+ 高置信应收，FIN-T2)。
  * 这是玩家"真正能动用的钱"；同时是 §6.1 CumAvailable(0) 的起点。
+ * horizon 截断（P2-01）：长周期承诺只扣窗口内剩余周期，不再把窗口外支出提前扣光。
  */
 export function computeAvailableCash(input: AvailableCashInput, tuning: FinanceTuning): number {
   let available = input.cashBalanceCents
+  const horizon = input.horizonMonths ?? tuning.horizonMonths
+  const anchor = input.startMonth ?? earliestCommitmentMonth(input.commitments)
+  const windowEnd = anchor === undefined ? undefined : monthKeyFromOffset(anchor, Math.max(0, horizon - 1))
   for (const c of input.commitments) {
-    if (c.state !== 'cancelled') available -= remainingPlannedCents(c)
+    if (c.state === 'cancelled') continue
+    available -=
+      anchor === undefined || windowEnd === undefined
+        ? remainingPlannedCents(c)
+        : commitmentRemainingInWindow(c, anchor, windowEnd)
   }
   for (const p of input.payables) {
     if (p.state !== 'settled' && p.state !== 'written_off') {
@@ -48,6 +60,43 @@ export function computeAvailableCash(input: AvailableCashInput, tuning: FinanceT
     }
   }
   return available
+}
+
+/** 最早承诺起始月（horizon 缺省锚点）；无承诺返回 undefined。 */
+function earliestCommitmentMonth(commitments: ReadonlyArray<BudgetCommitment>): string | undefined {
+  let earliest: string | undefined
+  for (const c of commitments) {
+    if (c.state === 'cancelled') continue
+    const month = monthKeyOf(c.startAt)
+    if (earliest === undefined || month < earliest) earliest = month
+  }
+  return earliest
+}
+
+/** YYYY-MM → 连续月序（用于区间重叠计数）。 */
+function monthIndex(monthKey: string): number {
+  const [year, month] = monthKey.split('-').map(Number)
+  return (year ?? 1970) * 12 + ((month ?? 1) - 1)
+}
+
+/**
+ * 承诺落在 [windowStart, windowEnd] 内的未兑现额：按已兑现周期数跳过早期周期，
+ * 再与窗口求交，最后以 remainingPlannedCents 封顶（防止超过累计上限）。
+ */
+function commitmentRemainingInWindow(
+  c: BudgetCommitment,
+  windowStart: string,
+  windowEnd: string,
+): number {
+  if (c.amountCents <= 0) return 0
+  const startIdx = monthIndex(monthKeyOf(c.startAt))
+  const endIdx = c.period === 'one_off' ? startIdx : monthIndex(monthKeyOf(c.endAt))
+  const realizedPeriods = Math.min(c.periodCount, Math.floor(c.realizedCents / c.amountCents))
+  const firstOpen = startIdx + realizedPeriods
+  const from = Math.max(firstOpen, monthIndex(windowStart))
+  const to = Math.min(endIdx, monthIndex(windowEnd))
+  const periods = Math.max(0, to - from + 1)
+  return Math.min(periods * c.amountCents, remainingPlannedCents(c))
 }
 
 export interface RunwayInput {
@@ -120,7 +169,8 @@ export interface ForecastInput {
   companyId: string
   asOfDay: number
   cashBalanceCents: number
-  horizonMonths: number
+  /** 预测窗口月数；缺省取 tuning.horizonMonths（P3-02 消除死参数）。 */
+  horizonMonths?: number
   commitments: ReadonlyArray<BudgetCommitment>
   payables: ReadonlyArray<PayableReceivable>
   receivables: ReadonlyArray<ReceivableInput>
@@ -135,9 +185,10 @@ export interface ForecastInput {
  * 系数方向保证 low ≤ expected ≤ high。lowCashDate 取 low 带首次跌破警告线之月。
  */
 export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning): CashForecast {
+  const horizonMonths = input.horizonMonths ?? tuning.horizonMonths
   const months: string[] = []
   const anchor = input.expectedInflowsByMonth[0]?.month ?? monthKeyOf(input.asOfDay)
-  for (let i = 0; i < input.horizonMonths; i++) months.push(monthKeyFromOffset(anchor, i))
+  for (let i = 0; i < horizonMonths; i++) months.push(monthKeyFromOffset(anchor, i))
 
   const inflowByMonth = new Map(input.expectedInflowsByMonth.map((x) => [x.month, x.amountCents]))
   const extraPayable = new Map((input.expectedPayablesByMonth ?? []).map((x) => [x.month, x.amountCents]))
@@ -148,7 +199,11 @@ export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning)
   }))
   const projectedOutflows: ForecastFlowItem[] = months.map((month) => ({
     month,
-    amountCents: committedBurnForMonth(input.commitments, month) + (extraPayable.get(month) ?? 0),
+    // §3.5「含承诺支出、应付到期」：与 netCashByMonth 的 ExpectedPayable 同口径（P2-02）。
+    amountCents:
+      committedBurnForMonth(input.commitments, month) +
+      payableDueForMonth(input.payables, month) +
+      (extraPayable.get(month) ?? 0),
     source: 'committed_and_payable', confidence: 1,
   }))
 
@@ -174,12 +229,19 @@ export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning)
     if (lowCashDate === null && low < tuning.cashWarningThresholdCents) lowCashDate = month
   }
 
-  const availableCash = computeAvailableCash(input, tuning)
+  const availableCash = computeAvailableCash({
+    cashBalanceCents: input.cashBalanceCents,
+    commitments: input.commitments,
+    payables: input.payables,
+    receivables: input.receivables,
+    horizonMonths,
+    startMonth: months[0],
+  }, tuning)
   return {
     forecastId: input.forecastId,
     companyId: input.companyId,
     asOfDate: input.asOfDay,
-    horizonMonths: input.horizonMonths,
+    horizonMonths,
     projectedInflows,
     projectedOutflows,
     netCashByMonth,
@@ -187,7 +249,7 @@ export function computeCashForecast(input: ForecastInput, tuning: FinanceTuning)
       availableCashCents: availableCash,
       commitments: input.commitments,
       expectedInflowsByMonth: input.expectedInflowsByMonth,
-      horizonMonths: input.horizonMonths,
+      horizonMonths,
       startMonth: months[0],
     }),
     lowCashDate,

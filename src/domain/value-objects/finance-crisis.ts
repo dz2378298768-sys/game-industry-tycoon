@@ -289,7 +289,8 @@ export function enterSandbox(current: CrisisState, day: number): CrisisState {
 
 /**
  * F-09 读档恢复：以持久化的 CrisisState 为准，**不**用当前 TUNING 重推等级。
- * 仅校验必要字段（crisisRulesVersion / 状态合法性）；返回原对象（不改 state/deadline）。
+ * 校验必要字段（crisisRulesVersion / 状态合法性 / critical 截止日 / 重整-破产后果）；
+ * 返回原对象（不改 state/deadline）。
  */
 export function restoreCrisisState(persisted: CrisisState): CrisisState {
   if (!persisted.crisisRulesVersion) {
@@ -301,6 +302,28 @@ export function restoreCrisisState(persisted: CrisisState): CrisisState {
   // 非健康态须带原因码（§3.8）
   if (persisted.state !== 'healthy' && persisted.reasonCodes.length === 0) {
     throw new InvalidCrisisTransitionError(persisted.state, 'restore', 'missing reasonCodes')
+  }
+  // §3.6：critical 起 remediationDeadline 必填（P3-01），否则非法存档被静默接受。
+  if (persisted.state === 'critical' && persisted.remediationDeadline === null) {
+    throw new InvalidCrisisTransitionError(
+      persisted.state,
+      'restore',
+      'critical requires remediationDeadline',
+    )
+  }
+  // §3.6 / §8.5：进入 restructuring/bankrupt 必须留下结构化后果（非空且至少一项实质）。
+  if (persisted.state === 'restructuring' || persisted.state === 'bankrupt') {
+    const c = persisted.restructuringConsequences
+    const substantive =
+      c !== null &&
+      (c.debtCents > 0 || c.assetChanges.length > 0 || c.talentLoss > 0 || c.controlChange !== 'none')
+    if (!substantive) {
+      throw new InvalidCrisisTransitionError(
+        persisted.state,
+        'restore',
+        'restructuring/bankrupt requires restructuringConsequences',
+      )
+    }
   }
   return { ...persisted, history: [...persisted.history] }
 }

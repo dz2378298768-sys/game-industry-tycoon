@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { UnifiedLedger } from '@domain/entities/finance'
-import { LedgerInconsistentError } from '@domain/entities/finance'
+import { FIN_ERROR, FinanceError, LedgerInconsistentError } from '@domain/entities/finance'
 import { makeLedger, makeInput, postAdvance, DAY } from './finance-fixtures'
 
 describe('TC-01 / INV-1：唯一现金入口与派生余额（F-01 方案 a）', () => {
@@ -273,5 +273,151 @@ describe('TC-16 / §10.5：读档重放与一致性', () => {
     expect(b.result!.item.settledCents).toBe(300)
     expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === key)).toHaveLength(1)
     expect(ledger.getCashBalance('c1')).toBe(700)
+  })
+})
+
+describe('CODE-02 C-1：幂等键按公司隔离（P1-01）', () => {
+  it('两家公司同用固定键 advance：各自到账并返回自身交易', () => {
+    const ledger = makeLedger()
+    const c1 = postAdvance(ledger, 'c1', 1_000_000, 0)
+    const c2 = postAdvance(ledger, 'c2', 1_000_000, 0)
+    expect(c1.success && c2.success).toBe(true)
+    expect(c2.result!.idempotent).toBe(false)
+    expect(c2.result!.transaction.companyId).toBe('c2')
+    expect(c2.result!.transaction.transactionId).not.toBe(c1.result!.transaction.transactionId)
+    expect(ledger.getCashBalance('c1')).toBe(1_000_000)
+    expect(ledger.getCashBalance('c2')).toBe(1_000_000)
+    // 同公司重复提交仍幂等
+    const again = postAdvance(ledger, 'c2', 1_000_000, 0)
+    expect(again.result!.idempotent).toBe(true)
+    expect(again.result!.transaction.transactionId).toBe(c2.result!.transaction.transactionId)
+    expect(ledger.getCashBalance('c2')).toBe(1_000_000)
+  })
+
+  it('冲销键被其他公司占用 → FIN_IDEMPOTENCY_KEY_MISMATCH，不串账', () => {
+    const ledger = makeLedger()
+    const a = postAdvance(ledger, 'c1', 1_000_000, 0).result!.transaction
+    const b = postAdvance(ledger, 'c2', 1_000_000, 0).result!.transaction
+    const first = ledger.reverseTransaction(a.transactionId, '退款', 'refund:shared', { allowNegativeBalance: true })
+    expect(first.success).toBe(true)
+    const second = ledger.reverseTransaction(b.transactionId, '退款', 'refund:shared', { allowNegativeBalance: true })
+    expect(second.success).toBe(false)
+    expect(second.errorCode).toBe(FIN_ERROR.IDENTITY_MISMATCH)
+    expect(ledger.getCashBalance('c1')).toBe(0)
+    expect(ledger.getCashBalance('c2')).toBe(1_000_000)
+  })
+
+  it('refundSale 退款/手续费键被其他公司占用 → FIN_IDEMPOTENCY_KEY_MISMATCH', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 100_000, 0)
+    postAdvance(ledger, 'c2', 100_000, 0)
+    const sale1 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:c1', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: 'c1 销售',
+    })).result!.transaction
+    const fee1 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'fee:c1', companyId: 'c1', day: 1,
+      category: 'platform_fee', amountCents: -2_000, description: 'c1 抽成',
+    })).result!.transaction
+    const sale2 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale:c2', companyId: 'c2', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: 'c2 销售',
+    })).result!.transaction
+    const fee2 = ledger.postTransaction(makeInput({
+      idempotencyKey: 'fee:c2', companyId: 'c2', day: 1,
+      category: 'platform_fee', amountCents: -2_000, description: 'c2 抽成',
+    })).result!.transaction
+
+    const okRefund = ledger.refundSale({
+      saleTxId: sale1.transactionId, feeTxId: fee1.transactionId,
+      refundAmountCents: 10_000, refundKey: 'refund:shared', feeRefundKey: 'feeRefund:shared',
+      reason: 'c1 退款', day: 5,
+    })
+    expect(okRefund.success).toBe(true)
+    const blocked = ledger.refundSale({
+      saleTxId: sale2.transactionId, feeTxId: fee2.transactionId,
+      refundAmountCents: 10_000, refundKey: 'refund:shared', feeRefundKey: 'feeRefund:shared',
+      reason: 'c2 退款', day: 5,
+    })
+    expect(blocked.success).toBe(false)
+    expect(blocked.errorCode).toBe(FIN_ERROR.IDENTITY_MISMATCH)
+    expect(ledger.getCashBalance('c1')).toBe(100_000)
+    expect(ledger.getCashBalance('c2')).toBe(108_000)
+  })
+})
+
+describe('CODE-02 C-3：结算守卫 / 退款半状态 / replay 上限（P3-02、P3-03）', () => {
+  it('重复结算传入已结算对象：remaining 守卫拒绝，不新增交易', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 1_000, 0)
+    const item = {
+      itemId: 'ap-1', direction: 'payable' as const, companyId: 'c1',
+      counterpartyId: 'vendor', amountCents: 300, settledCents: 0, dueDate: 30,
+      sourceRef: 'contract-1', state: 'open' as const, settlementTxIds: [],
+    }
+    const first = ledger.settleItem(item, 300, 'settle:ap-1:2026-01', 30)
+    expect(first.success).toBe(true)
+    const settled = first.result!.item
+    expect(settled.settledCents).toBe(300)
+    const replay = ledger.settleItem(settled, 300, 'settle:ap-1:2026-01', 30)
+    expect(replay.success).toBe(false)
+    expect(replay.errorCode).toBe(FIN_ERROR.PAYABLE_OVER_SETTLED)
+    expect(ledger.getAllTransactions().filter((t) => t.idempotencyKey === 'settle:ap-1:2026-01')).toHaveLength(1)
+    expect(ledger.getCashBalance('c1')).toBe(700)
+  })
+
+  it('退款半状态（refund 已入账、fee 未入账）续做手续费冲回，不重复退款', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 100_000, 0)
+    const sale = ledger.postTransaction(makeInput({
+      idempotencyKey: 'sale', companyId: 'c1', day: 1,
+      category: 'sales_revenue', amountCents: 10_000, description: '销售',
+    })).result!.transaction
+    const fee = ledger.postTransaction(makeInput({
+      idempotencyKey: 'fee', companyId: 'c1', day: 1,
+      category: 'platform_fee', amountCents: -2_000, description: '抽成',
+    })).result!.transaction
+
+    // 构造半状态：先用同一退款键完成销售冲销（等同上次退款中断在 fee 之前）
+    const partial = ledger.reverseTransaction(sale.transactionId, '早先退款', 'r:sale', { allowNegativeBalance: true })
+    expect(partial.success).toBe(true)
+    expect(sale.status).toBe('reversed')
+
+    const resumed = ledger.refundSale({
+      saleTxId: sale.transactionId, feeTxId: fee.transactionId,
+      refundAmountCents: 10_000, refundKey: 'r:sale', feeRefundKey: 'r:fee',
+      reason: '续做退款', day: 5,
+    })
+    expect(resumed.success).toBe(true)
+    expect(resumed.result!.reversal.transactionId).toBe(partial.result!.transactionId)
+    expect(resumed.result!.feeReversal!.amountCents).toBe(2_000)
+    expect(resumed.result!.refundCashImpactCents).toBe(-8_000) // −10_000 +2_000
+    expect(ledger.getCashBalance('c1')).toBe(100_000)
+    // 再次调用两键均命中，幂等不双算
+    const again = ledger.refundSale({
+      saleTxId: sale.transactionId, feeTxId: fee.transactionId,
+      refundAmountCents: 10_000, refundKey: 'r:sale', feeRefundKey: 'r:fee',
+      reason: '重复', day: 5,
+    })
+    expect(again.result!.refundCashImpactCents).toBe(-8_000)
+    expect(ledger.getCashBalance('c1')).toBe(100_000)
+  })
+
+  it('replay 超过 tuning.replayMaxTransactions → 明确抛 FIN_REPLAY_LIMIT_EXCEEDED', () => {
+    const ledger = makeLedger()
+    postAdvance(ledger, 'c1', 1_000, 0)
+    ledger.postTransaction(makeInput({
+      idempotencyKey: 'salary', companyId: 'c1', day: 1,
+      category: 'salary', amountCents: -200, description: '月薪',
+    }))
+    const txs = ledger.getAllTransactions()
+    const limited = makeLedger({ replayMaxTransactions: 1 })
+    try {
+      limited.replay(txs, ['c1'])
+      throw new Error('expected replay limit error')
+    } catch (e) {
+      expect(e).toBeInstanceOf(FinanceError)
+      expect((e as FinanceError).code).toBe(FIN_ERROR.REPLAY_LIMIT_EXCEEDED)
+    }
   })
 })

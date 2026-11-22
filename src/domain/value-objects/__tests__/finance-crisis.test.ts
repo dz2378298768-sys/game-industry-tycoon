@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   createHealthyCrisisState,
+  InvalidCrisisTransitionError,
   RestructuringConsequenceRequiredError,
   UnifiedLedger,
   type CrisisSignals,
@@ -199,5 +200,34 @@ describe('TC-22 / F-09：危机态读档无漂移', () => {
   it('同版本下窗口耗尽且负现金未解 → 一致性校验失败（可拒绝读档）', () => {
     const c = transitionCrisis(crisis(), signals({ cashBalanceCents: -100, today: 0 }), T)
     expect(verifyCrisisAgainstRules(c, signals({ cashBalanceCents: -100, today: 60 }), T)).toBe(false)
+  })
+})
+
+describe('CODE-02 C-3：读档必填字段校验（P3-01 / §3.6）', () => {
+  it('critical 缺 remediationDeadline → 拒绝读档', () => {
+    const critical: CrisisState = {
+      ...crisis(), state: 'critical', reasonCodes: ['NEGATIVE_CASH'], remediationDeadline: null,
+    }
+    expect(() => restoreCrisisState(critical)).toThrow(InvalidCrisisTransitionError)
+    expect(restoreCrisisState({ ...critical, remediationDeadline: 60 }).remediationDeadline).toBe(60)
+  })
+
+  it('restructuring / bankrupt 缺结构化后果或后果为空 → 拒绝读档', () => {
+    const restructuring: CrisisState = {
+      ...crisis(), state: 'restructuring', reasonCodes: ['NEGATIVE_CASH'],
+      remediationDeadline: 60, phase: 'restructuring', restructuringConsequences: null,
+    }
+    expect(() => restoreCrisisState(restructuring)).toThrow(InvalidCrisisTransitionError)
+
+    const bankruptEmpty: CrisisState = {
+      ...crisis(), state: 'bankrupt', reasonCodes: ['NEGATIVE_CASH'],
+      phase: 'winddown', restructuringConsequences: consequences(),
+    }
+    expect(() => restoreCrisisState(bankruptEmpty)).toThrow(InvalidCrisisTransitionError)
+
+    const bankruptValid: CrisisState = {
+      ...bankruptEmpty, restructuringConsequences: consequences({ debtCents: 500 }),
+    }
+    expect(restoreCrisisState(bankruptValid).state).toBe('bankrupt')
   })
 })

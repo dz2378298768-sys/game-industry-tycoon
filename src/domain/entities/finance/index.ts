@@ -38,6 +38,7 @@ export {
   InvalidCrisisTransitionError,
   RestructuringConsequenceRequiredError,
   SandboxPlayerExpenseBlockedError,
+  SandboxCommitmentBlockedError,
   InsufficientCashError,
 } from './errors'
 export type { FinanceErrorCode } from './errors'

@@ -231,3 +231,58 @@ describe('TC-11：HRB 只读消费（不改四通道、不消费 qualityCeilingB
     expect(hrbResult.costEst).toBe(500)
   })
 })
+
+describe('CODE-02 C-2：AvailableCash horizon 截断（P2-01）', () => {
+  it('23 个月长周期承诺 horizon 6：只扣窗口内 6 期，不再扣满 2,300,000', () => {
+    const long = createCommitment({
+      commitmentId: 'cm-23', companyId: 'c1', sourceType: 'employment_salary',
+      sourceRef: 'emp', amountCents: 100_000, period: 'monthly',
+      startAt: d(1), endAt: gregorianToDayIndex(2027, 11, 1),
+    })
+    expect(long.periodCount).toBe(23)
+    expect(remainingPlannedCents(long)).toBe(2_300_000)
+    const available = computeAvailableCash({
+      cashBalanceCents: 3_000_000, commitments: [long], payables: [], receivables: [],
+      horizonMonths: 6, startMonth: '2026-01',
+    }, T)
+    expect(available).toBe(2_400_000) // 3,000,000 − 6×100,000
+    // 已兑现 3 期后，窗口内只剩第 4..6 期
+    const partially = { ...long, realizedCents: 300_000 }
+    expect(computeAvailableCash({
+      cashBalanceCents: 3_000_000, commitments: [partially], payables: [], receivables: [],
+      horizonMonths: 6, startMonth: '2026-01',
+    }, T)).toBe(2_700_000)
+  })
+})
+
+describe('CODE-02 C-2：projectedOutflows 并入应付到期（P2-02）', () => {
+  it('承诺 200,000 + 应付 100,000 → outflow 300,000，与 expected 三带同口径', () => {
+    const f = computeCashForecast({
+      forecastId: 'f-pay', companyId: 'c1', asOfDay: d(1), cashBalanceCents: 1_000_000,
+      horizonMonths: 1, commitments: [commitment(200_000, 1)],
+      payables: [payable(100_000, d(1))], receivables: [],
+      expectedInflowsByMonth: [{ month: '2026-01', amountCents: 0 }],
+    }, T)
+    expect(f.projectedOutflows[0]!.amountCents).toBe(300_000)
+    expect(f.projectedOutflows[0]!.source).toBe('committed_and_payable')
+    expect(f.netCashByMonth[0]!.expectedCents).toBe(1_000_000 - 300_000)
+  })
+})
+
+describe('CODE-02 C-3：horizonMonths TUNING 缺省生效（P3-02）', () => {
+  it('未传 horizonMonths 时取 tuning.horizonMonths，预测窗口与返回值一致', () => {
+    const f = computeCashForecast({
+      forecastId: 'f-default', companyId: 'c1', asOfDay: d(1), cashBalanceCents: 1_000_000,
+      commitments: [], payables: [], receivables: [], expectedInflowsByMonth: [],
+    }, T)
+    expect(f.horizonMonths).toBe(T.horizonMonths)
+    expect(f.netCashByMonth).toHaveLength(T.horizonMonths)
+    const custom = withFinanceTuningOverrides({ horizonMonths: 3 })
+    const f3 = computeCashForecast({
+      forecastId: 'f-custom', companyId: 'c1', asOfDay: d(1), cashBalanceCents: 1_000_000,
+      commitments: [], payables: [], receivables: [], expectedInflowsByMonth: [],
+    }, custom)
+    expect(f3.horizonMonths).toBe(3)
+    expect(f3.netCashByMonth).toHaveLength(3)
+  })
+})

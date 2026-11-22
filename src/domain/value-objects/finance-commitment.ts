@@ -10,6 +10,7 @@ import type { CommandResult } from '@domain/types'
 import { fail, ok } from '@domain/types'
 import {
   CommitmentOverRealizedError,
+  SandboxCommitmentBlockedError,
   FIN_ERROR,
   type BudgetCommitment,
   type CommitmentPeriod,
@@ -62,8 +63,25 @@ export interface CreateCommitmentInput {
   endAt: number
 }
 
-/** 创建承诺：固化 periodCount / totalPlannedCents；**不提交交易，不改现金**（BR-3）。 */
-export function createCommitment(input: CreateCommitmentInput): BudgetCommitment {
+export interface CreateCommitmentOptions {
+  /** 账本沙盒观察态：true 时拒绝新建承诺（§10.4「停止新增义务」，P2-03）。 */
+  sandboxActive?: boolean
+  /** 只读沙盒查询（可直接传 UnifiedLedger）；显式 sandboxActive 优先。 */
+  ledger?: Pick<UnifiedLedger, 'isSandboxObserved'>
+}
+
+/**
+ * 创建承诺：固化 periodCount / totalPlannedCents；**不提交交易，不改现金**（BR-3）。
+ * 沙盒观察态下拒绝新建义务并抛 FIN_SANDBOX_COMMITMENT_BLOCKED（§10.4）。
+ */
+export function createCommitment(
+  input: CreateCommitmentInput,
+  options: CreateCommitmentOptions = {},
+): BudgetCommitment {
+  const sandboxActive =
+    options.sandboxActive === true ||
+    (options.ledger?.isSandboxObserved(input.companyId) ?? false)
+  if (sandboxActive) throw new SandboxCommitmentBlockedError(input.companyId)
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new CommitmentOverRealizedError(input.commitmentId, 0, input.amountCents, 0)
   }
@@ -158,7 +176,7 @@ export function realizeCommitment(input: RealizeCommitmentInput): CommandResult<
   const periodKey = c.period === 'monthly' ? monthKeyOf(input.day) : 'one_off'
   const key = commitmentIdempotencyKey(c.commitmentId, periodKey)
 
-  const existing = input.ledger.getTransactionByKey(key)
+  const existing = input.ledger.getTransactionByKey(key, c.companyId)
   if (existing) {
     return ok({
       commitment: c, transaction: existing, idempotent: true,

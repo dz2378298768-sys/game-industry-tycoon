@@ -20,9 +20,11 @@ export const FIN_ERROR = {
   CONSEQUENCE_REQUIRED: 'FIN_RESTRUCTURING_CONSEQUENCE_REQUIRED',
   CRISIS_RULES_VERSION_REQUIRED: 'FIN_CRISIS_RULES_VERSION_REQUIRED',
   SANDBOX_PLAYER_EXPENSE_BLOCKED: 'FIN_SANDBOX_PLAYER_EXPENSE_BLOCKED',
+  SANDBOX_COMMITMENT_BLOCKED: 'FIN_SANDBOX_COMMITMENT_BLOCKED',
   REMEDY_PRECONDITION_FAILED: 'FIN_REMEDY_PRECONDITION_FAILED',
   REFUND_FEE_TX_NOT_FOUND: 'FIN_REFUND_FEE_TX_NOT_FOUND',
   IDENTITY_MISMATCH: 'FIN_IDEMPOTENCY_KEY_MISMATCH',
+  REPLAY_LIMIT_EXCEEDED: 'FIN_REPLAY_LIMIT_EXCEEDED',
 } as const
 
 export type FinanceErrorCode = (typeof FIN_ERROR)[keyof typeof FIN_ERROR]
@@ -73,6 +75,16 @@ export class RestructuringConsequenceRequiredError extends FinanceError {
 export class SandboxPlayerExpenseBlockedError extends FinanceError {
   constructor() {
     super(FIN_ERROR.SANDBOX_PLAYER_EXPENSE_BLOCKED, 'sandbox_observe blocks new player_authorized expenses')
+  }
+}
+
+/** 沙盒观察态禁止新建 BudgetCommitment（§10.4「停止新增义务」）。 */
+export class SandboxCommitmentBlockedError extends FinanceError {
+  constructor(companyId: string) {
+    super(
+      FIN_ERROR.SANDBOX_COMMITMENT_BLOCKED,
+      `sandbox_observe blocks new BudgetCommitment for company ${companyId}`,
+    )
   }
 }
 

@@ -44,18 +44,6 @@ export function remediesForLevel(level: CrisisLevel): Remedy[] {
   }
 }
 
-/** 空后果模板（内部占位；写入前必须由 assertConsequences 校验至少一项实质后果）。 */
-function emptyConsequences(summary: string): RestructuringConsequences {
-  return {
-    debtCents: 0,
-    assetChanges: [],
-    reputationDelta: 0,
-    talentLoss: 0,
-    controlChange: 'none',
-    summary,
-  }
-}
-
 /** TC-14 判据：至少 debtCents>0 / assetChanges 非空 / talentLoss>0 / controlChange≠none 之一。 */
 export function assertConsequences(c: RestructuringConsequences | null | undefined): void {
   if (!c) throw new RestructuringConsequenceRequiredError()

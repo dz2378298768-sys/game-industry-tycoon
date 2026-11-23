@@ -13,6 +13,7 @@ vi.mock('idb-keyval', () => ({
 import { Deliver } from '@ui/pages/deliver'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
+import { P1_UI_TUNING } from '@content/p1-ui-tuning'
 
 /** P-09 交付与上市页验收：A-24/A-25 U3 失败原因持久、A-26 无 demo、R-5 定价三档、A-42 披露确认。 */
 describe('P-09 交付与上市页（批次 07B）', () => {
@@ -65,6 +66,27 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     }
     const pending = (container.textContent?.match(/NUMERIC_PENDING_P2/g) ?? []).length
     expect(pending).toBeGreaterThanOrEqual(6)
+    expect(screen.queryByTestId('deliver-custom-price')).toBeNull()
+  })
+
+  it('W5-C3：三档数值保持 null 硬占位（无权威档位映射，禁止臆造终值），营销预算档同理', () => {
+    // ADJ-2026-11-24-19 §1 C3：referencePriceCents + basePurchaseConversion 无权威三档换算公式，
+    // 既有 TUNING 也无营销 dailyBudget 档位字段；故 fail-closed 保持，登记 OPEN-W5-C3-01。
+    const { pricingTiers, marketingBudgetTiers } = P1_UI_TUNING.delivery
+    expect(pricingTiers.map((t) => t.id)).toEqual(['low', 'medium', 'high'])
+    expect(marketingBudgetTiers.map((t) => t.id)).toEqual(['low', 'medium', 'high'])
+    for (const tier of pricingTiers) {
+      expect(tier.priceCents).toBeNull()
+      expect(tier.status).toBe('NUMERIC_PENDING_P2')
+    }
+    for (const tier of marketingBudgetTiers) {
+      expect(tier.dailyBudgetCents).toBeNull()
+      expect(tier.status).toBe('NUMERIC_PENDING_P2')
+    }
+    // UI 逐档显示"数值待标定"，且不渲染任何自定义价格输入框
+    const { container } = renderDeliver()
+    const pendingLabels = container.textContent?.match(/数值待标定/g) ?? []
+    expect(pendingLabels.length).toBeGreaterThanOrEqual(6)
     expect(screen.queryByTestId('deliver-custom-price')).toBeNull()
   })
 

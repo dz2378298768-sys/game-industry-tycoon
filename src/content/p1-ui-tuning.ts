@@ -19,7 +19,21 @@ export const P1_UI_TUNING = {
     affinityBandMedium: 0.6,
   },
 
-  /** ADJ-12 S9-1 / ADJ-16 R-5：定价三档名称固定，数值待第五波数值 Agent 标定。 */
+  /**
+   * ADJ-12 S9-1 / ADJ-16 R-5 / ADJ-2026-11-24-19 §1 C3：定价三档名称固定，
+   * 数值保持 NUMERIC_PENDING_P2 硬占位，UI fail-closed 显示"数值待标定"。
+   *
+   * W5-C3 派生可行性核查（不臆造终值）：
+   *  - `referencePriceCents(genre, platform, segment)`（c1-content.ts:212）是单一组合的
+   *    权威参考价，用于需求池 value=clamp(ref/price,0.5,1.5)，**没有** low/medium/high
+   *    三档到该参考价的权威映射（ADJ-12 S9-1 仅"引用 p0 §4.3 区间取整"而规格未给区间数值）；
+   *  - `basePurchaseConversion=0.05` 是购买转化率，不是价格倍率，不能据此把参考价换算成三档；
+   *  - 交付页立项的 audienceSegmentIds / targetPlatformIds 可能为空，缺具体组合时按 C3 明示
+   *    保持占位并登记 OPEN。
+   *  - 营销预算档 × 单渠道（S9-2）在既有 TUNING 中无对应 dailyBudgetCents 字段
+   *    （`marketingResponseScaleCents` 是生命周期阶段响应尺度，非预算档，语义不符）。
+   * 结论：本批不派生、不填值，保持 fail-closed + OPEN（OPEN-W5-C3-01），上报主 AI 裁定。
+   */
   delivery: {
     pricingTiers: [
       { id: 'low', labelKey: 'deliver.pricing.low', priceCents: null, status: 'NUMERIC_PENDING_P2' },

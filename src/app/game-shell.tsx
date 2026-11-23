@@ -11,10 +11,11 @@ import { Products } from '@ui/pages/products'
 import { ProductDetail } from '@ui/pages/product-detail'
 import { Market } from '@ui/pages/market'
 import { Deliver } from '@ui/pages/deliver'
+import { Review } from '@ui/pages/review'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
 
-type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver'
+type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver' | 'review'
 
 interface NavItem { key: Route; label: string }
 
@@ -27,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'newProject', label: t('nav.newProject') },
   { key: 'finance', label: t('nav.finance') },
   { key: 'products', label: t('nav.products') },
+  { key: 'review', label: t('nav.review') },
 ]
 
 const SPEEDS: { value: CalendarSpeed; label: string }[] = [
@@ -100,6 +102,7 @@ export const GameShell: React.FC = () => {
       case 'products': return <Products onNavigate={handleNavigate} />
       case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />
       case 'deliver': return deliverProjectId ? <Deliver projectId={deliverProjectId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
+      case 'review': return <Review onNavigate={handleNavigate} />
       default: return <Overview onNavigate={handleNavigate} />
     }
   }

@@ -122,9 +122,22 @@ export const DescopeDialog: React.FC<Props> = ({
               preview.savedBudgetCents === null ? '—' : formatMoneyDisplay(preview.savedBudgetCents),
             )}
           </p>
-          <p className="muted" style={{ margin: '4px 0' }}>
-            {t('project.descope.preview.quality').replace('{level}', String(preview.qualityCeiling))}
-          </p>
+          {/* FIX-6：五维质量目标逐项展示，不合成均值 */}
+          <table className="data-table" data-testid="descope-quality-targets" style={{ margin: '8px 0' }}>
+            <thead>
+              <tr>
+                <th colSpan={2} style={{ fontSize: 12 }}>{t('project.descope.preview.qualityHeader')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(Object.keys(preview.newQuality) as Array<keyof typeof preview.newQuality>).map((k) => (
+                <tr key={k}>
+                  <td>{t(`project.quality.${k}`)}</td>
+                  <td>{preview.newQuality[k]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           {preview.qaReset && (
             <p className="muted" style={{ margin: '4px 0' }}>
               {t('project.descope.preview.qaReset')}

@@ -91,7 +91,7 @@ export const GameShell: React.FC = () => {
         <h1>{t('app.title')}</h1>
         <div className="day-label">{formatDay(dayIndex)}</div>
         <div className="day-label" style={{ color: '#c9a865' }}>💰 {formatMoney(company?.cashBalanceCents ?? 0)}</div>
-        <div className="day-label" style={{ color: '#9ab7d3' }}>🏷️ {Math.round(company?.brand ?? 0)}</div>
+        {/* FIX-5 / ADJ-16 R-3：Brand 玩法面 v1 隐藏；入口代码保留，恢复时按 ADJ-16 R-3 处理 */}
         <div className="controls">
           {SPEEDS.map(s => (
             <button

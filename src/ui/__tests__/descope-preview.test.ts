@@ -6,12 +6,17 @@ import { makeUiProject } from './fixtures'
 describe('descope 预览与金额格式（DESIGN-C-01 §3.2 / V20~V22）', () => {
   const daily = { design: 5, programming: 5, art: 5, qa: 5 }
 
-  it('预览按比例缩减 total/remaining，质量上限先乘后取整', () => {
+  it('预览按比例缩减 total/remaining，五维质量目标逐项输出（不合成均值）', () => {
     const preview = computeDescopePreview(makeUiProject(), daily, 0.2, 10_000)
     expect(preview.newTotal.design).toBe(80)
     expect(preview.newRemaining.design).toBe(80)
-    expect(preview.qualityCeiling).toBe(54)
+    // FIX-6：qualityCeiling 已删除（A-20 词表守卫），五维逐项断言
+    expect('qualityCeiling' in preview).toBe(false)
     expect(preview.newQuality.gameplay).toBe(54)
+    expect(preview.newQuality.technical).toBe(54)
+    expect(preview.newQuality.content).toBe(54)
+    expect(preview.newQuality.art).toBe(54)
+    expect(preview.newQuality.innovation).toBe(54)
     expect(preview.savedDays).toBe(4)
     expect(preview.savedBudgetCents).toBe(40_000)
     expect(preview.qaReset).toBe(false)

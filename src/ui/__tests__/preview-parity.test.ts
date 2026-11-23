@@ -71,10 +71,8 @@ describe('V13 descope/delay 预览与领域执行 parity（DESIGN-UI-LAYER v1.1 
     for (const k of ['gameplay', 'technical', 'content', 'art', 'innovation'] as const) {
       expect(preview.newQuality[k]).toBe(next.qualityTargets[k])
     }
-    const values = Object.values(next.qualityTargets)
-    const mean = values.reduce((sum, v) => sum + v, 0) / values.length
-    expect(typeof preview.qualityCeiling).toBe('number')
-    expect(preview.qualityCeiling).toBe(Math.round(mean))
+    // FIX-6：不再合成均值，qualityCeiling 字段已删除
+    expect('qualityCeiling' in preview).toBe(false)
   })
 
   it('V13-5 delay 新上市日/上限一致', () => {

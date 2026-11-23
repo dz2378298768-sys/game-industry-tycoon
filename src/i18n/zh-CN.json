@@ -363,7 +363,7 @@
   "project.action.qaIncomplete": "QA 尚未完成 100%。",
   "project.action.atPlannedDay": "尚未到达计划上市日。",
   "project.descope.dialog.title": "砍范围",
-  "project.descope.dialog.intro": "按比例减少范围与工期，但会永久降低质量上限。",
+  "project.descope.dialog.intro": "按比例减少范围与工期，并同步下调五维质量目标。",
   "project.descope.dialog.tiers": "选择砍范围档位",
   "project.descope.confirm": "砍范围",
   "project.descope.confirmAgain": "确认不可逆？",
@@ -374,7 +374,6 @@
   "project.descope.preview.cut": "本次削减 {pct}%，累计 {total}%",
   "project.descope.preview.savedDays": "预计节省 {days} 天",
   "project.descope.preview.savedBudget": "预计节省预算 {amount}",
-  "project.descope.preview.quality": "质量上限降至 {level}",
   "project.descope.preview.qaReset": "QA 进度将重置",
   "project.descope.lateStage": "上市准备阶段不能砍范围。",
   "project.descope.noWork": "项目当前没有可削减的工作量。",
@@ -517,5 +516,9 @@
   "contract.worstNet": "最差净收入",
   "contract.worstProceeds": "最差到手",
   "contract.marketScope": "市场范围（逗号分隔）",
-  "contract.platformScope": "平台范围（逗号分隔）"
+  "contract.platformScope": "平台范围（逗号分隔）",
+  "overview.product.designQuality": "设计质量",
+  "overview.product.implementationQuality": "实现质量",
+  "overview.product.completeness": "完成度",
+  "project.descope.preview.qualityHeader": "砍范围后五维质量目标（逐项，不合成）"
 }

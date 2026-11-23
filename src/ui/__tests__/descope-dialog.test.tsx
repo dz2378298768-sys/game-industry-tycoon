@@ -65,7 +65,9 @@ describe('DIALOG-DESCOPE（DESIGN-C-01 §3.2 / V20~V22）', () => {
     fireEvent.click(within(dialog).getByText('−20%'))
     expect(dialog.textContent).toContain('本次削减 20%，累计 30%')
     expect(dialog.textContent).toContain('预计节省')
-    expect(dialog.textContent).toContain('质量上限降至')
+    expect(dialog.textContent).toContain('砍范围后五维质量目标（逐项，不合成）')
+    expect(dialog.textContent).toContain('玩法')
+    expect(dialog.textContent).toContain('54')
 
     const confirm = within(dialog).getByRole('button', { name: '砍范围' })
     fireEvent.click(confirm)

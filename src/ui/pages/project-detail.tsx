@@ -4,7 +4,7 @@ import { budgetUsageRatio, recomputeRemaining } from '@domain/value-objects'
 import type { ProjectCostAllocation } from '@domain/entities/project-cost-allocation'
 import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete, estimateDaysToFinish } from '@simulation/systems/project-progress'
 import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
-import { computeFinalQualityScore, defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
+import { defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
 import { TUNING } from '@content/tuning'
 import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
@@ -182,7 +182,6 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const qaInitial = project.phase === 'QA' || project.phase === 'READY_TO_LAUNCH' || project.phase === 'LAUNCHED'
     ? (typeof project.initialDefectLevel === 'number' ? project.initialDefectLevel : computeInitialDefectLevel(project))
     : null
-  const projectedQuality = computeFinalQualityScore(qaDefect)
 
   const disciplines: Array<{ key: 'design' | 'programming' | 'art' | 'qa'; labelZh: string }> = [
     { key: 'design', labelZh: t('project.discipline.design') },
@@ -581,11 +580,6 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               <td className="muted" style={{ fontSize: 11 }}>
                 {qaDefect > 0 ? t('project.qa.earlyWarning') : ''}
               </td>
-            </tr>
-            <tr>
-              <td>{t('project.qa.finalQuality')}</td>
-              <td>{Math.round(projectedQuality)}</td>
-              <td className="muted" style={{ fontSize: 11 }}>0–100（= 100 - 最终缺陷等级）</td>
             </tr>
           </tbody>
         </table>

@@ -14,8 +14,6 @@ export interface DescopePreview {
   newQaTotal: number
   newQaRemaining: number
   newQuality: Record<QualityKey, number>
-  /** 砍范围后五维质量目标的均值（`round(mean(newQuality))`，DESIGN-UI-LAYER §2.4 L162） */
-  qualityCeiling: number
   totalCut: number
   /** 无日产出（任一 d/p/a 为 0）或 QA 阶段时为 null（展示 `—`） */
   savedDays: number | null
@@ -48,13 +46,11 @@ export function computeDescopePreview(
   )
   const newQaRemaining = newQaTotal
 
+  // FIX-6：五维质量目标逐项输出，不合成均值（A-20 词表守卫禁 qualityCeiling/mean）
   const newQuality = {} as Record<QualityKey, number>
   for (const k of QUALITY_KEYS) {
     newQuality[k] = Math.max(30, Math.round((project.qualityTargets[k] ?? 0) * (1 - ratio * 0.5)))
   }
-  const qualityCeiling = Math.round(
-    QUALITY_KEYS.reduce((sum, k) => sum + newQuality[k], 0) / QUALITY_KEYS.length,
-  )
 
   const inQa = project.phase === 'QA' || project.phase === 'READY_TO_LAUNCH'
   let savedDays: number | null = null
@@ -73,7 +69,6 @@ export function computeDescopePreview(
     newQaTotal,
     newQaRemaining,
     newQuality,
-    qualityCeiling,
     totalCut: (project.scopeCutRatio ?? 0) + ratio,
     savedDays,
     savedBudgetCents,

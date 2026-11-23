@@ -20,7 +20,7 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
         {company ? (
           <>
             <p className="muted mb-16" style={{ fontSize: 13 }}>
-              {company.name} · {city?.displayNameZh ?? city?.displayName ?? company.cityId} · Brand {company.brand}
+              {company.name} · {city?.displayNameZh ?? city?.displayName ?? company.cityId}
             </p>
             <div className="kpi-grid">
               <div className="kpi-card">
@@ -34,10 +34,6 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
               <div className="kpi-card">
                 <div className="label">{t('overview.activeProjects')}</div>
                 <div className="value">{activeProjects.length}</div>
-              </div>
-              <div className="kpi-card">
-                <div className="label">{t('overview.brand')}</div>
-                <div className="value">{company.brand}</div>
               </div>
             </div>
           </>
@@ -126,7 +122,9 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
               <tr>
                 <th>{t('overview.product.name')}</th>
                 <th>{t('overview.product.genre')}</th>
-                <th>{t('overview.product.quality')}</th>
+                <th>{t('overview.product.designQuality')}</th>
+                <th>{t('overview.product.implementationQuality')}</th>
+                <th>{t('overview.product.completeness')}</th>
               </tr>
             </thead>
             <tbody>
@@ -134,7 +132,10 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
                 <tr key={p.id}>
                   <td>{p.name}</td>
                   <td>{p.genreId}</td>
-                  <td>{Math.round((p.qualityProfile.gameplay + p.qualityProfile.technical + p.qualityProfile.content) / 3)}</td>
+                  {/* FIX-1：不合成平均分，五维逐项展示；D-02 产品五维向量尚未接线 → fail-closed '—' */}
+                  <td data-testid="quality-design">—</td>
+                  <td data-testid="quality-implementation">—</td>
+                  <td data-testid="quality-completeness">—</td>
                 </tr>
               ))}
             </tbody>

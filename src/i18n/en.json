@@ -363,7 +363,7 @@
   "project.action.qaIncomplete": "QA is not complete (100%).",
   "project.action.atPlannedDay": "The planned launch day has not arrived.",
   "project.descope.dialog.title": "Descope project",
-  "project.descope.dialog.intro": "Reduce scope and schedule by a ratio, permanently lowering the quality ceiling.",
+  "project.descope.dialog.intro": "Reduce scope and schedule by a ratio, permanently lowering the per-dimension quality targets.",
   "project.descope.dialog.tiers": "Choose a scope-cut tier",
   "project.descope.confirm": "Descope",
   "project.descope.confirmAgain": "Confirm irreversible cut?",
@@ -374,7 +374,6 @@
   "project.descope.preview.cut": "Cut {pct}% now, {total}% cumulative",
   "project.descope.preview.savedDays": "Estimated {days} days saved",
   "project.descope.preview.savedBudget": "Estimated budget saved {amount}",
-  "project.descope.preview.quality": "Quality ceiling drops to {level}",
   "project.descope.preview.qaReset": "QA progress will reset",
   "project.descope.lateStage": "Scope cannot be cut during launch preparation.",
   "project.descope.noWork": "There is no remaining work to cut.",
@@ -517,5 +516,9 @@
   "contract.worstNet": "Worst-case net",
   "contract.worstProceeds": "Worst-case proceeds",
   "contract.marketScope": "Market scope (comma)",
-  "contract.platformScope": "Platform scope (comma)"
+  "contract.platformScope": "Platform scope (comma)",
+  "overview.product.designQuality": "Design Quality",
+  "overview.product.implementationQuality": "Implementation Quality",
+  "overview.product.completeness": "Completeness",
+  "project.descope.preview.qualityHeader": "Post-descope quality targets (per dimension, no aggregation)"
 }

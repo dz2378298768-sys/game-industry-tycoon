@@ -211,6 +211,8 @@ interface GameStore {
   confirmRework(projectId: string, category: ReworkCategory, deltaPercent: number): { success: boolean; errorCode?: string | undefined; message?: string | undefined; result?: { sessionId: string; reworkWorkUnits: number } | undefined }
   /** CODE-07B REVISION / 端到端：交付提交内核入口（submitDelivery，fail-closed） */
   submitDeliveryForProject(projectId: string, gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> }, deliveryForm?: 'full' | 'early_access'): { success: boolean; errorCode?: string | undefined; message?: string | undefined; result?: { completed: boolean; buildId: string | null } | undefined }
+  /** 07B REVISION2：交付闸门评估只读投影（fail-closed，供 P-09 确认按钮接线） */
+  getDeliveryGateEvaluation(projectId: string, form?: 'full' | 'early_access'): import('@application/mediators/game-world').DeliveryGateEvaluation | null
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -725,6 +727,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const r = gw.submitDeliveryForProject(projectId, gate, deliveryForm)
     get().refresh()
     return r
+  },
+
+  getDeliveryGateEvaluation(projectId, form) {
+    const gw = get().game
+    if (!gw) return null
+    return gw.getDeliveryGateEvaluation(projectId, form ?? 'full')
   },
 }))
 

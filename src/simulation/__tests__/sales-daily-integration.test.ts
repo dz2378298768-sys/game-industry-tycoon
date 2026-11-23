@@ -19,8 +19,10 @@ import {
 import {
   makeCompany,
   makeEmployee,
+  makeEmployment,
   makeProject,
   makeWorld,
+  seedSalaryCommitment,
 } from '../../__tests__/helpers'
 
 /**
@@ -129,14 +131,27 @@ describe('销售日集成（T23 / T27 / T29–T31 / T38）', () => {
       [makeSalesProduct({ awarenessByMarket: { japan: 0.45 } })],
       { employees: [makeEmployee()] },
     )
+    // CODE-06：月薪唯一产出点 = ②流水线（承诺兑现），键 `<commitmentId>:<YYYY-MM>`；
+    // 手工构造的 legacy world 需同步注册 Employment + 薪资承诺（§15.1 夹具口径）。
+    const emp = world.employees[0]!
+    const employment = makeEmployment({
+      employmentId: emp.id,
+      personId: `d03-per-${emp.id}`,
+      companyId: emp.companyId,
+      role: emp.role,
+      salaryMonthlyCents: emp.salaryMonthlyCents,
+      status: 'active',
+    })
+    world.employments = [employment]
     const harness = makeSalesService(world, { rng: makeStubRng(0.02) })
+    seedSalaryCommitment(harness.finance, employment)
     const scheduler = new DailyScheduler({ finance: harness.finance, sales: harness.service })
     scheduler.executeDay(world, SALES_DAY)
 
     const keys = harness.finance.getAllTransactions().map((tx) => tx.idempotencyKey)
     const salesIndex = keys.findIndex((key) => key.startsWith('sales:'))
     const feeIndex = keys.findIndex((key) => key.startsWith('platform-fee:'))
-    const salaryIndex = keys.findIndex((key) => key.startsWith('salary:'))
+    const salaryIndex = keys.findIndex((key) => key.startsWith('d03-sal-'))
     const rentIndex = keys.findIndex((key) => key.startsWith('rent:'))
 
     expect(salesIndex).toBeGreaterThanOrEqual(0)

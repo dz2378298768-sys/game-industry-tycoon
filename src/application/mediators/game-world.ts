@@ -178,6 +178,7 @@ export class GameWorld {
    * world.employees 保持 legacy 派生视图；world.persons/employments 为 D-03 权威。
    */
   private withPersonnel<T>(fn: () => T): T {
+    this.ensurePersonnelLayer()
     this.personnel.adopt({
       persons: this.world.persons ?? [],
       employments: this.world.employments ?? [],
@@ -195,6 +196,37 @@ export class GameWorld {
       this.world.personnelFormulaSnapshot = slice.snapshot
       this.world.d03SchemaVersion = slice.d03SchemaVersion
     }
+  }
+
+  /**
+   * 懒引导（§15.3）：world 只有 legacy employees（手工构造/旧路径注入）且从未建立人才层时，
+   * 按 §15.3 就地迁移（含 Step3 承诺注册 / Step4 校验），保证人事命令与薪资结算可用。
+   * 判据 = 有 legacy employees 但无 Person 层（employments 为 undefined **或空数组**均可——
+   * personnelTick 的 toSlice 会先写回空切片，不能因此跳过迁移）。
+   */
+  private ensurePersonnelLayer(): void {
+    if ((this.world.persons?.length ?? 0) > 0) return
+    if (this.world.employees.length === 0) return
+    this.migrateLegacyEmployeesInto(this.world)
+  }
+
+  /** §15.3 就地迁移：employees → Person+Employment + 承诺注册 + 校验修复（写入传入 state）。 */
+  private migrateLegacyEmployeesInto(state: WorldState): void {
+    const migration = migrateEmployees({
+      employees: state.employees,
+      day: state.currentDayIndex,
+      params: DEFAULT_PERSONNEL_PARAMS,
+      regionOf: () => 'default',
+    })
+    for (const log of migration.logs) console.info(`[d03-migrate] ${log.legacyId}: ${log.message}`)
+    for (const repair of migration.repairs) console.info(`[d03-repair] ${repair.code}: ${repair.message}`)
+    for (const c of migration.salaryCommitments) this.finance.getLedger().registerCommitment(c)
+    state.persons = migration.persons
+    state.employments = migration.employments
+    state.personEvents = migration.personEvents
+    state.candidates = []
+    state.d03SchemaVersion = D03_SCHEMA_VERSION
+    state.personnelFormulaSnapshot = createPersonnelSnapshot(state.currentDayIndex)
   }
 
   /** 派生 Employee 视图与 Employment 状态对齐（双轨一致性；morale/fatigue 等 legacy 字段不动）。 */
@@ -218,6 +250,11 @@ export class GameWorld {
 
   /** ORD-01 人事每日 tick（调度器钩子）：候选池刷新（S5-1）→ dailyTick → 派生视图同步。 */
   private personnelTick = (state: WorldState, dayIndex: number): WorldState => {
+    // §15.3 懒引导：legacy world（手工构造/旧存档）首次人事 tick 时就地迁移，
+    // 否则 toSlice 会把空 employments 切片写回，迁移窗口永久丢失。
+    if (state.employees.length > 0 && (state.persons?.length ?? 0) === 0) {
+      this.migrateLegacyEmployeesInto(state)
+    }
     this.personnel.adopt({
       persons: state.persons ?? [],
       employments: state.employments ?? [],
@@ -422,6 +459,8 @@ export class GameWorld {
       }),
     )
     if (!hired.ok || !hired.value) {
+      // 财务/人才层失败：回滚 EmployeeService 内部状态（以 world.employees 为准，R-005）
+      this.syncEmployeesFromWorld()
       return {
         success: false,
         errorCode: hired.error?.code ?? 'EMP_HIRE_FAILED',

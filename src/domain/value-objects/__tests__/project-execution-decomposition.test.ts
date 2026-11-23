@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import type { RequireRule } from '@domain/value-objects/product-blueprint-composition'
 import { decomposeWorkPackages, topologicalOrder } from '@domain/value-objects/project-execution-decomposition'
+import { PROJ_ERROR, ProjectError } from '@domain/entities/project-execution/errors'
 import { params, tc02Decomposition, workload } from './project-execution-fixtures'
 
 function totalOf(wps: ReadonlyArray<{ baselineWorkUnits: number }>): number {
@@ -117,7 +118,7 @@ describe('TC-03 依赖：A 需 B ⇒ A.blockedBy 含 B；B DONE 前 A=BLOCKED', 
     expect(topologicalOrder(r.workPackages)).not.toBeNull()
   })
 
-  it('TC-16 依赖环脏数据 ⇒ 不自造死锁（成环边被拒绝、图仍可拓扑、拆解不崩溃）', () => {
+  it('TC-16（R4/CR-03-02）：A→B→A 依赖环 ⇒ 抛 PROJ_DEPENDENCY_CYCLE（fail-closed，不再静默丢边）', () => {
     const mk = (id: string, val: string): RequireRule => ({
       ruleId: `R-${i++}`,
       subject: { kind: 'option', value: id },
@@ -135,10 +136,58 @@ describe('TC-03 依赖：A 需 B ⇒ A.blockedBy 含 B；B DONE 前 A=BLOCKED', 
       requireRules: [mk('A', 'B'), mk('B', 'A')],
       workload: workload({ code: 20 }),
     })
+    // R4：成环边不再回滚丢弃（静默降级会把 DAG 吞成森林、工期失真），直接拒绝拆解
+    expect(() => decomposeWorkPackages(input, params())).toThrow(ProjectError)
+    try {
+      decomposeWorkPackages(input, params())
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.DEPENDENCY_CYCLE)
+    }
+  })
+
+  it('TC-16（R4）：依赖缺失型环 A→B→GHOST→A ⇒ 抛 PROJ_DEPENDENCY_CYCLE（dangling required source 不静默跳过）', () => {
+    const input = tc02Decomposition({
+      instances: [
+        { instanceId: 'A', displayLabel: 'a', rawWorkload: workload({ code: 10 }) },
+        { instanceId: 'B', displayLabel: 'b', rawWorkload: workload({ code: 10 }) },
+      ],
+      contentPacks: [],
+      requireRules: [
+        { ruleId: 'R1', subject: { kind: 'option', value: 'A' }, requires: [{ kind: 'option', value: 'B' }], severity: 'hard', penalty: 0 },
+        // GHOST 不存在于任何实例/内容包：A→B→(缺失) 构成依赖缺失型环的入口
+        { ruleId: 'R2', subject: { kind: 'option', value: 'B' }, requires: [{ kind: 'option', value: 'GHOST' }], severity: 'hard', penalty: 0 },
+        { ruleId: 'R3', subject: { kind: 'option', value: 'GHOST' }, requires: [{ kind: 'option', value: 'A' }], severity: 'hard', penalty: 0 },
+      ],
+      workload: workload({ code: 20 }),
+    })
+    expect(() => decomposeWorkPackages(input, params())).toThrow(ProjectError)
+    try {
+      decomposeWorkPackages(input, params())
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.DEPENDENCY_CYCLE)
+    }
+  })
+
+  it('TC-16（R4）：跨学科依赖 A.art 必须被 B.code 阻塞（按 sourceRef 落到同源全部 WP）', () => {
+    const input = tc02Decomposition({
+      instances: [
+        { instanceId: 'A', displayLabel: 'a', rawWorkload: workload({ art: 30 }) },
+        { instanceId: 'B', displayLabel: 'b', rawWorkload: workload({ code: 40 }) },
+      ],
+      contentPacks: [],
+      requireRules: [
+        { ruleId: 'R1', subject: { kind: 'option', value: 'A' }, requires: [{ kind: 'option', value: 'B' }], severity: 'hard', penalty: 0 },
+      ],
+      workload: workload({ art: 30, code: 40 }),
+    })
     const r = decomposeWorkPackages(input, params())
-    // 两条边互为前置：至少一条被丢弃，图必然可拓扑（E-CYCLE 在蓝图层拦截）
+    const aArt = r.workPackages.find((w) => w.sourceRef.instanceId === 'A' && w.discipline === 'art')!
+    const bCode = r.workPackages.find((w) => w.sourceRef.instanceId === 'B' && w.discipline === 'code')!
+    // A 无 code 学科 WP ⇒ 跨学科按 sourceRef 落边：A.art.blockedBy 含 B.code（删除空回退）
+    expect(aArt.blockedBy).toContain(bCode.workPackageId)
+    expect(bCode.dependents).toContain(aArt.workPackageId)
+    expect(aArt.state).toBe('BLOCKED')
     expect(topologicalOrder(r.workPackages)).not.toBeNull()
-    expect(r.workPackages.every((w) => w.blockedBy.length <= 1)).toBe(true)
   })
 
   it('soft RequireRule 不生成依赖边（§5.2-4 仅 hard）', () => {

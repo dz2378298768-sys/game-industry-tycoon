@@ -18,7 +18,9 @@ const OUT_EDGES: Record<ProjectState, readonly ProjectState[]> = {
   ACTIVE: ['ACTIVE', 'READY_TO_DELIVER', 'PAUSED', 'CANCELLED', 'ABANDONED'],
   // PAUSED→PAUSED 幂等自环：重复暂停请求合法但**不重置**超时起算日（C5 反证）
   PAUSED: ['ACTIVE', 'PAUSED', 'CANCELLED', 'ABANDONED'],
-  READY_TO_DELIVER: ['COMPLETED', 'ACTIVE', 'PAUSED', 'CANCELLED', 'ABANDONED'],
+  // FAIL 后保持 READY_TO_DELIVER（ADJ-2026-11-22-08 §1.3）：state 不变，只记 lastDeliveryFailure，
+  // 玩家可再次提交；READY_TO_DELIVER→ACTIVE 仅限"玩家就失败原因发起设计变更"路径。
+  READY_TO_DELIVER: ['COMPLETED', 'ACTIVE', 'READY_TO_DELIVER', 'PAUSED', 'CANCELLED', 'ABANDONED'],
   COMPLETED: [],
   CANCELLED: [],
   ABANDONED: [],
@@ -48,7 +50,7 @@ const TRIGGER_TARGET: Record<ProjectTransitionTrigger, ProjectState> = {
   rework_complete: 'ACTIVE',
   all_work_packages_done: 'READY_TO_DELIVER',
   delivery_pass: 'COMPLETED',
-  delivery_fail: 'ACTIVE',
+  delivery_fail: 'READY_TO_DELIVER',
   pause: 'PAUSED',
   resume: 'ACTIVE',
   pause_timeout: 'CANCELLED',

@@ -93,8 +93,16 @@ export interface ExecutionProject {
   workPackageIds: string[]
   reworkSessionId: string | null
   buildIds: string[]
-  /** FIN BudgetCommitment 引用（立约 + 追加，append-only；C2/N-02）。 */
+  /** FIN BudgetCommitment 引用（立约 + 追加，append-only；C2/N-02）。仅作索引，权威在 UnifiedLedger。 */
   commitmentIds: string[]
+  /** 交付闸门 FAIL 累计次数（ADJ-08 §1.3 审计计数）。 */
+  deliveryFailures: number
+  /** 最近一次交付 FAIL 的原因记录（ADJ-08 §1.3：day / reasonCodes / eViolations）。 */
+  lastDeliveryFailure: {
+    day: number
+    reasonCodes: string[]
+    eViolations: ReadonlyArray<{ code: string; severity: string }>
+  } | null
   pausedAtDayIndex: number | null
   pausedDays: number
   pauseReason: PauseReason | null
@@ -194,7 +202,7 @@ export interface TeamMember {
   skillLevels: Partial<Record<Discipline, number>>
   /** §6.2 available(e,day)；D-03 未接入时缺省 true。 */
   available?: (day: number) => boolean
-  /** §6.4 w_e[d] 薪资学科归属权重；缺键 0。 */
+  /** §6.4 w_e[d] 薪资学科归属权重；缺键视为 1（computeSalaryDaily `?? 1`，P3-6 注释与实现统一）。 */
   salaryWeight?: Partial<Record<Discipline, number>>
 }
 

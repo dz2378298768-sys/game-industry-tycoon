@@ -9,6 +9,7 @@
  *    返工 WP 只计入成本、不进入新 baseline 分母）。
  */
 import type { WorkPackage } from '@domain/entities/project-execution'
+import { PROJ_ERROR, ProjectError } from '@domain/entities/project-execution/errors'
 import type { DisciplineWorkload } from './project-execution-cost-helpers'
 
 export interface RebaselineResult {
@@ -19,6 +20,12 @@ export interface RebaselineResult {
   totalRemainingWorkUnits: number
   totalBaselineWorkUnits: number
   totalDeliveredWorkUnits: number
+  /**
+   * rebaseline 入参时仍承载新快照（非 DONE / 非 DEACTIVATED）WP 的 Σdelivered。
+   * 守恒断言只对这批 WP 减 delivered：入参时已 DONE 的 WP（含已完成的返工 WP）
+   * 其 delivered 属于旧快照口径，不参与 W_d(new) 的守恒式（否则正常切换必然误判失衡）。
+   */
+  carriedDeliveredWorkUnits: number
 }
 
 /**
@@ -34,11 +41,28 @@ export function rebaselineWorkPackages(
   const archivedIds: string[] = []
   const out: WorkPackage[] = []
 
-  // 学科层：未完成 WP 的旧 baseline 合计（分摊分母）
+  // 学科层：未完成 WP 的旧 baseline 合计（分摊分母）。
+  // DONE 与 DEACTIVATED（如已撤销的返工 WP）均不承载新快照，不入分母（否则新 baseline
+  // 会被死 WP 稀释，守恒式随之失真）。
   const openByDiscipline: Record<string, number> = {}
+  let carriedDelivered = 0
   for (const wp of wps) {
-    if (wp.state === 'DONE') continue
+    if (wp.state === 'DONE' || wp.state === 'DEACTIVATED') continue
     openByDiscipline[wp.discipline] = (openByDiscipline[wp.discipline] ?? 0) + wp.baselineWorkUnits
+    carriedDelivered += wp.deliveredWorkUnits
+  }
+
+  // R3（ADJ-06 §3）fail-closed：某学科已无未完成 WP 可承载，但新快照 W_d(new)>0
+  // ⇒ 拒绝切快照（差异量进错误详情），禁止静默丢弃。
+  for (const d of Object.keys(newWorkload) as Array<keyof DisciplineWorkload>) {
+    const target = newWorkload[d] ?? 0
+    const open = openByDiscipline[d] ?? 0
+    if (target > 0 && open <= 0) {
+      throw new ProjectError(
+        PROJ_ERROR.REBASELINE_UNBALANCED,
+        `discipline ${d} has no open WorkPackage to carry W_d(new)=${target}; rebaseline rejected (fail-closed)`,
+      )
+    }
   }
 
   for (const wp of wps) {
@@ -73,14 +97,34 @@ export function rebaselineWorkPackages(
     totalRemainingWorkUnits: live.reduce((s, wp) => s + wp.remainingWorkUnits, 0),
     totalBaselineWorkUnits: live.reduce((s, wp) => s + wp.baselineWorkUnits, 0),
     totalDeliveredWorkUnits: live.reduce((s, wp) => s + wp.deliveredWorkUnits, 0),
+    carriedDeliveredWorkUnits: carriedDelivered,
   }
 }
 
-/** TC-13 不变量：`Σ remaining + Σ delivered(未归档) = Σ baseline`。 */
-export function checkRemainingInvariant(result: RebaselineResult): boolean {
+/**
+ * TC-13 不变量（ADJ-06 §3）：
+ *  - 对**传入的 `W_d(new)`** 断言 `Σ remaining == Σ W_d(new) − Σ delivered`（禁止内部自算 totalBaseline 自证）；
+ *  - `delivered > baseline` 必须单独失败（P3-4），不得用 `min(delivered, baseline)` 掩盖超交付。
+ */
+export function checkRemainingInvariant(
+  result: RebaselineResult,
+  newWorkload: DisciplineWorkload,
+): boolean {
   const live = result.workPackages.filter((wp) => wp.state !== 'DEACTIVATED')
-  const sum = live.reduce((s, wp) => s + wp.remainingWorkUnits + Math.min(wp.deliveredWorkUnits, wp.baselineWorkUnits), 0)
-  return Math.abs(sum - result.totalBaselineWorkUnits) < 1e-6
+  for (const wp of live) {
+    if (wp.deliveredWorkUnits > wp.baselineWorkUnits + 1e-6) return false
+  }
+  const sumRemaining = live.reduce((s, wp) => s + wp.remainingWorkUnits, 0)
+  // Σdelivered 只取入参时仍承载新快照的 WP（见 RebaselineResult.carriedDeliveredWorkUnits 注）；
+  // 入参时已 DONE 的 WP 不参与 W_d(new) 守恒式。
+  return Math.abs(sumRemaining - (targetTotal(newWorkload) - result.carriedDeliveredWorkUnits)) < 1e-6
+}
+
+function targetTotal(newWorkload: DisciplineWorkload): number {
+  return (Object.keys(newWorkload) as Array<keyof DisciplineWorkload>).reduce(
+    (s, d) => s + (newWorkload[d] ?? 0),
+    0,
+  )
 }
 
 /**

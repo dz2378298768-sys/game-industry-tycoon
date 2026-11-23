@@ -21,6 +21,7 @@ import {
 } from '@domain/value-objects/project-execution-state-machine'
 import {
   advanceProjectDay,
+  archiveProjectExecution,
   createProjectExecution,
   pauseProject,
   resumeProject,
@@ -87,18 +88,35 @@ describe('TC-04 反证：无法退出状态（出度 ≥ 1 且终态出度 = 0�
 
   it('TC-04 读档路径（C5）：PAUSED → 存档 → 读档 → 注入 60 天 ⇒ pausedDays = day − pausedAt ≥ 60 → CANCELLED', () => {
     const paused = pauseProject(fresh(), 5, 'budget_exhausted')
-    // 存档/读档：持久化字段原样（pausedDays 未刷新）
-    const archived = JSON.parse(JSON.stringify(paused)) as typeof paused
+    // R13：存档经 archiveProjectExecution 固化参数快照，再 JSON 往返模拟持久化
+    const archived = JSON.parse(JSON.stringify(archiveProjectExecution(paused, params()))) as ReturnType<typeof archiveProjectExecution>
     expect(archived.project.pausedDays).toBe(0)
-    const restored = restoreProjectExecution(archived, 64, params())
+    const restored = restoreProjectExecution(archived, 64)
     expect(restored.project.pausedDays).toBe(59)
     expect(restored.project.state).toBe('PAUSED')
-    const after = restoreProjectExecution(archived, 65, params())
+    const after = restoreProjectExecution(archived, 65)
     expect(after.project.pausedDays).toBe(60)
     expect(after.project.state).toBe('CANCELLED')
     // 纯公式一致性
     expect(computePausedDays(5, 65)).toBe(60)
     expect(isPauseTimedOut(5, 65, 60)).toBe(true)
+  })
+
+  it('R13 反证（TC-18）：存档缺 formulaParams ⇒ 抛 PROJ_ARCHIVE_PARAMS_REQUIRED（拒绝用环境参数读档）', () => {
+    const paused = pauseProject(fresh(), 5, 'budget_exhausted')
+    const archived = JSON.parse(JSON.stringify(archiveProjectExecution(paused, params()))) as ReturnType<typeof archiveProjectExecution>
+    delete (archived as { formulaParams?: unknown }).formulaParams
+    expect(() => restoreProjectExecution(archived, 65)).toThrow(ProjectError)
+  })
+
+  it('R13：读档强制使用存档参数快照（环境参数不同也按存档超时口径判定）', () => {
+    const paused = pauseProject(fresh(), 5, 'budget_exhausted')
+    // 存档参数：pauseTimeoutDays=10（与环境默认 60 不同）
+    const archiveParams = params({ pauseTimeoutDays: 10 })
+    const archived = JSON.parse(JSON.stringify(archiveProjectExecution(paused, archiveParams)))
+    // day=15：按存档参数已超时（10 天），按环境参数（60 天）远未超时 ⇒ 结果必须跟随存档参数
+    const restored = restoreProjectExecution(archived, 15)
+    expect(restored.project.state).toBe('CANCELLED')
   })
 
   it('重复暂停不重置起算日（防止以"再暂停"规避 60 天超时）', () => {
@@ -109,17 +127,27 @@ describe('TC-04 反证：无法退出状态（出度 ≥ 1 且终态出度 = 0�
     expect(restored.pausedDays).toBe(200)
   })
 
-  it('PAUSED → 玩家恢复 → ACTIVE，暂停字段清零；团队为空时保持 PAUSED', () => {
+  it('PAUSED → 玩家恢复 → ACTIVE，暂停字段清零（R7/P3-3：团队为空抛 PROJ_TEAM_REQUIRED，不再静默保持 PAUSED）', () => {
     const paused = pauseProject(fresh(), 10, 'player')
-    const blocked = resumeProject(paused, 11, [])
-    expect(blocked.resumed).toBe(false)
-    expect(blocked.state.project.state).toBe('PAUSED')
-    const r = resumeProject(paused, 11, scenarioATeam())
+    expect(() => resumeProject(paused, 11, [], params())).toThrow(ProjectError)
+    const r = resumeProject(paused, 11, scenarioATeam(), params())
     expect(r.resumed).toBe(true)
     expect(r.state.project.state).toBe('ACTIVE')
     expect(r.state.project.pausedAtDayIndex).toBeNull()
     expect(r.state.project.pausedDays).toBe(0)
     expect(r.state.project.pauseReason).toBeNull()
+  })
+
+  it('R7 反证（P2-1）：PAUSED 已超 60 天 ⇒ resumeProject 先强制转 CANCELLED 并拒绝恢复（封堵状态机后门）', () => {
+    const paused = pauseProject(fresh(), 0, 'player')
+    // day=60：恰好 60 天超时；推进路径同式会强制 CANCELLED，恢复路径必须同样拒绝
+    const out = resumeProject(paused, 60, scenarioATeam(), params())
+    expect(out.resumed).toBe(false)
+    expect(out.state.project.state).toBe('CANCELLED')
+    expect(out.reason).toContain('pause_timeout')
+    // 推进路径同式对照（同一公式 isPauseTimedOut）
+    const viaAdvance = advanceProjectDay(paused, { day: 60, members: scenarioATeam(), params: params() }).state
+    expect(viaAdvance.project.state).toBe('CANCELLED')
   })
 
   it('COMPLETED 重复交付被拒且不产生第二 Build（§10 B-6）', () => {
@@ -173,7 +201,8 @@ describe('§4.3 转换触发映射', () => {
     expect(transitionProjectState('SETUP', 'launch')).toBe('ACTIVE')
     expect(transitionProjectState('ACTIVE', 'all_work_packages_done')).toBe('READY_TO_DELIVER')
     expect(transitionProjectState('READY_TO_DELIVER', 'delivery_pass')).toBe('COMPLETED')
-    expect(transitionProjectState('READY_TO_DELIVER', 'delivery_fail')).toBe('ACTIVE')
+    // R14（ADJ-08 §1.3）：delivery_fail 不再退回 ACTIVE，保持 READY_TO_DELIVER
+    expect(transitionProjectState('READY_TO_DELIVER', 'delivery_fail')).toBe('READY_TO_DELIVER')
     expect(transitionProjectState('PAUSED', 'pause_timeout')).toBe('CANCELLED')
     expect(transitionProjectState('ACTIVE', 'rework_start')).toBe('ACTIVE')
     expect(transitionProjectState('ACTIVE', 'rework_complete')).toBe('ACTIVE')

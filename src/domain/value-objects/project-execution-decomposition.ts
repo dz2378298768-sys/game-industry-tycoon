@@ -164,9 +164,18 @@ export function decomposeWorkPackages(
     const pairs: Array<[string, string]> = []
     for (const subjectId of bySource.keys()) {
       if (!selectorMatches(rule, rule.subject, subjectId)) continue
-      // Requires 必须**全部**满足才成边（D-01 §5.4 语义：A 需 B ∧ C ⇒ B、C 均须先完成）
-      const allRequired = rule.requires.every((r) => [...bySource.keys()].some((id) => selectorMatches(rule, r, id)))
-      if (!allRequired) continue
+      // Requires 必须**全部**满足才成边（D-01 §5.4 语义：A 需 B ∧ C ⇒ B、C 均须先完成）。
+      // R4（ADJ-06 / CR-03-02）：hard 规则引用的 required 来源缺失 ⇒ 依赖缺失型环（如 A→B→GHOST→A），
+      // fail-closed 抛 PROJ_DEPENDENCY_CYCLE，不再静默跳过。
+      for (const r of rule.requires) {
+        const resolved = [...bySource.keys()].some((id) => selectorMatches(rule, r, id))
+        if (!resolved) {
+          throw new ProjectError(
+            PROJ_ERROR.DEPENDENCY_CYCLE,
+            `hard RequireRule ${rule.ruleId}: required source is missing from decomposition sources (dangling dependency)`,
+          )
+        }
+      }
       for (const requiredId of bySource.keys()) {
         if (!rule.requires.some((r) => selectorMatches(rule, r, requiredId))) continue
         if (subjectId === requiredId) continue
@@ -177,14 +186,10 @@ export function decomposeWorkPackages(
       const subjectWps = bySource.get(subjectId) ?? []
       const requiredWps = bySource.get(requiredId) ?? []
       for (const swp of subjectWps) {
-        // 同 discipline 优先；跨 discipline（subject 该学科无对应 WP）时用来源 id 关联。
-        // 反向边已存在时不加反向边——依赖方向由 RequireRule 的 subject→requires 唯一决定，避免自造环。
+        // 同 discipline 优先；跨 discipline 时按 sourceRef 落到 required 来源的**全部 WP**
+        //（R4 / CR-03-02：删除 `same.length>0 ? same : []` 的空回退，A.art 也必须被 B.code 阻塞）。
         const same = requiredWps.filter((r) => r.discipline === swp.discipline)
-        // 跨学科回退：only 当任意学科都无同源 WP 时（同一来源的跨学科 WP 相互指依赖会成环，
-        // 由 D-01 E-CYCLE 拦截，执行层不制造死锁，§10 B-3）
-        const targets = same.length > 0 ? same : []
-        // 依赖的是"另一模块"：来源相同时（同实例跨学科）只取同来源的**其他学科** WP，
-        // 不接受"该 WP 依赖自己"（自依赖既无意义又会与同实例多学科互指成环）。
+        const targets = same.length > 0 ? same : requiredWps
         for (const rwp of targets) {
           if (rwp.workPackageId === swp.workPackageId) continue
           const swpSource = swp.sourceRef.instanceId ?? swp.sourceRef.contentPackId
@@ -196,16 +201,18 @@ export function decomposeWorkPackages(
     }
   }
 
-  // ④ 落地依赖边：按规则顺序逐条加入，**会导致环的边不加入**（自相矛盾快照本身已被 D-01 E-CYCLE 拦截；
-  //    此处只保留可拓扑部分，§10 B-3），随后仍做整体拓扑断言。
+  // ④ 落地依赖边：按规则顺序逐条加入。R4（ADJ-06 §2 / CR-03-02）：
+  //    加入后若可从 to 回到 from ⇒ 成环，**抛 PROJ_DEPENDENCY_CYCLE**（拒绝立项），
+  //    不再静默回滚丢边（静默降级会把 DAG 吞成森林，工期失真且玩家无感知）。
   for (const [from, to] of pendingEdges) {
     const swp = wpById.get(from)
     if (swp === undefined || swp.blockedBy.includes(to)) continue
     swp.blockedBy.push(to)
-    // 加入后若可从 to 回到 from ⇒ 成环，回滚该边（D-01 E-CYCLE 在蓝图层阻断）
     if (hasPath(to, from)) {
-      // 出现环：回滚该边，交由 E-CYCLE 在蓝图层阻断；执行层不制造死锁
-      swp.blockedBy = swp.blockedBy.filter((id) => id !== to)
+      throw new ProjectError(
+        PROJ_ERROR.DEPENDENCY_CYCLE,
+        `WorkPackage dependency edge ${to} → ${from} closes a cycle; snapshot rejected (fail-closed)`,
+      )
     }
   }
 

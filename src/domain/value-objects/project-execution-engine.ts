@@ -27,7 +27,8 @@ import {
 } from '@domain/entities/project-execution'
 import { PROJ_ERROR, ProjectError } from '@domain/entities/project-execution/errors'
 import type { UnifiedLedger } from '@domain/entities/finance'
-import { createCommitment } from '@domain/value-objects/finance-commitment'
+import type { CreateCommitmentInput } from '@domain/value-objects/finance-commitment'
+import { monthKeyOf } from '@domain/value-objects/finance-commitment'
 import type { DisciplineWorkload } from './project-execution-cost-helpers'
 import {
   decomposeWorkPackages,
@@ -45,6 +46,7 @@ import {
   type CostEstimateResult,
 } from './project-execution-capacity'
 import {
+  computeChangeWorkUnits,
   computeReworkCostBreakdown,
   estimateReworkCostRange,
   type ReworkAffectedItemInput,
@@ -59,14 +61,45 @@ import {
   restorePauseFields,
   transitionProjectState,
 } from './project-execution-state-machine'
-import { rebaselineWorkPackages } from './project-execution-rebaseline'
+import {
+  checkRemainingInvariant,
+  rebaselineWorkPackages,
+} from './project-execution-rebaseline'
 import { DISCIPLINE_ORDER, type ProjectFormulaParams } from './project-execution-tuning'
 
+/**
+ * R1（ADJ-06 §2）：闸门单一入参。**只有** `pass` 与 `violations` 两个通道，
+ * `refViolations` / `hardRuleViolations` 已删除——D-01 内部有几个违规通道、怎么合并，是 D-01 的事；
+ * Project 只接收"是否通过 + 违规列表"，杜绝三通道旁路复发（CODE-01/CODE-03 各犯过一次）。
+ */
 export interface GateOutcome {
   pass: boolean
-  violations?: ReadonlyArray<{ code: string; severity: string }>
-  refViolations?: ReadonlyArray<{ code: string; severity: string }>
-  hardRuleViolations?: ReadonlyArray<{ code: string; severity: string }>
+  violations: ReadonlyArray<{ code: string; severity: string }>
+}
+
+export interface GateEvaluation {
+  gatePass: boolean
+  violationCodes: string[]
+  /** 诊断输出（不改变 fail-closed 行为）。矛盾输入（pass=true 但含 E）⇒ PROJ_GATE_INCONSISTENT。 */
+  diagnostics: string[]
+}
+
+/**
+ * R1：`gatePass = pass === true && violations 无 E 级`。唯一判定实现（返工与交付共用，
+ * CR-03-14：避免闸门修补漏改一处）。
+ */
+export function evaluateGate(gate: GateOutcome): GateEvaluation {
+  const violations = [...(gate.violations ?? [])]
+  const eViolations = violations.filter((v) => v.severity === 'E')
+  const diagnostics: string[] = []
+  if (gate.pass === true && eViolations.length > 0) {
+    diagnostics.push(PROJ_ERROR.GATE_INCONSISTENT)
+  }
+  return {
+    gatePass: gate.pass === true && eViolations.length === 0,
+    violationCodes: violations.map((v) => v.code),
+    diagnostics,
+  }
 }
 
 export interface ProjectExecutionState {
@@ -115,7 +148,9 @@ function defaultWorkload(): DisciplineWorkload {
 function workloadOf(wps: ReadonlyArray<WorkPackage>): DisciplineWorkload {
   const out = defaultWorkload()
   for (const wp of wps) {
-    if (wp.state === 'DEACTIVATED') continue
+    // R10（P2-4）：Cost_est 的 W_d 不含返工 WP——返工是"把改坏的部分改回来"，其工作量
+    // 属于已计成本的沉没/追加，重复计入会让 ratio 虚增、误判"需缩减"。
+    if (wp.state === 'DEACTIVATED' || wp.kind === 'REWORK') continue
     out[wp.discipline] += wp.baselineWorkUnits
   }
   return out
@@ -201,6 +236,8 @@ export function createProjectExecution(
     reworkSessionId: null,
     buildIds: [],
     commitmentIds: [],
+    deliveryFailures: 0,
+    lastDeliveryFailure: null,
     pausedAtDayIndex: null,
     pausedDays: 0,
     pauseReason: null,
@@ -224,7 +261,8 @@ export function createProjectExecution(
 
 /**
  * 立约承诺：`one_off project_budget, amountCents = Budget_cap`（C2：恒等于 Budget_cap，非 BudgetCapacity）。
- * 承诺创建**不改现金**（BR-3）。返回的承诺 id 追加至 `commitmentIds`。
+ * 承诺创建**不改现金**（BR-3）。R5（ADJ-06 §4.2）：经 `ledger.registerCommitment` 落入
+ * `UnifiedLedger` 承诺注册表（权威事实源）；`commitmentIds` 退化为索引。
  */
 export function setupBudgetCommitment(
   state: ProjectExecutionState,
@@ -237,20 +275,20 @@ export function setupBudgetCommitment(
     return next
   }
   const commitmentId = deterministicId('commit', next.project.projectId, 'budget', 0, amount)
-  const commitment = createCommitment(
-    {
-      commitmentId,
-      companyId: next.project.companyId,
-      sourceType: 'project_budget',
-      sourceRef: next.project.projectId,
-      amountCents: amount,
-      period: 'one_off',
-      startAt: input.day,
-      endAt: input.endAt ?? input.day,
-    },
-    { ledger: input.ledger },
-  )
-  void commitment
+  const payload: CreateCommitmentInput = {
+    commitmentId,
+    companyId: next.project.companyId,
+    sourceType: 'project_budget',
+    sourceRef: next.project.projectId,
+    amountCents: amount,
+    period: 'one_off',
+    startAt: input.day,
+    endAt: input.endAt ?? input.day,
+  }
+  const res = input.ledger.registerCommitment(payload)
+  if (!res.success) {
+    throw new ProjectError(PROJ_ERROR.LEDGER_POST_FAILED, res.errorMessage ?? 'registerCommitment failed at setup')
+  }
   if (!next.project.commitmentIds.includes(commitmentId)) next.project.commitmentIds.push(commitmentId)
   return next
 }
@@ -280,19 +318,19 @@ export function topUpBudget(
   next.project.updatedAt = ctx.day
   if (delta > 0) {
     const commitmentId = deterministicId('commit', next.project.projectId, 'budget', next.project.commitmentIds.length, delta)
-    createCommitment(
-      {
-        commitmentId,
-        companyId: next.project.companyId,
-        sourceType: 'project_budget',
-        sourceRef: next.project.projectId,
-        amountCents: delta,
-        period: 'one_off',
-        startAt: ctx.day,
-        endAt: ctx.day,
-      },
-      { ledger: ctx.ledger },
-    )
+    const res = ctx.ledger.registerCommitment({
+      commitmentId,
+      companyId: next.project.companyId,
+      sourceType: 'project_budget',
+      sourceRef: next.project.projectId,
+      amountCents: delta,
+      period: 'one_off',
+      startAt: ctx.day,
+      endAt: ctx.day,
+    })
+    if (!res.success) {
+      throw new ProjectError(PROJ_ERROR.LEDGER_POST_FAILED, res.errorMessage ?? 'registerCommitment failed at top-up')
+    }
     next.project.commitmentIds.push(commitmentId)
   }
   return next
@@ -371,6 +409,9 @@ export function advanceProjectDay(
   next.worklogs.push(...advance.logs)
   next.reworkSessions = advance.reworkSessions
   next.expenseTxIds.push(...advance.transactionIds)
+  // R9（P2-3 / CR-03-11）：日推进的 WP 完成点**同步**置对应 ReworkTask DONE——
+  // 正常推进路径即可完成返工任务，不依赖未文档化的手动补丁函数。
+  next.reworkTasks = syncReworkTasks(next.reworkTasks, next.workPackages)
   next.project.costEstCents = cost.costEstCents
   next.project.updatedAt = input.day
 
@@ -403,20 +444,32 @@ export function pauseProject(
   return next
 }
 
-/** §4.3 恢复：团队必须 > 0（否则保持 PAUSED 并提示，§4.3 前置条件）。 */
+/**
+ * §4.3 恢复。R7（P2-1）：恢复前按同一公式判超时——PAUSED 已超 60 天 ⇒ 先强制转
+ * `CANCELLED` 并拒绝恢复（与 advanceProjectDay/读档路径同一 `isPauseTimedOut`，封堵状态机后门）。
+ * 团队为空 ⇒ 抛 `PROJ_TEAM_REQUIRED`（R15 P3-3：未用错误码要么用要么删；不再静默保持 PAUSED）。
+ */
 export function resumeProject(
   state: ProjectExecutionState,
   day: number,
-  members: ReadonlyArray<TeamMember> = [],
+  members: ReadonlyArray<TeamMember>,
+  params: ProjectFormulaParams,
 ): { state: ProjectExecutionState; resumed: boolean; reason?: string } {
   const next = cloneState(state)
   if (next.project.state !== 'PAUSED') {
     return { state: next, resumed: false, reason: `not paused (${next.project.state})` }
   }
-  if (members.length === 0) {
-    return { state: next, resumed: false, reason: 'team empty: remains PAUSED' }
-  }
   const p = next.project
+  // R7：超时判定与推进/读档同式（C5）
+  p.pausedDays = computePausedDays(p.pausedAtDayIndex, day)
+  if (isPauseTimedOut(p.pausedAtDayIndex, day, params.pauseTimeoutDays)) {
+    p.state = transitionProjectState('PAUSED', 'pause_timeout')
+    p.updatedAt = day
+    return { state: next, resumed: false, reason: 'pause_timeout: project force-cancelled' }
+  }
+  if (members.length === 0) {
+    throw new ProjectError(PROJ_ERROR.TEAM_REQUIRED, 'resume requires a non-empty team (§4.3 前置条件)')
+  }
   p.state = transitionProjectState('PAUSED', 'resume')
   const cleared = clearPauseFields()
   p.pausedAtDayIndex = cleared.pausedAtDayIndex
@@ -426,37 +479,99 @@ export function resumeProject(
   return { state: next, resumed: true }
 }
 
-/** §11 S1 读档：按同一公式重算 pausedDays（C5）。 */
-export function restoreProjectExecution(
-  state: ProjectExecutionState,
-  day: number,
-  params: ProjectFormulaParams,
-): ProjectExecutionState {
-  const next = cloneState(state)
-  if (next.project.state === 'PAUSED') {
-    const f = restorePauseFields(
-      {
-        pausedAtDayIndex: next.project.pausedAtDayIndex,
-        pausedDays: next.project.pausedDays,
-        pauseReason: next.project.pauseReason,
-      },
-      day,
-    )
-    next.project.pausedAtDayIndex = f.pausedAtDayIndex
-    next.project.pausedDays = f.pausedDays
-    next.project.pauseReason = f.pauseReason
-    if (isPauseTimedOut(f.pausedAtDayIndex, day, params.pauseTimeoutDays)) {
-      next.project.state = transitionProjectState('PAUSED', 'pause_timeout')
-    }
-  }
-  void 0
-  return next
+/** R13（P2-7 / TC-18）存档投影：执行事实 + 参数快照（派生估算不入档，§3.4 注）。 */
+export interface ProjectExecutionArchiveV2 {
+  project: ExecutionProject
+  workPackages: WorkPackage[]
+  worklogs: Worklog[]
+  reworkSessions: ExecutionReworkSession[]
+  reworkTasks: ExecutionReworkTask[]
+  builds: Build[]
+  /** §11 S4 参数快照：读档**强制**用存档参数（缺参抛 PROJ_ARCHIVE_PARAMS_REQUIRED）。 */
+  formulaParams: ProjectFormulaParams
+  /** FIN 账本交易 id（支出侧，append-only 事实）。 */
+  expenseTxIds: string[]
 }
 
-/** §4.3 取消（任意非终态）。未来承诺由 FIN `cancelCommitment` 释放（本内核只返回 id 列表）。 */
-export function cancelProject(state: ProjectExecutionState, day: number): ProjectExecutionState {
+/** 生成存档：显式固化 formulaParams（P2-7：存档必须可复现同一结果）。 */
+export function archiveProjectExecution(
+  state: ProjectExecutionState,
+  params: ProjectFormulaParams,
+): ProjectExecutionArchiveV2 {
+  return {
+    project: { ...state.project },
+    workPackages: state.workPackages.map((wp) => ({ ...wp, blockedBy: [...wp.blockedBy], dependents: [...wp.dependents] })),
+    worklogs: [...state.worklogs],
+    reworkSessions: state.reworkSessions.map((s) => ({ ...s, costEstimate: { ...s.costEstimate } })),
+    reworkTasks: state.reworkTasks.map((t) => ({ ...t })),
+    builds: [...state.builds],
+    formulaParams: { ...params },
+    expenseTxIds: [...state.expenseTxIds],
+  }
+}
+
+/** §11 S1 读档：按**存档参数快照**重算 pausedDays（C5）；未接存档参数的旧档拒绝读入（fail-closed）。 */
+export function restoreProjectExecution(
+  archive: ProjectExecutionArchiveV2,
+  day: number,
+): ProjectExecutionState {
+  if (archive.formulaParams === undefined || archive.formulaParams === null) {
+    throw new ProjectError(
+      PROJ_ERROR.ARCHIVE_PARAMS_REQUIRED,
+      'archive is missing formulaParams snapshot (§11 S4); refusing to restore with ambient params',
+    )
+  }
+  const params = archive.formulaParams
+  const project = { ...archive.project }
+  if (project.state === 'PAUSED') {
+    const f = restorePauseFields(
+      { pausedAtDayIndex: project.pausedAtDayIndex, pausedDays: project.pausedDays, pauseReason: project.pauseReason },
+      day,
+    )
+    project.pausedAtDayIndex = f.pausedAtDayIndex
+    project.pausedDays = f.pausedDays
+    project.pauseReason = f.pauseReason
+    if (isPauseTimedOut(f.pausedAtDayIndex, day, params.pauseTimeoutDays)) {
+      project.state = transitionProjectState('PAUSED', 'pause_timeout')
+    }
+  }
+  return {
+    project,
+    workPackages: archive.workPackages.map((wp) => ({ ...wp, blockedBy: [...wp.blockedBy], dependents: [...wp.dependents] })),
+    worklogs: [...archive.worklogs],
+    reworkSessions: archive.reworkSessions.map((s) => ({ ...s, costEstimate: { ...s.costEstimate } })),
+    reworkTasks: archive.reworkTasks.map((t) => ({ ...t })),
+    builds: [...archive.builds],
+    expenseTxIds: [...archive.expenseTxIds],
+  }
+}
+
+/**
+ * §4.3 取消（任意非终态）。R5（ADJ-06 §4.2）：提供账本时**显式释放**本项目的全部预算承诺
+ * （`releaseCommitment(id, effectiveMonth)`，effectiveMonth = monthKeyOf(day)）——
+ * 否则玩家取消项目后承诺仍占着 AvailableCash（可观察玩法 bug，ADJ-06 §4.1）。
+ * 释放成功后才转 CANCELLED；释放失败抛错且状态不变（fail-closed）。
+ */
+export function cancelProject(
+  state: ProjectExecutionState,
+  day: number,
+  ctx?: { ledger: UnifiedLedger },
+): ProjectExecutionState {
   const next = cloneState(state)
   assertNonTerminal(next.project, 'cancelProject')
+  if (ctx !== undefined) {
+    const effectiveMonth = monthKeyOf(day)
+    for (const c of ctx.ledger.getCommitments(next.project.companyId, { sourceRef: next.project.projectId })) {
+      if (c.state === 'cancelled') continue
+      const res = ctx.ledger.releaseCommitment(next.project.companyId, c.commitmentId, effectiveMonth)
+      if (!res.success) {
+        throw new ProjectError(
+          PROJ_ERROR.LEDGER_POST_FAILED,
+          res.errorMessage ?? `releaseCommitment ${c.commitmentId} failed on cancel`,
+        )
+      }
+    }
+  }
   next.project.state = transitionProjectState(next.project.state, 'cancel')
   next.project.updatedAt = day
   return next
@@ -522,6 +637,9 @@ export interface ReworkPlan {
 /**
  * 开始返工：state 恒 ACTIVE（呈现标签），权威快照**不变**（R-PROJ-0）。
  * 成本只给区间估算，不锁死 actual（R-PROJ-5）。A 类不返工。
+ * R11（ADJ-08 §2）：按受影响学科生成多个 `kind=REWORK` WP（各自 baseline = 该学科的返工工作量）；
+ * 受影响学科无法确定 ⇒ 抛 `PROJ_REWORK_SCOPE_UNKNOWN`（**禁止默认 design**）；
+ * 分摊后为 0 的学科不生成 WP（P3-2：无 0 baseline WP）。
  */
 export function planRework(
   state: ProjectExecutionState,
@@ -544,22 +662,51 @@ export function planRework(
   )
   const range = estimateReworkCostRange(breakdown.reworkWorkUnits, input.costPerUnit, params)
 
+  // R11：学科维度 fail-closed——affected 必须携带学科，且每项能关联到 changeId
+  if (input.affected.length === 0) {
+    throw new ProjectError(PROJ_ERROR.REWORK_SCOPE_UNKNOWN, 'rework affected scope carries no items')
+  }
+  for (const item of input.affected) {
+    if (!(DISCIPLINE_ORDER as readonly string[]).includes(item.discipline)) {
+      throw new ProjectError(
+        PROJ_ERROR.REWORK_SCOPE_UNKNOWN,
+        `affected item ${item.instanceId} has unknown discipline (ADJ-08 §2: no default design)`,
+      )
+    }
+  }
+
+  // 每个受影响项的变更量 wc_i（与全量 breakdown 同一公式逐项计算），按占比分摊返工工作量
+  const changePerItem = input.affected.map((item) =>
+    computeChangeWorkUnits({ category: input.category, affected: [item], workTotal: baseTotal }, params),
+  )
+  const changeSum = changePerItem.reduce((s, v) => s + v, 0)
+  if (changeSum <= 0 || breakdown.reworkWorkUnits <= 0) {
+    throw new ProjectError(
+      PROJ_ERROR.REWORK_SCOPE_UNKNOWN,
+      'rework workload cannot be attributed to any affected discipline (all change units are zero)',
+    )
+  }
+
   const tasks: ExecutionReworkTask[] = []
   const reworkWorkPackages: WorkPackage[] = []
-  input.changes.forEach((change, i) => {
-    const taskId = deterministicId('rtask', input.sessionId, change.changeId)
-    // 返工 WP：workUnits = 该任务承担的分段工作量（单一 change 取 session 总工作量）
-    const units = breakdown.reworkWorkUnits / Math.max(1, input.changes.length)
+  input.affected.forEach((item, i) => {
+    const share = (breakdown.reworkWorkUnits * changePerItem[i]!) / changeSum
+    // 分摊后为 0 的学科不生成返工 WP（P3-2）
+    if (share <= 0) return
+    const changeRef =
+      input.changes.find((c) => c.instanceIds.includes(item.instanceId)) ?? input.changes[i] ?? null
+    const changeId = changeRef?.changeId ?? deterministicId('chg', input.sessionId, item.discipline, item.instanceId)
+    const taskId = deterministicId('rtask', input.sessionId, changeId, item.discipline)
     const wp: WorkPackage = {
-      workPackageId: deterministicId('wp', state.project.projectId, 'rework', input.sessionId, change.changeId),
+      workPackageId: deterministicId('wp', state.project.projectId, 'rework', input.sessionId, item.discipline, item.instanceId),
       projectId: state.project.projectId,
       // 返工 WP 来源于旧权威快照（新快照尚未权威，§5.1-3）
       snapshotId: state.project.snapshotId,
       sourceRef: { reworkTaskId: taskId },
-      discipline: inferDiscipline(input.affected),
-      workUnits: units,
-      baselineWorkUnits: units,
-      remainingWorkUnits: units,
+      discipline: item.discipline,
+      workUnits: share,
+      baselineWorkUnits: share,
+      remainingWorkUnits: share,
       deliveredWorkUnits: 0,
       progress: 0,
       skillRef: null,
@@ -578,15 +725,21 @@ export function planRework(
     tasks.push({
       taskId,
       sessionId: input.sessionId,
-      changeId: change.changeId,
+      changeId,
       category: input.category,
-      affectedInstanceIds: [...change.instanceIds],
-      deltaWorkUnits: units,
+      affectedInstanceIds: [item.instanceId],
+      deltaWorkUnits: share,
       workPackageId: wp.workPackageId,
       state: 'PENDING',
       orderIndex: i,
     })
   })
+  if (reworkWorkPackages.length === 0) {
+    throw new ProjectError(
+      PROJ_ERROR.REWORK_SCOPE_UNKNOWN,
+      'no rework WorkPackage generated: all affected disciplines resolve to zero baseline',
+    )
+  }
 
   const session: ExecutionReworkSession = {
     sessionId: input.sessionId,
@@ -596,7 +749,7 @@ export function planRework(
     targetSnapshotId: input.targetSnapshotId,
     baseSnapshotId: state.project.snapshotId,
     taskIds: tasks.map((t) => t.taskId),
-    changeIds: input.changes.map((c) => c.changeId),
+    changeIds: [...new Set(tasks.map((t) => t.changeId))],
     mode: breakdown.mode,
     costEstimate: {
       mode: breakdown.mode,
@@ -612,13 +765,6 @@ export function planRework(
     closedAt: null,
   }
   return { session, tasks, reworkWorkPackages, breakdown }
-}
-
-function inferDiscipline(affected: ReadonlyArray<ReworkAffectedItemInput>): Discipline {
-  void affected
-  // 课目维度不参与成本（成本按工作量计），统一归 'design' 以便派工集合固定；
-  // 实际返工按 affected 的学科 WP 归集见 planRework 的 units 均分口径。
-  return 'design'
 }
 
 /** 将返工计划并入项目状态（state 保持不变，`reworkSessionId` 非空 ⇒ 呈现标签出现）。 */
@@ -640,22 +786,25 @@ export function beginRework(state: ProjectExecutionState, plan: ReworkPlan, day:
 
 export interface CompleteReworkInput {
   day: number
-  /** D-01 §7.2.1 闸门结果（提交点同步执行，fail-closed）。 */
+  /** R1：D-01 闸门结果单一入参 `{ pass, violations }`（提交点同步执行，fail-closed）。 */
   gate: GateOutcome
-  /** 新快照分学科 W_d（rebaseline 用；闸门 PASS 时必填）。 */
-  newWorkload?: DisciplineWorkload
+  /** R2（P1-1）：新快照分学科 W_d，**必填**（类型层面不可省）；缺参/学科残缺抛 PROJ_SNAPSHOT_SWITCH_BLOCKED。 */
+  newWorkload: DisciplineWorkload
 }
 
 /**
  * 返工完成（§5.5-6 / §4.3）：
- *  - `ExecutionReworkTask` 全完成 ∧ `RevalidationGate` 零 E 级 ⇒ 切 snapshotId → 新、rebaseline、会话 completed；
+ *  - 任务完成由 WP DONE 派生（R9）∧ `evaluateGate` 零 E 级 ⇒ 切 snapshotId → 新、rebaseline、会话 completed；
  *  - 否则 **不切快照**、会话保持 active、state 保持 ACTIVE（fail-closed，TC-07）。
+ * R2（P1-1 / ADJ-06 §1.2）：切快照**原子**——rebaseline 成功 ∧ 开工 WP 全部指向新快照 ∧
+ * Σbaseline == ΣW_d(new) 三条同时成立才落 `project.snapshotId`；任一不成立抛错，
+ * 调用方拿到的原状态逐字段不变（fail-closed 干净）。
  */
 export function completeRework(
   state: ProjectExecutionState,
   input: CompleteReworkInput,
   params: ProjectFormulaParams,
-): { state: ProjectExecutionState; switched: boolean; gate: { pass: boolean; violationCodes: string[] } } {
+): { state: ProjectExecutionState; switched: boolean; gate: { pass: boolean; violationCodes: string[]; diagnostics: string[] } } {
   const next = cloneState(state)
   const sessionId = next.project.reworkSessionId
   if (sessionId === null) {
@@ -665,26 +814,57 @@ export function completeRework(
   if (session === undefined || session.status !== 'active') {
     throw new ProjectError(PROJ_ERROR.REWORK_SESSION_NOT_ACTIVE, 'rework session not active')
   }
-  const tasksDone = next.reworkTasks.filter((t) => t.sessionId === sessionId).every((t) => t.state === 'DONE')
-  const eViolations = (input.gate.violations ?? []).filter((v) => v.severity === 'E')
-  const gatePass = input.gate.pass === true && eViolations.length === 0
-  const gateResult = { pass: gatePass, violationCodes: (input.gate.violations ?? []).map((v) => v.code) }
-  session.gateResult = gateResult
+  // R2：newWorkload 运行时校验（类型必填之外的兜底）：缺参或学科残缺 ⇒ 拒绝切快照
+  if (input.newWorkload === undefined || input.newWorkload === null) {
+    throw new ProjectError(PROJ_ERROR.SNAPSHOT_SWITCH_BLOCKED, 'newWorkload is required to switch snapshots (R2/P1-1)')
+  }
+  for (const d of DISCIPLINE_ORDER) {
+    const v = input.newWorkload[d]
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      throw new ProjectError(
+        PROJ_ERROR.SNAPSHOT_SWITCH_BLOCKED,
+        `newWorkload is missing or invalid for discipline "${d}" (partial discipline set rejected)`,
+      )
+    }
+  }
+  const gate = evaluateGate(input.gate)
+  const gateResult = { pass: gate.gatePass, violationCodes: gate.violationCodes, diagnostics: gate.diagnostics }
+  session.gateResult = { pass: gate.gatePass, violationCodes: gate.violationCodes }
 
-  if (!gatePass || !tasksDone) {
+  // R9：任务完成由 WP DONE 派生（真实日推进已把返工 WP 推到 DONE）
+  const sessionWps = next.workPackages.filter((wp) => wp.reworkSessionId === sessionId && wp.state !== 'DEACTIVATED')
+  const tasksDone = sessionWps.length > 0 && sessionWps.every((wp) => wp.state === 'DONE')
+
+  if (!gate.gatePass || !tasksDone) {
     // §4.5 active --完成闸门FAIL--> active（附 ViolationSet，返回修正）
     return { state: next, switched: false, gate: gateResult }
   }
 
-  // 切权威快照（唯一 snapshotId，R-PROJ-0）
   const targetSnapshotId = session.targetSnapshotId
+  // R2：rebaseline 先行（可能抛 PROJ_REBASELINE_UNBALANCED）；抛错时 next 被丢弃，原状态干净
+  const reb = rebaselineWorkPackages(next.workPackages, input.newWorkload, targetSnapshotId)
+  // R3：守恒断言对**传入的 W_d(new)**（禁止自证）；失败 ⇒ 整个切换回滚
+  if (!checkRemainingInvariant(reb, input.newWorkload)) {
+    throw new ProjectError(
+      PROJ_ERROR.REBASELINE_UNBALANCED,
+      'rebaseline invariant violated (Σremaining != ΣW_d(new) − Σdelivered, or delivered > baseline); switch rolled back',
+    )
+  }
+  // R2 原子条件 ③：开工（未归档）NORMAL WP 的 Σbaseline == ΣW_d(new)
+  const openBaseline = reb.workPackages
+    .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DONE' && wp.state !== 'DEACTIVATED')
+    .reduce((s, wp) => s + wp.baselineWorkUnits, 0)
+  const targetTotal = DISCIPLINE_ORDER.reduce((s, d) => s + input.newWorkload[d], 0)
+  if (Math.abs(openBaseline - targetTotal) > 1e-6) {
+    throw new ProjectError(
+      PROJ_ERROR.REBASELINE_UNBALANCED,
+      `Σ open NORMAL baseline ${openBaseline} != Σ W_d(new) ${targetTotal}; switch rolled back`,
+    )
+  }
+  // ——原子提交：以下全部成功才对外返回——
+  next.workPackages = reb.workPackages
   next.project.snapshotId = targetSnapshotId
   next.project.state = transitionProjectState('ACTIVE', 'rework_complete')
-  // rebaseline（§5.5-5，防双算）
-  if (input.newWorkload !== undefined) {
-    const reb = rebaselineWorkPackages(next.workPackages, input.newWorkload, targetSnapshotId)
-    next.workPackages = reb.workPackages
-  }
   // 返工 WP 随之归档（剩余清零）
   next.workPackages = next.workPackages.map((wp) =>
     wp.kind === 'REWORK' ? { ...wp, state: 'DONE' as const, remainingWorkUnits: 0 } : wp,
@@ -724,15 +904,23 @@ export function cancelRework(state: ProjectExecutionState, day: number): Project
   return next
 }
 
-/** 交付闸门结果同步消费（§5.6 / C8：只调用一次，fail-closed）。 */
-export function markReworkTasksFromWorklogs(state: ProjectExecutionState): ProjectExecutionState {
-  const next = cloneState(state)
-  const doneWps = new Set(next.workPackages.filter((wp) => wp.state === 'DONE').map((wp) => wp.workPackageId))
-  next.reworkTasks = next.reworkTasks.map((t) =>
+/** 由 WP DONE 派生任务完成（R9）：PENDING 且其 WP 已 DONE ⇒ DONE。 */
+function syncReworkTasks(
+  tasks: ReadonlyArray<ExecutionReworkTask>,
+  wps: ReadonlyArray<WorkPackage>,
+): ExecutionReworkTask[] {
+  const doneWps = new Set(wps.filter((wp) => wp.state === 'DONE').map((wp) => wp.workPackageId))
+  return tasks.map((t) =>
     t.state === 'PENDING' && t.workPackageId !== null && doneWps.has(t.workPackageId)
       ? { ...t, state: 'DONE' as const }
       : t,
   )
+}
+
+/** 交付闸门结果同步消费（§5.6 / C8：只调用一次，fail-closed）。导出供外部补偿同步（如读档）。 */
+export function markReworkTasksFromWorklogs(state: ProjectExecutionState): ProjectExecutionState {
+  const next = cloneState(state)
+  next.reworkTasks = syncReworkTasks(next.reworkTasks, next.workPackages)
   return next
 }
 
@@ -752,14 +940,16 @@ export interface SubmitDeliveryInput {
 }
 
 /**
- * 提交交付：仅 `READY_TO_DELIVER` 可提交；闸门 PASS ⇒ COMPLETED + 生成 Build；
- * FAIL ⇒ 阻断、不生成 Build、回路返工（§4.3 READY_TO_DELIVER→ACTIVE）。
+ * 提交交付：仅 `READY_TO_DELIVER` 可提交；闸门 PASS ⇒ COMPLETED + 生成 Build。
+ * R14（ADJ-08 §1.3）：FAIL 时 **state 保持 READY_TO_DELIVER**（不退回 ACTIVE、不自动建 ReworkSession），
+ * 记 `deliveryFailures += 1` 与 `lastDeliveryFailure = { day, reasonCodes, eViolations }`；
+ * 不生成 Build；权威 snapshotId 不变；玩家可再次提交（无次数上限）。
  * COMPLETED 终态拒绝二次交付（§10 B-6，TC-04）。
  */
 export function submitDelivery(
   state: ProjectExecutionState,
   input: SubmitDeliveryInput,
-): { state: ProjectExecutionState; completed: boolean; build: Build | null } {
+): { state: ProjectExecutionState; completed: boolean; build: Build | null; diagnostics: string[] } {
   const next = cloneState(state)
   if (next.project.state === 'COMPLETED') {
     throw new ProjectError(PROJ_ERROR.TERMINAL_STATE, 'COMPLETED rejects duplicate delivery (§10 B-6)')
@@ -770,12 +960,18 @@ export function submitDelivery(
       `delivery requires READY_TO_DELIVER, got ${next.project.state}`,
     )
   }
-  const eViolations = (input.gate.violations ?? []).filter((v) => v.severity === 'E')
-  const gatePass = input.gate.pass === true && eViolations.length === 0
-  if (!gatePass) {
-    next.project.state = transitionProjectState('READY_TO_DELIVER', 'delivery_fail')
+  const gate = evaluateGate(input.gate)
+  if (!gate.gatePass) {
+    // R14：保持 READY_TO_DELIVER，仅记录失败审计；不自动建 ReworkSession（返工是玩家决策）
+    const eViolations = [...input.gate.violations].filter((v) => v.severity === 'E')
+    next.project.deliveryFailures += 1
+    next.project.lastDeliveryFailure = {
+      day: input.day,
+      reasonCodes: gate.violationCodes,
+      eViolations,
+    }
     next.project.updatedAt = input.day
-    return { state: next, completed: false, build: null }
+    return { state: next, completed: false, build: null, diagnostics: gate.diagnostics }
   }
   const build: Build = {
     buildId: deterministicId('build', next.project.projectId, next.builds.length),
@@ -794,7 +990,7 @@ export function submitDelivery(
   next.project.buildIds.push(build.buildId)
   next.project.state = transitionProjectState('READY_TO_DELIVER', 'delivery_pass')
   next.project.updatedAt = input.day
-  return { state: next, completed: true, build }
+  return { state: next, completed: true, build, diagnostics: gate.diagnostics }
 }
 
 // ===== 汇总视图（UI 只读消费，§8.4） =====

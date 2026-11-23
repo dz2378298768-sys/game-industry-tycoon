@@ -18,11 +18,13 @@
  * ```
  * 纯函数：无随机、无全局 TUNING（参数注入）。
  */
-import type { ReworkCategory, ReworkMode } from '@domain/entities/project-execution'
+import type { Discipline, ReworkCategory, ReworkMode } from '@domain/entities/project-execution'
 import type { ProjectFormulaParams } from './project-execution-tuning'
 
 export interface ReworkAffectedItemInput {
   instanceId: string
+  /** 受影响学科（ADJ-08 §2：affected 必须携带学科维度；缺失 ⇒ planRework 抛 PROJ_REWORK_SCOPE_UNKNOWN）。 */
+  discipline: Discipline
   /** 旧快照中该项该学科的 W_d（Project 从 WP baseline 提供）。 */
   oldWorkUnits: number
   /** 已交付工作量（= delivered_i）。 */

@@ -11,6 +11,8 @@ vi.mock('idb-keyval', () => ({
 }))
 
 import { GameShell } from '@app/game-shell'
+import { ProjectDetail } from '@ui/pages/project-detail'
+import { Deliver } from '@ui/pages/deliver'
 import { useGameStore, t } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
 
@@ -61,6 +63,84 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     expect(useGameStore.getState().getExecutionSummary(projectId)).not.toBeNull()
     expect(useGameStore.getState().getDeliveryStatus(projectId).state).not.toBeNull()
     expect(useGameStore.getState().getCashForecast()).not.toBeNull()
+  })
+
+  it('端到端完整 UI 链路（任务卡 §5）：招人 → 变更 → 返工 → 交付 PASS → 上市', () => {
+    // —— 1. 招人：store 真招聘 + UI 可达 ——
+    const hired = useGameStore.getState().hireEmployee('Dev A', 'programmer', 4, 300_000)
+    expect(hired.error).toBeUndefined()
+    expect(useGameStore.getState().employees).toHaveLength(1)
+    const hireView = render(<GameShell />)
+    fireEvent.click(screen.getByText(t('nav.hire')))
+    expect(screen.getAllByTestId('candidate-card').length).toBeGreaterThan(0)
+    hireView.unmount()
+
+    // —— 2. 立项 + 变更预估（真实 domain breakdown）——
+    const created = useGameStore.getState().createExecutionProject({
+      name: 'E2E Game', genreId: 'action', hrb: 0.45, budgetCapacityCents: 2_000_000,
+    })
+    expect(created.success).toBe(true)
+    const projectId = useGameStore.getState().projects[0]!.id
+    expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
+    expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
+
+    // 夹具：Wizard 无模块词表 → 0 WP（OPEN-CONTENT-MODULES）；注入真实 WP 工作量以驱动返工链。
+    const exec = useGameStore.getState().game!.getExecutionProject(projectId)!
+    exec.project.state = 'ACTIVE'
+    const wp = (id: string, discipline: 'code' | 'art', baseline: number, delivered: number) => ({
+      workPackageId: id, projectId: exec.project.projectId, snapshotId: exec.project.snapshotId,
+      sourceRef: { instanceId: id }, discipline, workUnits: baseline, baselineWorkUnits: baseline,
+      remainingWorkUnits: baseline - delivered, deliveredWorkUnits: delivered,
+      progress: delivered / baseline, skillRef: null, requiredSkillLevel: 0,
+      blockedBy: [], dependents: [], priority: 'P0' as const, state: 'READY' as const,
+      kind: 'NORMAL' as const, orderIndex: 0, reworkSessionId: null, reworkMode: null,
+    })
+    exec.workPackages = [wp('WP-CODE', 'code', 100, 60), wp('WP-ART', 'art', 50, 25)]
+    exec.project.workPackageIds = exec.workPackages.map((w) => w.workPackageId)
+
+    const estimate = useGameStore.getState().getReworkEstimate(projectId, 'B', 15)
+    expect(estimate).not.toBeNull()
+    expect(estimate!.available).toBe(true)
+    expect(estimate!.reworkWorkUnits).toBeGreaterThan(0)
+    expect(estimate!.sunkWorkUnits).toBeGreaterThan(0)
+
+    // —— 3. 返工：UI 打开预估 → 确认后执行（planRework + beginRework）——
+    const detail = render(<ProjectDetail projectId={projectId} onNavigate={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('p07-open-estimate'))
+    expect(screen.getByTestId('p07-estimate-units').textContent).not.toContain('评估不可用')
+    fireEvent.click(screen.getByTestId('p07-rework-confirm'))
+    const afterRework = useGameStore.getState().game!.getExecutionProject(projectId)!
+    expect(afterRework.reworkSessions).toHaveLength(1)
+    expect(afterRework.project.reworkSessionId).toBe(afterRework.reworkSessions[0]!.sessionId)
+    detail.unmount()
+
+    // —— 4. 交付 PASS：UI 可达 + 内核 submitDelivery 生成 Build ——
+    const deliverView = render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)
+    expect(screen.getByTestId('deliver-title')).toBeTruthy()
+    deliverView.unmount()
+    // 夹具：双轨闸门内核未接线（07B-12 D/B 类），直接置 READY_TO_DELIVER 后走真实 submitDelivery。
+    afterRework.project.state = 'READY_TO_DELIVER'
+    const delivered = useGameStore.getState().submitDeliveryForProject(
+      projectId, { pass: true, violations: [] }, 'full',
+    )
+    expect(delivered.success).toBe(true)
+    expect(delivered.result?.completed).toBe(true)
+    expect(delivered.result?.buildId).toBeTruthy()
+    const afterDelivery = useGameStore.getState().game!.getExecutionProject(projectId)!
+    expect(afterDelivery.project.state).toBe('COMPLETED')
+    expect(afterDelivery.builds).toHaveLength(1)
+
+    // —— 5. 上市：legacy launchProject → 产品进入 Products 页 ——
+    const legacy = useGameStore.getState().projects[0]!
+    legacy.phase = 'READY_TO_LAUNCH' // 夹具：QA 阶段完成度内核未接线，见 07B-12 OPEN
+    legacy.plannedLaunchDay = 0 // 夹具：真实玩法需推进到计划上市日
+    const launched = useGameStore.getState().launchProject(projectId)
+    expect(launched.success).toBe(true)
+    expect(useGameStore.getState().products).toHaveLength(1)
+    const productsView = render(<GameShell />)
+    fireEvent.click(screen.getAllByText(t('nav.products'))[0]!)
+    expect(screen.getAllByText('E2E Game').length).toBeGreaterThan(0)
+    productsView.unmount()
   })
 
   it('A-37 存读档一致性：save → 篡改 UI 态 → load，跑道/财务派生视图与读档前一致', async () => {

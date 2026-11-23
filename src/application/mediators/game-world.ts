@@ -90,6 +90,14 @@ export interface GameFinancialOverview {
   reasonCodes: ReturnType<typeof reasonCodesForSignals>
 }
 
+/** P-05：招聘影响预览（可用现金/跑道 前→后，同源领域公式派生，不写回）。 */
+export interface RecruitImpactPreview {
+  before: GameFinancialOverview
+  after: GameFinancialOverview
+  feeCents: number
+  salaryMonthlyCents: number
+}
+
 export class GameWorld {
   public world: WorldState
   public calendar: GameCalendar
@@ -380,6 +388,167 @@ export class GameWorld {
 
   isFinanciallyDistressed(company = this.getPlayerCompany()): boolean {
     return company !== undefined && this.finance.getCashBalance(company.id) < 0
+  }
+
+  /** D03 候选池只读视图（S5-1）：懒引导——空池时按当前日确定性补足（与每日 tick 同源同函数，§15.3 模式）。 */
+  listCandidates(): import('@domain/entities/personnel').Candidate[] {
+    const company = this.getPlayerCompany()
+    if (!company) return []
+    let list = this.withPersonnel(() => this.personnel.listCandidates())
+    if (list.length === 0) {
+      list = this.withPersonnel(() => {
+        this.personnel.refreshCandidatePool(this.dayIndex, () => this.marketSalaryForCity(company.cityId), 'default')
+        return this.personnel.listCandidates()
+      })
+    }
+    return list
+  }
+
+  /** D03 候选池招聘转发（P-05）：playerOffer = 候选 askingSalary（§6.3 区间内），headcount 用管理容量。 */
+  recruitFromCandidate(candidateId: string): CommandOutcome<{ feeCents: number; arrivalDay: number }> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
+    const candidate = this.withPersonnel(() =>
+      this.personnel.listCandidates().find((c) => c.candidateId === candidateId),
+    )
+    if (candidate === undefined) {
+      return { success: false, errorCode: 'D03_CANDIDATE_NOT_FOUND', message: '候选不存在或已被雇佣' }
+    }
+    const r = this.withPersonnel(() =>
+      this.personnel.recruitFromCandidate(
+        {
+          candidateId,
+          companyId: company.id,
+          playerOfferCents: candidate.askingSalaryCents,
+          day: this.dayIndex,
+          headcountLimit: company.managementCapacity,
+        },
+        (d) => this.marketSalaryForCity(company.cityId),
+      ),
+    )
+    if (!r.ok || !r.value) {
+      return { success: false, errorCode: r.error!.code, message: r.error!.message }
+    }
+    // 派生 Employee 视图同步（双轨桥，与 hireEmployee 同口径）：
+    // 池招聘复用既有 Person（R-D03-1），legacy Employee 以 employmentId 为主键新建，
+    // 使 reconcileEmployeeView 后续可按 id 对齐（reconcile 只更新已存在的行）。
+    const employment = r.value.employment
+    const legacyEmp: Employee = {
+      id: employment.employmentId,
+      companyId: employment.companyId,
+      name: r.value.person.displayName,
+      role: employment.role,
+      primarySkill: 'gameplay',
+      skillLevel: Math.max(1, Math.min(5, candidate.skillLevel)),
+      salaryMonthlyCents: employment.salaryMonthlyCents,
+      contractStartDay: employment.startDay,
+      contractEndDay: employment.endDay,
+      morale: r.value.person.baseMorale,
+      fatigue: TUNING.employee.startingFatigue,
+      experience: 0,
+      status: 'hired',
+      hireDay: employment.startDay,
+      version: 1,
+      createdAt: employment.startDay,
+      updatedAt: employment.startDay,
+    }
+    this.world.employees.push(legacyEmp)
+    this.world.employees = this.personnel.reconcileEmployeeView(this.world.employees)
+    this.syncEmployeesFromWorld()
+    this.syncCash(company)
+    return { success: true, result: { feeCents: r.value.feeCents, arrivalDay: r.value.arrivalDay } }
+  }
+
+  /**
+   * P-05 招聘影响预览（同源口径）：确认前展示 可用现金 前→后、跑道 前→后。
+   * "后" = 追加候选的一次性中介费承诺 + 月薪承诺后用同一领域公式重算（ADJ-11 §5.4-6），
+   * 不写回任何状态（纯派生，不造数）。
+   */
+  previewRecruitImpact(candidateId: string): RecruitImpactPreview | null {
+    const company = this.getPlayerCompany()
+    if (!company) return null
+    const candidate = this.listCandidates().find((c) => c.candidateId === candidateId)
+    if (candidate === undefined) return null
+    const before = this.getFinancialOverview()
+    if (!before) return null
+    const tuning = DEFAULT_FINANCE_TUNING
+    const salaryMonthlyCents = candidate.askingSalaryCents
+    const feeCents = Math.round(salaryMonthlyCents * DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths)
+    const commitments = this.finance.getLedger().getCommitments(company.id)
+    const month = monthKeyFromOffsetForRunway(dayIndexToGregorian(this.dayIndex))
+    // 追加假设承诺：一次性中介费（当日兑现）+ 月薪承诺（当月起）
+    const withHypothetical = [
+      ...commitments,
+      {
+        commitmentId: 'preview-fee',
+        companyId: company.id,
+        sourceType: 'contract_obligation',
+        sourceRef: candidateId,
+        amountCents: feeCents,
+        period: 'one_off',
+        periodCount: 1,
+        totalPlannedCents: feeCents,
+        startAt: this.dayIndex,
+        endAt: this.dayIndex,
+        realizedCents: 0,
+        state: 'committed',
+        linkedTxIds: [],
+        cancelEffectiveMonth: null,
+        releasedPeriods: 0,
+        releasedCents: 0,
+        cancelledAtPeriods: null,
+      } as import('@domain/entities/finance').BudgetCommitment,
+      {
+        commitmentId: 'preview-salary',
+        companyId: company.id,
+        sourceType: 'employment_salary',
+        sourceRef: candidateId,
+        amountCents: salaryMonthlyCents,
+        period: 'monthly',
+        periodCount: Math.max(1, tuning.horizonMonths),
+        totalPlannedCents: salaryMonthlyCents * Math.max(1, tuning.horizonMonths),
+        startAt: this.dayIndex,
+        endAt: this.dayIndex + Math.round(tuning.horizonMonths * 30.44),
+        realizedCents: 0,
+        state: 'committed',
+        linkedTxIds: [],
+        cancelEffectiveMonth: null,
+        releasedPeriods: 0,
+        releasedCents: 0,
+        cancelledAtPeriods: null,
+      } as import('@domain/entities/finance').BudgetCommitment,
+    ]
+    const availableCashCents = computeAvailableCash(
+      { cashBalanceCents: before.cashBalanceCents, commitments: withHypothetical, payables: [], receivables: [] },
+      tuning,
+    )
+    const windowEnd = monthKeyFromOffsetForRunway(dayIndexToGregorian(this.dayIndex + Math.round(tuning.horizonMonths * 30.44)))
+    const runwayMonths = computeRunwayMonths({
+      cashBalanceCents: before.cashBalanceCents,
+      commitments: annotateCommitmentsForRunway(withHypothetical, month, windowEnd),
+      expectedInflowsByMonth: [],
+      horizonMonths: tuning.horizonMonths,
+      startMonth: month,
+    })
+    const after: GameFinancialOverview = {
+      ...before,
+      availableCashCents,
+      committedCents: Math.max(0, before.cashBalanceCents - availableCashCents),
+      runwayMonths,
+    }
+    return { before, after, feeCents, salaryMonthlyCents }
+  }
+
+  /** 月薪承诺合计（P-05 employees 页 KPI）：sourceType=employment_salary 且 active 的月度承诺之和。 */
+  monthlySalaryCommitmentCents(): number {
+    const company = this.getPlayerCompany()
+    if (!company) return 0
+    return this.finance
+      .getLedger()
+      .getCommitments(company.id, { state: 'committed' })
+      .filter((c) => c.sourceType === 'employment_salary' && c.period === 'monthly')
+      .reduce((sum, c) => sum + c.amountCents, 0)
   }
 
   // ----- Employee -----

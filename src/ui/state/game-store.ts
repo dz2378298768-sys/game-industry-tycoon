@@ -174,6 +174,14 @@ interface GameStore {
   isFinanciallyDistressed(): boolean
   /** CODE-07A：清档重开（GAME OVER 横幅入口）：删存档 + 新 GameWorld + 全切片清空 */
   restartNewGame(): Promise<void>
+  /** P-05：D-03 候选池只读视图（懒引导补足） */
+  listCandidates(): import('@domain/entities/personnel').Candidate[]
+  /** P-05：候选池招聘转发（中介费 + 月薪承诺由内核创建） */
+  recruitFromCandidate(candidateId: string): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
+  /** P-05：招聘影响预览（可用现金/跑道 前→后，同源领域公式） */
+  previewRecruitImpact(candidateId: string): import('@application/mediators/game-world').RecruitImpactPreview | null
+  /** P-05：月薪承诺合计（KPI） */
+  monthlySalaryCommitmentCents(): number
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -592,6 +600,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
   isFinanciallyDistressed() {
     const gw = get().game
     return gw ? gw.isFinanciallyDistressed() : false
+  },
+
+  listCandidates() {
+    const gw = get().game
+    return gw ? gw.listCandidates() : []
+  },
+
+  recruitFromCandidate(candidateId) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.recruitFromCandidate(candidateId)
+    get().refresh()
+    if (!r.success) get().toast(localizeError(r.errorCode, r.message), 'error')
+    else get().toast(t('hire.recruit.success'), 'success')
+    return { success: r.success, errorCode: r.errorCode, message: r.message }
+  },
+
+  previewRecruitImpact(candidateId) {
+    const gw = get().game
+    return gw ? gw.previewRecruitImpact(candidateId) : null
+  },
+
+  monthlySalaryCommitmentCents() {
+    const gw = get().game
+    return gw ? gw.monthlySalaryCommitmentCents() : 0
   },
 }))
 

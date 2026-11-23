@@ -1,0 +1,939 @@
+diff --git a/src/__tests__/helpers.ts b/src/__tests__/helpers.ts
+index 560743e..cb7fbd7 100644
+--- a/src/__tests__/helpers.ts
++++ b/src/__tests__/helpers.ts
+@@ -4,6 +4,7 @@ import type { Employee } from '@domain/entities/employee'
+ import type { Project } from '@domain/entities/project'
+ import type { WorldState } from '@simulation/services/world-state'
+ import type { QualityProfile } from '@domain/value-objects'
++import type { FinanceService } from '@simulation/services/finance-service'
+ 
+ export const QUALITY: QualityProfile = {
+   gameplay: 60,
+@@ -24,6 +25,20 @@ export function makeCompany(overrides: Partial<Company> = {}): Company {
+   return { ...base, ...overrides }
+ }
+ 
++/**
++ * R7 / CRT-01 夹具：把世界状态公司对象的现金字段与账本求和**对齐**。
++ *
++ * 入账结束后统一以账本为权威回写对象（`finance.syncCash`），保证
++ * `DailyScheduler.syncCompanyCash` 的"先断言后写入"不会把夹具判成第二写入者。
++ * 生产路径不得使用本函数；它只是让测试里"直接构造现金"的写法落到账本上。
++ */
++export function syncCashFromLedger(
++  finance: FinanceService,
++  companies: ReadonlyArray<Pick<Company, 'id' | 'cashBalanceCents'>>,
++): void {
++  for (const c of companies) finance.syncCash(c as Company)
++}
++
+ export function makeEmployee(overrides: Partial<Employee> = {}): Employee {
+   return {
+     id: 'emp-1',
+diff --git a/src/application/mediators/game-world.ts b/src/application/mediators/game-world.ts
+index fda8c56..bb7440c 100644
+--- a/src/application/mediators/game-world.ts
++++ b/src/application/mediators/game-world.ts
+@@ -1269,6 +1269,7 @@ export class GameWorld {
+         events.push(...this.world.events.slice(beforeEvents))
+       }
+     }
++    // CRT-01 / P1-03：推进结束后对全部公司再断言一次"任意时刻一致"（fail-loud，不静默对齐）。
+     this.projects.reset(this.world.projects)
+     this.employees.reset(this.world.employees)
+     return { totalDays: days, events }
+diff --git a/src/domain/entities/finance/errors.ts b/src/domain/entities/finance/errors.ts
+index 7aad45e..f0404d8 100644
+--- a/src/domain/entities/finance/errors.ts
++++ b/src/domain/entities/finance/errors.ts
+@@ -40,6 +40,11 @@ export const FIN_ERROR = {
+   COMMITMENT_NOT_FOUND: 'FIN_COMMITMENT_NOT_FOUND',
+   /** 承诺注册表：结算金额与周期不符 / 已取消仍试图结算。 */
+   COMMITMENT_SETTLEMENT_INVALID: 'FIN_COMMITMENT_SETTLEMENT_INVALID',
++  /**
++   * 兑现被拒：该周期归属月已达/超过取消生效月（"这个月已取消"，ADJ-2026-11-22-10 §1.3 R5）。
++   * 与 `COMMITMENT_MISMATCH`（数据不对/出窗）区分，供 CODE-07 UI 按原因给不同提示。
++   */
++  COMMITMENT_PERIOD_CANCELLED: 'FIN_COMMITMENT_PERIOD_CANCELLED',
+ } as const
+ 
+ export type FinanceErrorCode = (typeof FIN_ERROR)[keyof typeof FIN_ERROR]
+diff --git a/src/domain/entities/finance/ledger.ts b/src/domain/entities/finance/ledger.ts
+index 9a3d3ae..e54a416 100644
+--- a/src/domain/entities/finance/ledger.ts
++++ b/src/domain/entities/finance/ledger.ts
+@@ -819,21 +819,30 @@ export class UnifiedLedger {
+     return ok(result)
+   }
+ 
+-  /** 从既有交易回填承诺的已兑现金额（读档后若只持久化了交易，可在守卫校验下重新对齐）。 */
++  /**
++   * 从既有交易回填承诺的已兑现金额（读档后若只持久化了交易，可在守卫校验下重新对齐）。
++   *
++   * R4：**`cancelled` 也回填**。取消不改写 `realizedCents`（它只由真实交易驱动），但取消之后
++   * 仍可能发生"已赚取周期补记"（ADJ-2026-11-22-10 §1），若读档时跳过 `cancelled`，
++   * 这些已 post 的金额就再也重建不出来，`realizedCents` 与账本兑现交易额永久分叉。
++   * 回填只累加 `amountCents < 0` 的真实交易（与未取消承诺同口径）。
++   */
+   reconcileCommitmentsFromTransactions(companyId: string): void {
+     for (const id of this.commitmentIdsByCompany.get(companyId) ?? []) {
+       const c = this.commitments.get(commitmentScopedKey(companyId, id))
+-      if (!c || c.state === 'cancelled') continue
++      if (!c) continue
+       let realized = 0
+       for (const tx of this.transactions) {
+         if (tx.companyId !== companyId || tx.referenceId !== c.commitmentId) continue
+         if (tx.amountCents < 0) realized += -tx.amountCents
+       }
+       if (realized > c.realizedCents) {
++        const realizedCents = Math.min(c.totalPlannedCents, realized)
+         this.storeCommitment({
+           ...c,
+-          realizedCents: Math.min(c.totalPlannedCents, realized),
+-          state: deriveCommitmentState({ ...c, realizedCents: Math.min(c.totalPlannedCents, realized) }),
++          realizedCents,
++          // 取消为终态：不得因回填被 deriveCommitmentState 改写。
++          state: c.state === 'cancelled' ? 'cancelled' : deriveCommitmentState({ ...c, realizedCents }),
+         })
+       }
+     }
+diff --git a/src/domain/value-objects/finance-commitment.ts b/src/domain/value-objects/finance-commitment.ts
+index 2ac56c6..50f125d 100644
+--- a/src/domain/value-objects/finance-commitment.ts
++++ b/src/domain/value-objects/finance-commitment.ts
+@@ -188,10 +188,16 @@ function monthOrdinal(monthKey: string): number {
+  *
+  * - `effectiveMonth` 早于承诺起始月 ⇒ 全额释放（realizedPeriods=0）。
+  * - `effectiveMonth` 晚于承诺结束月 ⇒ 全额已兑现（releasedPeriods=0）。
+- * - 其余 ⇒ 生效月之前的周期为"已兑现"（其中已有交易的部分计入 realizedCents），
++ * - 其余 ⇒ 生效月之前的周期为**已赚取周期**（其中已 post 的部分计入 realizedCents），
+  *   生效月及之后的周期一律释放。
+  * - 恒等式：`realizedCents + releasedCents == totalPlannedCents`，
+  *   `realizedPeriods + releasedPeriods == periodCount`。
++ *
++ * ⚠️ `realizedCents` **只由真实交易驱动**（ADJ-2026-11-22-10 §1.5 / R2）：
++ * 本函数直接返回 `c.realizedCents`（已实际 post 的累计额），**不按月份差推算、不做 Math.max 抬升**。
++ * `realizedPeriods` 表达"已赚取应付费的期数"，仅用于恒等式与释放计算，**不得用来推金额**。
++ * 两者在"月中取消、当月尚未 post"时**故意不等**（`realizedPeriods × amountCents > realizedCents`），
++ * 这是正确状态：该期随后仍可在 `settlementDay` 照常兑现（见 `realizeCommitment` 的 R1 分支）。
+  */
+ export function cancelCommitment(
+   c: BudgetCommitment,
+@@ -202,14 +208,14 @@ export function cancelCommitment(
+ 
+   const realizedPeriods = Math.min(c.periodCount, Math.max(0, effIdx - startIdx))
+   const releasedPeriods = c.periodCount - realizedPeriods
+-  const realizedCents = Math.min(c.totalPlannedCents, realizedPeriods * c.amountCents)
++  const realizedCents = c.realizedCents
+   const releasedCents = c.totalPlannedCents - realizedCents
+ 
+   const commitment: BudgetCommitment = {
+     ...c,
+     state: 'cancelled',
+-    // 生效期之前的周期视为已兑现：realizedCents 不得低于该口径（已记账部分本就在其中）。
+-    realizedCents: Math.max(c.realizedCents, realizedCents),
++    // R2：保持真实已 post 累计值，不因取消而改写（CRT-02）。
++    realizedCents,
+     cancelEffectiveMonth: effectiveMonth,
+     releasedPeriods,
+     releasedCents,
+@@ -245,18 +251,30 @@ export interface RealizeCommitmentResult {
+ /**
+  * 兑现一个周期：经唯一现金入口提交一笔交易，追加 linkedTxIds 并累加 realizedCents。
+  * 重复兑现（同 id 同月）命中幂等键 → 返回原交易，承诺不更新（不双算）。
++ *
++ * 已取消承诺（ADJ-2026-11-22-10 §1 / R1）：`cancelled` 拒绝的是 `effectiveMonth` **及之后**的周期，
++ * 不是"全部兑现"。本次兑现的归属月（`monthKeyOf(input.day)`，即结算日所在月）
++ * `< cancelEffectiveMonth` ⇒ 该期属**已赚取周期**，照常 post；否则拒绝并返回
++ * `FIN_COMMITMENT_PERIOD_CANCELLED`（R5，CODE-07 据此区分"这个月已取消"与"数据不对"）。
+  */
+ export function realizeCommitment(input: RealizeCommitmentInput): CommandResult<RealizeCommitmentResult> {
+   const c = input.commitment
+-  if (c.state === 'cancelled') {
+-    return fail(FIN_ERROR.COMMITMENT_MISMATCH, `Commitment ${c.commitmentId} is cancelled`)
+-  }
+   if (c.period === 'monthly') {
+     if (input.day < c.startAt || input.day > c.endAt) {
+       return fail(FIN_ERROR.COMMITMENT_MISMATCH, `Day ${input.day} outside commitment window`)
+     }
+   }
+   const periodKey = c.period === 'monthly' ? monthKeyOf(input.day) : 'one_off'
++  if (c.state === 'cancelled') {
++    // 判据统一用月序（monthOrdinal），不做字符串/日期比较；未记录生效月视为无已赚取周期。
++    const effMonth = c.cancelEffectiveMonth
++    if (effMonth === null || monthOrdinal(periodKey) >= monthOrdinal(effMonth)) {
++      return fail(
++        FIN_ERROR.COMMITMENT_PERIOD_CANCELLED,
++        `Commitment ${c.commitmentId} cancelled effective ${effMonth ?? 'unknown'}; period ${periodKey} is not an earned period`,
++      )
++    }
++  }
+   const key = commitmentIdempotencyKey(c.commitmentId, periodKey)
+ 
+   const existing = input.ledger.getTransactionByKeyInCompany(c.companyId, key)
+diff --git a/src/domain/value-objects/finance-formulas.ts b/src/domain/value-objects/finance-formulas.ts
+index a01e93a..6309e83 100644
+--- a/src/domain/value-objects/finance-formulas.ts
++++ b/src/domain/value-objects/finance-formulas.ts
+@@ -40,7 +40,14 @@ export function computeAvailableCash(input: AvailableCashInput, tuning: FinanceT
+   const anchor = input.startMonth ?? earliestCommitmentMonth(input.commitments)
+   const windowEnd = anchor === undefined ? undefined : monthKeyFromOffset(anchor, Math.max(0, horizon - 1))
+   for (const c of input.commitments) {
+-    if (c.state === 'cancelled') continue
++    // 已取消承诺（R3）：只扣"已赚取但尚未 post"的差额，未兑现的未来周期不计。
++    // `releasedCents` 已由取消时的真实累计推出（`totalPlannedCents − realizedCents`），故该项
++    // 在取消瞬间恒为 0，随后补记该期时随 `realizedCents` 上升而下降。**不得**整体跳过——
++    // 否则"钱还没付却已不算占用"，会高估可用现金（危险方向）。
++    if (c.state === 'cancelled') {
++      available -= Math.max(0, c.totalPlannedCents - c.realizedCents - c.releasedCents)
++      continue
++    }
+     available -=
+       anchor === undefined || windowEnd === undefined
+         ? remainingPlannedCents(c)
+diff --git a/src/simulation/__tests__/budget-exhaustion.test.ts b/src/simulation/__tests__/budget-exhaustion.test.ts
+index d4a9efa..d1263f9 100644
+--- a/src/simulation/__tests__/budget-exhaustion.test.ts
++++ b/src/simulation/__tests__/budget-exhaustion.test.ts
+@@ -3,7 +3,7 @@ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+ import { FinanceService } from '@simulation/services/finance-service'
+ import { ProjectService } from '@simulation/services/project-service'
+ import { gregorianToDayIndex } from '@domain/value-objects/day-index'
+-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
++import { makeEmployee, makeProject, makeWorld, syncCashFromLedger } from '../../__tests__/helpers'
+ import type { WorldState } from '@simulation/services/world-state'
+ import type { Project } from '@domain/entities/project'
+ import type { DomainEvent } from '@domain/events'
+@@ -22,7 +22,13 @@ function makeScheduler() {
+     amountCents: 5_000_000,
+     description: 'opening',
+   })
+-  return { finance, scheduler: new DailyScheduler({ finance }) }
++  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
++  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
++  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
+ }
+ 
+ /** remainingCap 恰好为 0（判据 <=0 含等号）的 active 项目 */
+@@ -41,8 +47,8 @@ function budgetExhaustedEvents(world: WorldState): DomainEvent[] {
+ 
+ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => {
+   it('耗尽触发：remainingCap<=0 置耗尽态、phase 不变、事件唯一且不自动取消', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [exhaustedProject()] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [exhaustedProject()] })
+ 
+     const next = scheduler.executeDay(world, 1)
+     const p = next.projects[0]!
+@@ -66,7 +72,7 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () =>
+   })
+ 
+   it('耗尽后既有义务继续：研发产出=0，工资仍按原比例分摊', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 300 })
+     const project = makeProject({
+       id: 'project-1',
+@@ -75,7 +81,7 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () =>
+         { employeeId: 'emp-1', projectId: 'project-1', allocationRatio: 1, roleOnProject: 'generalist' },
+       ],
+     })
+-    const world = makeWorld({ employees: [emp], projects: [project] })
++    const world = worldOf({ employees: [emp], projects: [project] })
+ 
+     // 月末：工资 300 分摊使 remainingCap = 100 - 300 = -200，触发耗尽
+     const exhausted = scheduler.executeDay(world, JAN_END)
+@@ -100,8 +106,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () =>
+   })
+ 
+   it('事件幂等：同一恢复周期仅一次；resume 后 resumeSeq+1 可再次触发', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [exhaustedProject()] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [exhaustedProject()] })
+ 
+     const first = scheduler.executeDay(world, 1)
+     expect(budgetExhaustedEvents(first)).toHaveLength(1)
+@@ -135,8 +141,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () =>
+   })
+ 
+   it('不自动取消且终态项目不判定耗尽；耗尽暂停计入 D01 计数', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [
+         exhaustedProject({ id: 'active' }),
+         exhaustedProject({ id: 'launched', phase: 'LAUNCHED' }),
+@@ -168,8 +174,8 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () =>
+   })
+ 
+   it('手动暂停项目仍参与耗尽判定（active 含暂停项目，GDR 边界）', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [
+         makeProject({
+           id: 'manual-paused',
+diff --git a/src/simulation/__tests__/cost-allocation.test.ts b/src/simulation/__tests__/cost-allocation.test.ts
+index d1ecdf1..7eebc7d 100644
+--- a/src/simulation/__tests__/cost-allocation.test.ts
++++ b/src/simulation/__tests__/cost-allocation.test.ts
+@@ -7,7 +7,7 @@ import {
+   salaryAllocationIdempotencyKey,
+ } from '@domain/entities/project-cost-allocation'
+ import { parseSave } from '@infrastructure/storage/save-schema'
+-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
++import { makeEmployee, makeProject, makeWorld, syncCashFromLedger } from '../../__tests__/helpers'
+ import type { Project } from '@domain/entities/project'
+ 
+ const MONTH_END = gregorianToDayIndex(1970, 1, 31) // day 30
+@@ -24,7 +24,13 @@ function makeScheduler() {
+     amountCents: 5_000_000,
+     description: 'opening',
+   })
+-  return { finance, scheduler: new DailyScheduler({ finance }) }
++  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
++  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
++  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
+ }
+ 
+ function projectWith(
+@@ -47,9 +53,9 @@ function allocationsOf(projects: Project[]) {
+ 
+ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   it('一笔工资交易多项目分摊：同一现金交易、按 60/40 归属、spent 累加', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
+     })
+@@ -85,9 +91,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('分摊取整守恒：月薪 100 分、三项目各 1/3，最大余数法分币不丢失', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 100 })
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [
+         projectWith('project-a', 1 / 3),
+@@ -109,9 +115,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('暂停项目工资仍按原比例归属（G05-R6）', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [
+         projectWith('project-a', 0.6, { isPaused: true }),
+@@ -128,9 +134,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('幂等重复分摊：同一周期重复结算不新增记录、不重复增加 spent', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
+     })
+@@ -169,9 +175,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('闲置工时（Σratio<1）不分摊到任何项目', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({ employees: [emp], projects: [projectWith('project-a', 0.5)] })
++    const world = worldOf({ employees: [emp], projects: [projectWith('project-a', 0.5)] })
+ 
+     const next = scheduler.executeDay(world, MONTH_END)
+ 
+@@ -185,9 +191,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('离职员工不参与分摊，也不产生工资交易', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', status: 'fired', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({ employees: [emp], projects: [projectWith('project-a', 1)] })
++    const world = worldOf({ employees: [emp], projects: [projectWith('project-a', 1)] })
+ 
+     const next = scheduler.executeDay(world, MONTH_END)
+ 
+@@ -196,9 +202,9 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
+   })
+ 
+   it('分摊记录随存档持久化，并通过现金交易引用完整性校验', () => {
+-    const { finance, scheduler } = makeScheduler()
++    const { finance, scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [projectWith('project-a', 0.6), projectWith('project-b', 0.4)],
+     })
+diff --git a/src/simulation/__tests__/daily-scheduler.test.ts b/src/simulation/__tests__/daily-scheduler.test.ts
+index b639dbe..e9abe63 100644
+--- a/src/simulation/__tests__/daily-scheduler.test.ts
++++ b/src/simulation/__tests__/daily-scheduler.test.ts
+@@ -1,7 +1,7 @@
+ import { describe, it, expect } from 'vitest'
+ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+ import { FinanceService } from '@simulation/services/finance-service'
+-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
++import { makeWorld, makeProject, makeEmployee, syncCashFromLedger } from '../../__tests__/helpers'
+ 
+ function makeScheduler() {
+   const finance = new FinanceService()
+@@ -14,14 +14,20 @@ function makeScheduler() {
+     amountCents: 5_000_000,
+     description: 'opening',
+   })
+-  return { finance, scheduler: new DailyScheduler({ finance }) }
++  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出
++  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
++  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
+ }
+ 
+ describe('DailyScheduler 阶段门控', () => {
+   it('CONCEPT 阶段不累计工作量', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const project = makeProject({ phase: 'CONCEPT' })
+-    const world = makeWorld({ projects: [project] })
++    const world = worldOf({ projects: [project] })
+ 
+     const next = scheduler.executeDay(world, 1)
+     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
+@@ -29,15 +35,15 @@ describe('DailyScheduler 阶段门控', () => {
+   })
+ 
+   it('PRE_PRODUCTION 阶段不累计工作量', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject({ phase: 'PRE_PRODUCTION' })] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject({ phase: 'PRE_PRODUCTION' })] })
+     const next = scheduler.executeDay(world, 1)
+     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
+   })
+ 
+   it('PRODUCTION 阶段按岗位学科累计工作量', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject({ phase: 'PRODUCTION' })] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject({ phase: 'PRODUCTION' })] })
+ 
+     const next = scheduler.executeDay(world, 1)
+     const p = next.projects[0]
+@@ -48,7 +54,7 @@ describe('DailyScheduler 阶段门控', () => {
+   })
+ 
+   it('QA 阶段只累计 QA 工作量', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const qaEmp = makeEmployee({ id: 'qa-1', role: 'qa' })
+     const project = makeProject({
+       phase: 'QA',
+@@ -58,7 +64,7 @@ describe('DailyScheduler 阶段门控', () => {
+       workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 100 },
+       workTotalByDiscipline: { design: 100, programming: 100, art: 100, qa: 100 },
+     })
+-    const world = makeWorld({ employees: [qaEmp], projects: [project] })
++    const world = worldOf({ employees: [qaEmp], projects: [project] })
+ 
+     const next = scheduler.executeDay(world, 1)
+     const p = next.projects[0]
+@@ -67,8 +73,8 @@ describe('DailyScheduler 阶段门控', () => {
+   })
+ 
+   it('READY_TO_LAUNCH 阶段不累计工作量', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [
+         makeProject({
+           phase: 'READY_TO_LAUNCH',
+@@ -82,8 +88,8 @@ describe('DailyScheduler 阶段门控', () => {
+   })
+ 
+   it('暂停项目不推进工作量', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject({ isPaused: true })] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject({ isPaused: true })] })
+     const next = scheduler.executeDay(world, 1)
+     expect(next.projects[0]?.workRemainingByDiscipline.programming).toBe(100)
+   })
+@@ -91,8 +97,8 @@ describe('DailyScheduler 阶段门控', () => {
+ 
+ describe('DailyScheduler 幂等性', () => {
+   it('同一天重复执行不会重复扣减工作量', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject()] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject()] })
+ 
+     const day1 = scheduler.executeDay(world, 1)
+     const again = scheduler.executeDay(day1, 1)
+@@ -104,8 +110,8 @@ describe('DailyScheduler 幂等性', () => {
+   })
+ 
+   it('同一天重复执行不会重复产生财务交易', () => {
+-    const { finance, scheduler } = makeScheduler()
+-    const world = makeWorld()
++    const { finance, scheduler, worldOf } = makeScheduler()
++    const world = worldOf()
+     // day 30 = 1 月 31 日，月末结算
+     const next = scheduler.executeDay(world, 30)
+     scheduler.executeDay(next, 30)
+@@ -116,9 +122,9 @@ describe('DailyScheduler 幂等性', () => {
+ 
+ describe('DailyScheduler 员工状态', () => {
+   it('士气按浮点公式向 70 回归，不被取整抹掉', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ morale: 50, fatigue: 0 })
+-    const world = makeWorld({ employees: [emp], projects: [] })
++    const world = worldOf({ employees: [emp], projects: [] })
+ 
+     const next = scheduler.executeDay(world, 1)
+     // 50 + (70-50)*0.02 = 50.4
+@@ -126,23 +132,23 @@ describe('DailyScheduler 员工状态', () => {
+   })
+ 
+   it('有研发任务时疲劳按投入比例增加', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject()] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject()] })
+     const next = scheduler.executeDay(world, 1)
+     // 20 + 0.5 × 1.0 = 20.5
+     expect(next.employees[0]?.fatigue).toBeCloseTo(20.5, 5)
+   })
+ 
+   it('未分配工作时疲劳恢复', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ employees: [makeEmployee({ fatigue: 40 })], projects: [] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ employees: [makeEmployee({ fatigue: 40 })], projects: [] })
+     const next = scheduler.executeDay(world, 1)
+     expect(next.employees[0]?.fatigue).toBe(39)
+   })
+ 
+   it('项目暂停时员工按休息规则恢复疲劳', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       employees: [makeEmployee({ fatigue: 40 })],
+       projects: [makeProject({ isPaused: true })],
+     })
+diff --git a/src/simulation/__tests__/paused-timeout.test.ts b/src/simulation/__tests__/paused-timeout.test.ts
+index c58e309..90e33bb 100644
+--- a/src/simulation/__tests__/paused-timeout.test.ts
++++ b/src/simulation/__tests__/paused-timeout.test.ts
+@@ -6,7 +6,7 @@ import { GameWorld } from '@application/mediators/game-world'
+ import { parseSave } from '@infrastructure/storage/save-schema'
+ import { PAUSE_TIMEOUT_DAYS } from '@simulation/systems/phase-rules'
+ import type { WorldState } from '@simulation/services/world-state'
+-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
++import { makeEmployee, makeProject, makeWorld, syncCashFromLedger } from '../../__tests__/helpers'
+ 
+ function makeScheduler() {
+   const finance = new FinanceService()
+@@ -19,7 +19,13 @@ function makeScheduler() {
+     amountCents: 5_000_000,
+     description: 'opening',
+   })
+-  return { finance, scheduler: new DailyScheduler({ finance }) }
++  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
++  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
++  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
+ }
+ 
+ /** 连续推进 days 个游戏日（从 fromDay 起，每个 dayIndex 只调度一次） */
+@@ -53,8 +59,8 @@ function saveSafeWorld(pausedDays: number): WorldState {
+ 
+ describe('D-01 暂停计时与超时自动取消', () => {
+   it(`连续暂停满 ${PAUSE_TIMEOUT_DAYS} 天在当日调度触发自动取消`, () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [makeProject({ isPaused: true, pauseReason: 'manual' })],
+     })
+ 
+@@ -76,8 +82,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('第 59 天仍暂停，不取消', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [makeProject({ isPaused: true, pausedDays: PAUSE_TIMEOUT_DAYS - 2 })],
+     })
+ 
+@@ -91,8 +97,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('进入暂停当天计 0，次日调度起 +1', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
+ 
+     const sameDay = scheduler.executeDay(world, 0)
+     expect(sameDay.projects[0]?.pausedDays).toBe(0)
+@@ -102,7 +108,7 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('恢复后 pausedDays 清零，再次暂停重新累计', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const service = new ProjectService()
+     service.reset([makeProject({ isPaused: true, pausedDays: 30, pauseReason: 'manual' })])
+ 
+@@ -112,7 +118,7 @@ describe('D-01 暂停计时与超时自动取消', () => {
+     expect(resumed.result?.pauseReason).toBeNull()
+ 
+     // 再次暂停后从 0 开始，旧的 30 天计数不会带入
+-    const world = makeWorld({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
++    const world = worldOf({ projects: [makeProject({ isPaused: true, pausedDays: 0 })] })
+     const afterOneDay = scheduler.executeDay(world, 1)
+     expect(afterOneDay.projects[0]?.pausedDays).toBe(1)
+   })
+@@ -128,8 +134,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('预算耗尽暂停（budget_exhausted）同样计入并在第 60 天取消', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [
+         makeProject({ isPaused: true, pauseReason: 'budget_exhausted' }),
+       ],
+@@ -143,9 +149,9 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('超时自动取消清除预算耗尽过程态标记（终态清理口径 DESIGN-G05 §6.3）', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     // 预算耗尽态叠加暂停超时：次日起即达 60 天触发自动取消
+-    const world = makeWorld({
++    const world = worldOf({
+       projects: [
+         makeProject({
+           isPaused: true,
+@@ -171,8 +177,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('终态项目（LAUNCHED/CANCELLED）不累计暂停也不判超时', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [
+         makeProject({ id: 'launched', phase: 'LAUNCHED', isPaused: true, pausedDays: 0 }),
+         makeProject({ id: 'cancelled', phase: 'CANCELLED', isPaused: true, pausedDays: 0 }),
+@@ -186,8 +192,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('超过计划上市日不自动失败或取消', () => {
+-    const { scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       projects: [makeProject({ isPaused: true, plannedLaunchDay: 10, pausedDays: 0 })],
+     })
+ 
+@@ -201,8 +207,8 @@ describe('D-01 暂停计时与超时自动取消', () => {
+   })
+ 
+   it('取消后停止研发产出、人员项目产出与新支出', () => {
+-    const { finance, scheduler } = makeScheduler()
+-    const world = makeWorld({
++    const { finance, scheduler, worldOf } = makeScheduler()
++    const world = worldOf({
+       employees: [makeEmployee({ fatigue: 40 })],
+       projects: [makeProject({ isPaused: true, pausedDays: PAUSE_TIMEOUT_DAYS - 1 })],
+     })
+diff --git a/src/simulation/__tests__/terminal-release.test.ts b/src/simulation/__tests__/terminal-release.test.ts
+index beea9c2..4a95fe1 100644
+--- a/src/simulation/__tests__/terminal-release.test.ts
++++ b/src/simulation/__tests__/terminal-release.test.ts
+@@ -5,7 +5,7 @@ import { FinanceService } from '@simulation/services/finance-service'
+ import { GameWorld } from '@application/mediators/game-world'
+ import { gregorianToDayIndex } from '@domain/value-objects/day-index'
+ import { parseSave, SAVE_SCHEMA_VERSION } from '@infrastructure/storage/save-schema'
+-import { makeWorld, makeProject, makeEmployee } from '../../__tests__/helpers'
++import { makeEmployee, makeProject, makeWorld, syncCashFromLedger } from '../../__tests__/helpers'
+ import type { Project } from '@domain/entities/project'
+ import type { TeamAssignment } from '@domain/value-objects'
+ 
+@@ -26,7 +26,13 @@ function makeScheduler() {
+     amountCents: 5_000_000,
+     description: 'opening',
+   })
+-  return { finance, scheduler: new DailyScheduler({ finance }) }
++  // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
++  const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
++  return { finance, scheduler: new DailyScheduler({ finance }), worldOf }
+ }
+ 
+ describe('TASK-M1.1-TERMINAL-RELEASE-001 终态解除团队分配', () => {
+@@ -64,10 +70,10 @@ describe('TASK-M1.1-TERMINAL-RELEASE-001 终态解除团队分配', () => {
+   })
+ 
+   it('③ 终态项目推进 30 天：budgetSpentCents 不变、costAllocations 不增（scheduler 双层防护）', () => {
+-    const { scheduler } = makeScheduler()
++    const { scheduler, worldOf } = makeScheduler()
+     const emp = makeEmployee({ id: 'emp-1', salaryMonthlyCents: 1_000_000 })
+     // 直接构造带残留分配的历史终态项目，绕过 F1，单独验证 F2 的调度器过滤
+-    const world = makeWorld({
++    const world = worldOf({
+       employees: [emp],
+       projects: [
+         makeProject({ id: 'launched', phase: 'LAUNCHED', teamAssignments: assignment('launched') }),
+diff --git a/src/simulation/__tests__/test-bankruptcy-guard.test.ts b/src/simulation/__tests__/test-bankruptcy-guard.test.ts
+index 2621c28..6334715 100644
+--- a/src/simulation/__tests__/test-bankruptcy-guard.test.ts
++++ b/src/simulation/__tests__/test-bankruptcy-guard.test.ts
+@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
+ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+ import { FinanceService } from '@simulation/services/finance-service'
+ import { ProjectService } from '@simulation/services/project-service'
+-import { makeEmployee, makeProject, makeWorld } from '../../__tests__/helpers'
++import { makeEmployee, makeProject, makeWorld, syncCashFromLedger } from '../../__tests__/helpers'
+ import type { WorldState } from '@simulation/services/world-state'
+ import type { DomainEvent } from '@domain/events'
+ import { parseSave } from '@infrastructure/storage/save-schema'
+@@ -14,30 +14,38 @@ import { GameWorld } from '@application/mediators/game-world'
+  */
+ function makeBankruptSetup() {
+   const finance = new FinanceService()
+-  finance.registerCompany('company-1')
+-  // 先入账 $5M
+-  finance.postTransaction({
+-    idempotencyKey: 'opening',
+-    companyId: 'company-1',
+-    day: 0,
+-    category: 'advance',
+-    amountCents: 5_000_000,
+-    description: 'opening',
+-  })
+-  // 再用 allowNegativeBalance 支出 $6M → 现金 -$1M
+-  finance.postTransaction(
+-    {
+-      idempotencyKey: 'big-expense',
+-      companyId: 'company-1',
+-      day: 0,
+-      category: 'project_expense',
+-      amountCents: -6_000_000,
+-      description: '手动巨额支出',
+-    },
+-    { allowNegativeBalance: true },
+-  )
++  // R7：世界状态里的公司现金必须与账本一致 —— 先建世界，再按公司 id 入账。
++  const worldWith = (parts: Parameters<typeof makeWorld>[0] = {}) => {
++    const world = makeWorld(parts)
++    for (const company of world.companies) {
++      // 公司对象自带的启动现金先记进账本（R7：不得绕过账本直接构造现金）
++      finance.registerCompany(company.id)
++      finance.postTransaction({
++        idempotencyKey: `opening:${company.id}`,
++        companyId: company.id,
++        day: 0,
++        category: 'advance',
++        amountCents: company.cashBalanceCents,
++        description: 'opening',
++      })
++      // 再用 allowNegativeBalance 支出 $6M → 现金 -$1M
++      finance.postTransaction(
++        {
++          idempotencyKey: `big-expense:${company.id}`,
++          companyId: company.id,
++          day: 0,
++          category: 'project_expense',
++          amountCents: -6_000_000,
++          description: '手动巨额支出',
++        },
++        { allowNegativeBalance: true },
++      )
++    }
++    syncCashFromLedger(finance, world.companies)
++    return world
++  }
+   const scheduler = new DailyScheduler({ finance })
+-  return { finance, scheduler }
++  return { finance, scheduler, worldWith }
+ }
+ 
+ function bankruptEvents(world: WorldState): DomainEvent[] {
+@@ -51,8 +59,8 @@ function rawPlayer(gw: GameWorld) {
+ 
+ describe('OI-21 破产守卫 V1~V3', () => {
+   it('V1：负现金触发破产，company.status 从 active 变为 bankrupt', () => {
+-    const { scheduler } = makeBankruptSetup()
+-    const world = makeWorld()
++    const { scheduler, worldWith } = makeBankruptSetup()
++    const world = worldWith()
+ 
+     // 前置 sanity：执行前 status 还是 active
+     expect(world.companies[0]!.status).toBe('active')
+@@ -85,6 +93,8 @@ describe('OI-21 破产守卫 V1~V3', () => {
+       },
+       { allowNegativeBalance: true },
+     )
++    // R7：世界状态里的公司现金字段必须与账本一致（每天回写前会先断言）。
++    syncCashFromLedger(gw.finance, gw.world.companies)
+     gw.advanceSimulation(1)
+     const company = rawPlayer(gw)
+     expect(company.status).toBe('bankrupt')
+@@ -96,8 +106,8 @@ describe('OI-21 破产守卫 V1~V3', () => {
+   })
+ 
+   it('V3：破产事件被派发，payload 含 companyId / day / balanceAtBankruptcy', () => {
+-    const { scheduler, finance } = makeBankruptSetup()
+-    const world = makeWorld()
++    const { scheduler, finance, worldWith } = makeBankruptSetup()
++    const world = worldWith()
+ 
+     const balanceBefore = finance.getCashBalance('company-1')
+     const next = scheduler.executeDay(world, 1)
+@@ -114,8 +124,8 @@ describe('OI-21 破产守卫 V1~V3', () => {
+   })
+ 
+   it('V3 幂等：同一 active 公司在破产判定后，后续调度不再重复派发破产事件', () => {
+-    const { scheduler } = makeBankruptSetup()
+-    const world = makeWorld()
++    const { scheduler, worldWith } = makeBankruptSetup()
++    const world = worldWith()
+ 
+     const first = scheduler.executeDay(world, 1)
+     expect(bankruptEvents(first)).toHaveLength(1)
+@@ -257,6 +267,8 @@ describe('OI-21 破产守卫 V6 命令守卫', () => {
+       },
+       { allowNegativeBalance: true },
+     )
++    // R7：世界状态里的公司现金字段必须与账本一致（每天回写前会先断言）。
++    syncCashFromLedger(gw.finance, gw.world.companies)
+     gw.advanceSimulation(1)
+     expect(rawPlayer(gw).status).toBe('bankrupt')
+     return gw
+@@ -332,6 +344,8 @@ describe('T-FIX-1/2 破产后仍可解雇 / 上市', () => {
+       },
+       { allowNegativeBalance: true },
+     )
++    // R7：GameWorld 世界里公司对象的现金字段必须与账本一致（每天回写前会先断言）。
++    syncCashFromLedger(gw.finance, gw.world.companies)
+     gw.advanceSimulation(1)
+     expect(rawPlayer(gw).status).toBe('bankrupt')
+     return { gw, company }
+diff --git a/src/simulation/phase/daily-scheduler.ts b/src/simulation/phase/daily-scheduler.ts
+index d32b9a1..f140cad 100644
+--- a/src/simulation/phase/daily-scheduler.ts
++++ b/src/simulation/phase/daily-scheduler.ts
+@@ -495,8 +495,28 @@ export class DailyScheduler {
+     }
+   }
+ 
++  /**
++   * 每日现金回写（R7 / CRT-01）：**先断言后写入**，不静默修正。
++   *
++   * 调度期间所有现金变动都经唯一入口 `FinanceService`（账本求和），但它只把余额回写到
++   * **被操作的那一个对象**上；而 `executeDay` 各步骤会重建相当一部分公司对象
++   * （`applyBankruptcyCheck` / `applyRestructuringClock` / `applyDissolutionCheck` / `applyClearanceMode`），
++   * 破产检查本身又直接读账本余额。因此本步的职责是：把账本余额**重新派发**到当前世界状态的
++   * 公司对象上，并保证这一派发**不是静默修正**。
++   *
++   * 但这不能是"无条件覆盖"：那样任何被篡改的 `cashBalanceCents` 都会被悄悄修回去，
++   * "第二写入者 ⇒ fail-loud"在运行期永不触发。故按该对象**是否由账本回写过**区分：
++   *  - 是（`isCashSyncedTo`）⇒ 它是账本派生值，原样复用（不重写、不改对象）；
++   *  - 否 ⇒ 该对象来自桥接路径（读档 hydrate / 新建公司 / AI 入场），**先断言**与账本求和一致，
++   *    不等即抛 `FIN_CASH_MISMATCH`（不静默对齐），一致才按账本权威值重新派发。
++   *
++   * 因此"篡改一个已由账本回写过的公司对象"会在本步当场抛错（运行时反证见 PATCH1 §3.2 A3）。
++   */
+   private syncCompanyCash(state: WorldState): WorldState {
+     const companies = state.companies.map((c) => {
++      // 账本回写过的玩家公司：派生值，原样复用；桥接路径（读档 / 新建 / AI 入场）豁免断言。
++      if (this.deps.finance.isCashSyncedTo(c) || !c.isPlayer) return c
++      this.deps.finance.assertCashConsistent(c)
+       const balance = this.deps.finance.getCashBalance(c.id)
+       return balance === c.cashBalanceCents ? c : { ...c, cashBalanceCents: balance }
+     })
+diff --git a/src/simulation/services/finance-service.ts b/src/simulation/services/finance-service.ts
+index c7dd467..933ad19 100644
+--- a/src/simulation/services/finance-service.ts
++++ b/src/simulation/services/finance-service.ts
+@@ -55,6 +55,12 @@ export interface CashCarrier {
+ }
+ 
+ export class FinanceService {
++  /**
++   * 本服务最近一次回写过的公司对象（内存同一引用）。
++   * 只用于 `isCashSyncedTo` 判定"这个对象就是我刚写过的那个"，不存余额（余额只有账本是真值）。
++   */
++  private readonly cashSyncedTo = new WeakSet<object>()
++
+   /**
+    * @param ledger 统一账本；缺省自建一个（测试便利）。生产装配应在 `GameWorld`
+    *   构造时显式传入同一实例，保证"账本唯一"。
+@@ -229,9 +235,20 @@ export class FinanceService {
+   /**
+    * 兼容字段单点回写（A-2 / F-10）：把账本权威余额写入本公司 `cashBalanceCents`。
+    * 全仓库**只有**这里与 `GameWorld` 读档 hydrate 会写该字段，且每次都从账本派生。
++   * 回写后登记该对象内存引用，供每日调度判断"是否由账本派生"（`isCashSyncedTo`）。
+    */
+   syncCash(company: CashCarrier): void {
+     company.cashBalanceCents = this.ledger.getCashBalance(company.id)
++    this.cashSyncedTo.add(company)
++  }
++
++  /**
++   * 该对象是否由本服务（账本）回写过（R7）。
++   * `true` ⇒ `cashBalanceCents` 是账本派生值；`false` ⇒ 调用方持有的是未与账本对账的对象
++   * （读档 hydrate / 新建公司 / AI 入场等桥接路径），调度器不得对其无条件覆盖。
++   */
++  isCashSyncedTo(company: CashCarrier): boolean {
++    return this.cashSyncedTo.has(company)
+   }
+ 
+   /**

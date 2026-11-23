@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Game Industry Tycoon — 项目指挥台</title>
+<style>
+  :root{
+    --bg:#0d1119; --card:#171f31; --card2:#1e2840; --line:#2a3550;
+    --txt:#e9eef8; --dim:#8894b0;
+    --green:#3ecf8e; --blue:#5a9cfa; --amber:#f0b34a; --purple:#a37cf7; --cyan:#4fd1c5;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;max-width:1240px;margin:0 auto;padding:0 24px 60px}
+  header{position:sticky;top:0;z-index:50;background:rgba(13,17,25,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);margin:0 -24px 26px;padding:14px 24px 0}
+  .hrow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  h1{font-size:19px;display:flex;align-items:center;gap:10px;letter-spacing:.3px}
+  h1 .live{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .hsub{font-size:12px;color:var(--dim)}
+  nav{display:flex;gap:4px;margin-top:10px;overflow-x:auto}
+  nav a{color:var(--dim);text-decoration:none;font-size:13px;padding:8px 14px;border-radius:8px 8px 0 0;white-space:nowrap;transition:.2s}
+  nav a:hover{color:var(--txt);background:var(--card)}
+  section{scroll-margin-top:90px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin-bottom:20px}
+  .card h2{font-size:15px;font-weight:700;display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:16px;letter-spacing:.3px}
+  .card h2 .tag{font-size:11px;font-weight:400;color:var(--dim)}
+  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .v{font-size:24px;font-weight:800;letter-spacing:-.5px}
+  .kpi .v small{font-size:12px;color:var(--dim);font-weight:500}
+  .kpi .l{font-size:11px;color:var(--dim);margin-top:3px}
+  .stages{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
+  .stage{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:12px 8px 10px;text-align:center;position:relative;min-height:118px;display:flex;flex-direction:column}
+  .stage .p{font-size:12px;font-weight:800;color:var(--dim);letter-spacing:1px}
+  .stage .n{font-size:12px;font-weight:700;margin:5px 0 3px;line-height:1.35}
+  .stage .g{font-size:10px;color:var(--dim)}
+  .stage .bar{margin-top:auto;height:5px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden}
+  .stage .bar i{display:block;height:100%;border-radius:3px;transition:width .6s}
+  .stage.done{border-color:rgba(62,207,142,.5)}
+  .stage.done .p{color:var(--green)} .stage.done .bar i{background:var(--green)}
+  .stage.now{border-color:var(--blue);background:rgba(90,156,250,.09);box-shadow:0 0 18px rgba(90,156,250,.12)}
+  .stage.now .p{color:var(--blue)} .stage.now .bar i{background:var(--blue)}
+  .stage .badge{position:absolute;top:-8px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:800;padding:2px 8px;border-radius:8px;white-space:nowrap}
+  .stage.done .badge{background:var(--green);color:#07130d}
+  .stage.now .badge{background:var(--blue);color:#fff}
+  .wave{display:flex;gap:12px;margin-bottom:10px}
+  .wlabel{width:132px;flex-shrink:0;display:flex;flex-direction:column;justify-content:center}
+  .wlabel .t{font-size:13px;font-weight:700}
+  .wlabel .s{font-size:11px;color:var(--dim);margin-top:2px}
+  .wtasks{flex:1;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .task{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:10px 11px 8px;min-height:62px}
+  .task .n{font-size:12px;font-weight:600;line-height:1.35}
+  .task .st{font-size:10px;margin-top:6px;display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700}
+  .st.closed{background:rgba(62,207,142,.14);color:var(--green)}
+  .st.active{background:rgba(90,156,250,.16);color:var(--blue)}
+  .st.review{background:rgba(240,179,74,.16);color:var(--amber)}
+  .st.ready{background:rgba(163,124,247,.16);color:var(--purple)}
+  .st.wait{background:rgba(136,148,176,.12);color:var(--dim)}
+  .task.hl{border-color:rgba(62,207,142,.55)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{color:var(--dim);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.5px}
+  td{padding:9px 10px;border-bottom:1px solid rgba(42,53,80,.5);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  td b{font-weight:700}
+  .pill{display:inline-block;padding:2px 9px;border-radius:10px;font-size:10.5px;font-weight:700;white-space:nowrap}
+  .p-closed{background:rgba(62,207,142,.14);color:var(--green)}
+  .p-cond{background:rgba(240,179,74,.14);color:var(--amber)}
+  .p-ready{background:rgba(163,124,247,.16);color:var(--purple)}
+  .p-block{background:rgba(136,148,176,.12);color:var(--dim)}
+  .p-active{background:rgba(90,156,250,.16);color:var(--blue)}
+  td .dim{color:var(--dim);font-size:11.5px}
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:7px}
+  .fnode{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:9px 14px;font-size:12.5px;font-weight:600}
+  .fnode small{display:block;font-size:10px;color:var(--dim);font-weight:400;margin-top:2px}
+  .fnode.ai{border-color:rgba(163,124,247,.6)}
+  .fnode.rev{border-color:rgba(240,179,74,.5)}
+  .farr{color:var(--dim);font-size:14px;font-weight:700}
+  .roles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .role{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:13px 14px}
+  .role .rt{font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:7px}
+  .role .rt i{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .role .rd{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.55}
+  .role.core{border-color:rgba(163,124,247,.55);background:rgba(163,124,247,.07)}
+  .levels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .lvl{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .lvl .lt{font-size:13px;font-weight:800;display:flex;justify-content:space-between;align-items:center}
+  .lvl .lt span{font-size:10px;padding:2px 9px;border-radius:10px;font-weight:700}
+  .lvl .ld{font-size:11.5px;color:var(--dim);margin-top:8px;line-height:1.65}
+  .lvl .ld b{color:var(--txt);font-weight:600}
+  .gates{display:grid;grid-template-columns:repeat(5,1fr);gap:0}
+  .gate{text-align:center;padding:0 8px;position:relative}
+  .gate .gi{width:38px;height:38px;border-radius:50%;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;background:var(--card2);border:2px solid var(--line)}
+  .gate .gn{font-size:12px;font-weight:700}
+  .gate .gd{font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.5}
+  .gate:not(:last-child)::after{content:"";position:absolute;top:19px;right:calc(-50% + 23px);width:calc(100% - 30px);height:2px;background:var(--line);z-index:0}
+  .gate .gi,.gate .gn,.gate .gd{position:relative;z-index:1}
+  .rings{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .ring{text-align:center;padding:10px 6px;background:var(--card2);border:1px solid var(--line);border-radius:10px}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .num{font-size:15px;font-weight:800;margin-top:-48px;position:relative}
+  .ring .lbl{font-size:10.5px;color:var(--dim);margin-top:24px}
+  .legend{display:flex;gap:16px;font-size:11px;color:var(--dim);margin-top:14px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+  .foot{color:var(--dim);font-size:11px;text-align:center;margin-top:10px;line-height:1.7}
+  @media(max-width:960px){
+    .kpis{grid-template-columns:repeat(3,1fr)}
+    .stages{grid-template-columns:repeat(4,1fr)}
+    .wtasks{grid-template-columns:repeat(2,1fr)}
+    .roles{grid-template-columns:repeat(2,1fr)}
+    .levels,.rings{grid-template-columns:1fr 1fr}
+    .gates{grid-template-columns:1fr 1fr;gap:12px}
+    .gate:not(:last-child)::after{display:none}
+    .wave{flex-direction:column;gap:8px}.wlabel{width:auto;flex-direction:row;gap:10px;align-items:baseline}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1><span class="live"></span>Game Industry Tycoon · 项目指挥台</h1>
+    <div class="hsub">更新 2026-11-22 20:35 · 基线 <b style="color:var(--txt)">3139ee0</b> · 规范 V2.1 · 规划 V3.1-DRAFT-02</div>
+  </div>
+  <nav>
+    <a href="#overview">总览</a><a href="#stages">八阶段全景</a><a href="#g1">G1 推进</a><a href="#ledger">任务台账</a><a href="#spec">AI 协作规范</a><a href="#quality">质量指标</a>
+  </nav>
+</header>
+
+<!-- 总览 -->
+<section id="overview">
+<div class="kpis">
+  <div class="kpi"><div class="v" style="color:var(--green)">92<small>/92</small></div><div class="l">测试文件全绿</div></div>
+  <div class="kpi"><div class="v" style="color:var(--blue)">1037</div><div class="l">用例通过 · 0 失败</div></div>
+  <div class="kpi"><div class="v" style="color:var(--amber)">14</div><div class="l">本地提交待 push</div></div>
+  <div class="kpi"><div class="v" style="color:var(--purple)">2<small>/8</small></div><div class="l">阶段完成（P0+G0）</div></div>
+  <div class="kpi"><div class="v" style="color:var(--cyan)">0</div><div class="l">BLOCKER 未清</div></div>
+  <div class="kpi"><div class="v">12</div><div class="l">正式任务在册</div></div>
+</div>
+
+<div class="card">
+  <h2>关键路径 <span class="tag">✓ 已清 · ▶ 当前</span></h2>
+  <div class="flow">
+    <span class="fnode" style="border-color:rgba(62,207,142,.55)">CODE-04 账本<small>已 CLOSED</small></span><span class="farr">→</span>
+    <span class="fnode" style="border-color:rgba(62,207,142,.55)">FIN-RUNWAY 阻断<small>已 CLOSED · ADJ-11</small></span><span class="farr">→</span>
+    <span class="fnode" style="border-color:var(--blue);box-shadow:0 0 12px rgba(90,156,250,.25)">CODE-05 完整度内核<small>编码完成 ▶ 待独立审核</small></span><span class="farr">→</span>
+    <span class="fnode">CODE-03-REWORK<small>待派</small></span><span class="farr">→</span>
+    <span class="fnode">CODE-08 封口<small>READY</small></span><span class="farr">→</span>
+    <span class="fnode">D-03 复审<small>→ CODE-06</small></span><span class="farr">→</span>
+    <span class="fnode">CODE-07 UI 闭环<small>DRAFT</small></span><span class="farr">→</span>
+    <span class="fnode">P1 阶段验收<small>10 步闭环走查</small></span>
+  </div>
+</div>
+</section>
+
+<!-- 八阶段 -->
+<section id="stages">
+<div class="card">
+  <h2>项目整体进度 · P0 ~ P7 <span class="tag">P 系列为唯一验收权威 · G 为执行里程碑挂靠</span></h2>
+  <div class="stages">
+    <div class="stage done"><span class="badge">STAGE_ACCEPTED</span><div class="p">P0</div><div class="n">产品规则重整</div><div class="g">G0 基线重整 ✓</div><div class="bar"><i style="width:100%"></i></div></div>
+    <div class="stage now"><span class="badge">IN_PROGRESS</span><div class="p">P1</div><div class="n">单工作室可玩闭环</div><div class="g">G1 · 第一波完成</div><div class="bar"><i style="width:34%"></i></div></div>
+    <div class="stage todo"><div class="p">P2</div><div class="n">产品与市场深度</div><div class="g">G2</div><div class="bar"><i></i></div></div>
+    <div class="stage todo"><div class="p">P3</div><div class="n">AI 产业生态</div><div class="g">G3</div><div class="bar"><i></i></div></div>
+    <div class="stage todo"><div class="p">P4</div><div class="n">全球与历史世界</div><div class="g">G4</div><div class="bar"><i></i></div></div>
+    <div class="stage todo"><div class="p">P5</div><div class="n">人才与组织成长</div><div class="g">G5</div><div class="bar"><i></i></div></div>
+    <div class="stage todo"><div class="p">P6</div><div class="n">长期经营完善</div><div class="g">G6</div><div class="bar"><i></i></div></div>
+    <div class="stage todo"><div class="p">P7</div><div class="n">1.0 发布准备</div><div class="g">G6</div><div class="bar"><i></i></div></div>
+  </div>
+</div>
+</section>
+
+<!-- G1 -->
+<section id="g1">
+<div class="card">
+  <h2>G1 五波推进 <span class="tag">预估剩余 9~11 小时 / 2~2.5 个工作日</span></h2>
+  <div class="wave">
+    <div class="wlabel"><div class="t" style="color:var(--green)">第一波 ✓</div><div class="s">2h26m · 已完成</div></div>
+    <div class="wtasks">
+      <div class="task hl"><div class="n">FIN-RUNWAY 阻断清除</div><div class="st closed">CLOSED</div></div>
+      <div class="task"><div class="n">场景总纲 S1~S12</div><div class="st closed">READY · 复审 PASS</div></div>
+      <div class="task"><div class="n">CODE-05 完整度内核</div><div class="st review">编码完成 · 待审核</div></div>
+      <div class="task"><div class="n">ADJ-11 §8 阈值补记</div><div class="st closed">已落档</div></div>
+      <div class="task"><div class="n">CODE-04 合并收口</div><div class="st closed">CLOSED</div></div>
+    </div>
+  </div>
+  <div class="wave">
+    <div class="wlabel"><div class="t" style="color:var(--blue)">第二波</div><div class="s">1.5~2h · 下一站</div></div>
+    <div class="wtasks">
+      <div class="task"><div class="n">CODE-05 独立审核</div><div class="st active">即将开始</div></div>
+      <div class="task"><div class="n">OPEN 33 项批量裁定</div><div class="st ready">分组就绪</div></div>
+      <div class="task"><div class="n">CODE-03-REWORK</div><div class="st wait">排队</div></div>
+      <div class="task"><div class="n">E-20 消费 · 环路检测</div><div class="st wait">REWORK 范围</div></div>
+      <div class="task"><div class="n">承诺注册表接线</div><div class="st wait">REWORK 范围</div></div>
+    </div>
+  </div>
+  <div class="wave">
+    <div class="wlabel"><div class="t">第三波</div><div class="s">2~3h</div></div>
+    <div class="wtasks">
+      <div class="task"><div class="n">CODE-08 R8 封口</div><div class="st ready">READY</div></div>
+      <div class="task"><div class="n">D-03 V0.1.6 复审</div><div class="st wait">前置条件</div></div>
+      <div class="task"><div class="n">CODE-06 人才内核</div><div class="st wait">阻塞中</div></div>
+      <div class="task"><div class="n">P2-02 存档往返</div><div class="st wait">并入 REWORK</div></div>
+      <div class="task"><div class="n">—</div><div class="st wait">—</div></div>
+    </div>
+  </div>
+  <div class="wave">
+    <div class="wlabel"><div class="t">第四波</div><div class="s">3~4h · 最大单体</div></div>
+    <div class="wtasks">
+      <div class="task"><div class="n">UI/UX 页面规格</div><div class="st wait">专项 Agent 介入</div></div>
+      <div class="task"><div class="n">CODE-07 纵向切片</div><div class="st wait">DRAFT</div></div>
+      <div class="task"><div class="n">9 页面接新内核</div><div class="st wait">按场景接线</div></div>
+      <div class="task"><div class="n">overview+finance 优先</div><div class="st wait">提前切片</div></div>
+      <div class="task"><div class="n">—</div><div class="st wait">—</div></div>
+    </div>
+  </div>
+  <div class="wave">
+    <div class="wlabel"><div class="t">第五波</div><div class="s">1.5~2h · 验收</div></div>
+    <div class="wtasks">
+      <div class="task"><div class="n">体验 Agent 试玩</div><div class="st wait">按需启动</div></div>
+      <div class="task"><div class="n">数值 Agent 模拟</div><div class="st wait">按需启动</div></div>
+      <div class="task"><div class="n">主 AI 10 步走查</div><div class="st wait">亲自操作</div></div>
+      <div class="task"><div class="n">P1 阶段验收</div><div class="st wait">五道门全过</div></div>
+      <div class="task"><div class="n">Owner 授权 push</div><div class="st wait">14 提交</div></div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--green)"></i>已完成</span>
+    <span><i style="background:var(--blue)"></i>进行中</span>
+    <span><i style="background:var(--amber)"></i>待审核</span>
+    <span><i style="background:var(--purple)"></i>就绪可派</span>
+    <span><i style="background:var(--dim)"></i>排队 / 阻塞</span>
+  </div>
+</div>
+</section>
+
+<!-- 台账 -->
+<section id="ledger">
+<div class="card">
+  <h2>正式任务台账 <span class="tag">V2.1 统一任务记录 · 证据均落档 docs/review</span></h2>
+  <table>
+    <tr><th>任务</th><th>等级</th><th>状态</th><th>依赖 / 前置</th></tr>
+    <tr><td><b>CODE-01</b> 蓝图内核</td><td>L2</td><td><span class="pill p-closed">CLOSED</span></td><td class="dim">复审 PASS + 已验收</td></tr>
+    <tr><td><b>CODE-02</b> 账本内核</td><td>L2</td><td><span class="pill p-closed">CLOSED</span></td><td class="dim">复审 PASS + P2-04 已修</td></tr>
+    <tr><td><b>CODE-03</b> 项目内核</td><td>L2</td><td><span class="pill p-cond">PASS WITH CONDITIONS</span></td><td class="dim">整改归 03-REWORK</td></tr>
+    <tr><td><b>CODE-04</b> 账本收敛 + 注册表（含 PATCH1/2）</td><td>L2</td><td><span class="pill p-closed">CLOSED</span></td><td class="dim">A1/A2/A3 反证全闭环</td></tr>
+    <tr><td><b>FIN-RUNWAY</b> 跑道阻断清除</td><td>L2</td><td><span class="pill p-closed">CLOSED</span></td><td class="dim">RV-1/2/3 + INV-RUNWAY</td></tr>
+    <tr><td><b>CODE-05</b> 完整度内核</td><td>L2</td><td><span class="pill p-active">待独立审核</span></td><td class="dim">+114 用例 · 923→1037</td></tr>
+    <tr><td><b>场景总纲</b> S1~S12</td><td>L2</td><td><span class="pill p-ready">READY</span></td><td class="dim">OPEN 33 项分组待裁定</td></tr>
+    <tr><td><b>V3.1-DRAFT-02</b> 规划基线</td><td>L2</td><td><span class="pill p-closed">基线候选</span></td><td class="dim">设计审核 PASS</td></tr>
+    <tr><td><b>CODE-03-REWORK</b> 项目整改</td><td>L2</td><td><span class="pill p-ready">待派</span></td><td class="dim">CODE-05 审核后错峰</td></tr>
+    <tr><td><b>CODE-08</b> R8 类型封口</td><td>L2</td><td><span class="pill p-ready">READY</span></td><td class="dim">CODE-06 前</td></tr>
+    <tr><td><b>CODE-06</b> 人才内核</td><td>L2</td><td><span class="pill p-block">阻塞</span></td><td class="dim">D-03 复审 + CODE-08</td></tr>
+    <tr><td><b>CODE-07</b> UI 可玩闭环</td><td>L3</td><td><span class="pill p-block">DRAFT</span></td><td class="dim">FIN-RUNWAY✓ · 05 · 06</td></tr>
+  </table>
+</div>
+</section>
+
+<!-- AI 协作规范 -->
+<section id="spec">
+<div class="card">
+  <h2>AI 协作规范 V2.1 · 八角色体系 <span class="tag">紫色 = 决策权 · 橙色 = 独立审核 · 标"按需"= 专项评估按需启动</span></h2>
+  <div class="roles">
+    <div class="role core"><div class="rt"><i style="background:var(--purple)"></i>主 AI / 游戏总设计师</div><div class="rd">统筹决策：规划拆分、裁定分歧、任务 READY/CLOSED、阶段验收。不得代替审核 Agent 出结论</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--cyan)"></i>设计 Agent</div><div class="rd">按任务书编写正式规格：数据、规则、状态、边界。不自审自关任务</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--amber)"></i>设计审核 Agent</div><div class="rd">独立审规格：完整性、一致性、跨系统依赖、可验收性。八维清单</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--cyan)"></i>编码 Agent</div><div class="rd">按已批规格实现 + 写测试。不猜业务口径，规格歧义即上报</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--amber)"></i>编码审核 Agent</div><div class="rd">独立跑测试、验业务规则、防作弊检查。不得仅凭编码自述判过</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--blue)"></i>UI/UX 美术总监 <b style="font-size:9px;color:var(--dim)">按需</b></div><div class="rd">信息架构、交互流程、页面规格。必须输出可直接实现的规格</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--blue)"></i>体验试玩 Agent <b style="font-size:9px;color:var(--dim)">按需</b></div><div class="rd">真实走流程留证据。无可运行版本只能出静态评估</div></div>
+    <div class="role"><div class="rt"><i style="background:var(--blue)"></i>数值平衡 Agent <b style="font-size:9px;color:var(--dim)">按需</b></div><div class="rd">经济循环、阈值标定、长期模拟稳定。不为数值漂亮破坏因果</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>核心工作流程 <span class="tag">双闸门：未过设计审核不得编码 · 未过编码审核不得 CLOSED</span></h2>
+  <div class="flow">
+    <span class="fnode ai">主 AI 规划<small>分级 + 任务书</small></span><span class="farr">→</span>
+    <span class="fnode">设计 Agent<small>编写规格</small></span><span class="farr">→</span>
+    <span class="fnode rev">设计审核<small>独立 · 八维</small></span><span class="farr">→</span>
+    <span class="fnode ai">主 AI 置 READY<small>闸门 ①</small></span><span class="farr">→</span>
+    <span class="fnode">编码 Agent<small>实现 + 测试</small></span><span class="farr">→</span>
+    <span class="fnode rev">编码审核<small>独立 · 反证</small></span><span class="farr">→</span>
+    <span class="fnode ai">主 AI 验收<small>闸门 ②</small></span><span class="farr">→</span>
+    <span class="fnode" style="border-color:rgba(62,207,142,.55)">CLOSED<small>留档可追溯</small></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>任务分级 L1 / L2 / L3 <span class="tag">L2 为默认流程</span></h2>
+  <div class="levels">
+    <div class="lvl"><div class="lt">L1 轻量 <span class="pill p-closed">简化流程</span></div><div class="ld"><b>小修复 / 明确规则简单实现</b><br>可简化流程，但不跳过必要测试；发现风险超预期须上报重新分级</div></div>
+    <div class="lvl" style="border-color:rgba(90,156,250,.5)"><div class="lt">L2 标准 <span class="pill p-active">默认流程</span></div><div class="ld"><b>一般系统功能 / 常规 UI / 规则调整</b><br>必须完整执行设计审核 + 编码审核双闸门</div></div>
+    <div class="lvl" style="border-color:rgba(163,124,247,.5)"><div class="lt">L3 重大 <span class="pill p-ready">强化流程</span></div><div class="ld"><b>跨系统 / 核心架构 / 经济规则</b><br>分阶段交付 + 专项 Agent 评估 + 回归测试计划（如 CODE-07）</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>五道验收门 <span class="tag">G1 等阶段必须完整通过 · L1 任务可豁免部分门</span></h2>
+  <div class="gates">
+    <div class="gate"><div class="gi" style="border-color:var(--cyan);color:var(--cyan)">1</div><div class="gn">设计验收</div><div class="gd">需求明确 · 规则完整<br>边界与依赖明确</div></div>
+    <div class="gate"><div class="gi" style="border-color:var(--green);color:var(--green)">2</div><div class="gn">工程验收</div><div class="gd">符合规格 · 测试通过<br>一致性 · 无回归</div></div>
+    <div class="gate"><div class="gi" style="border-color:var(--blue);color:var(--blue)">3</div><div class="gn">界面验收</div><div class="gd">功能可找到 · 反馈清晰<br>关键任务可完成</div></div>
+    <div class="gate"><div class="gi" style="border-color:var(--purple);color:var(--purple)">4</div><div class="gn">体验验收</div><div class="gd">有目标有选择<br>选择有后果 · 决策有意义</div></div>
+    <div class="gate"><div class="gi" style="border-color:var(--amber);color:var(--amber)">5</div><div class="gn">模拟验收</div><div class="gd">经济稳定 · AI 公平<br>极端情况不崩溃</div></div>
+  </div>
+</div>
+</section>
+
+<!-- 质量 -->
+<section id="quality">
+<div class="card">
+  <h2>质量与治理指标 <span class="tag">数据来源：四命令真实退出码 + 审核报告</span></h2>
+  <div class="rings">
+    <div class="ring"><svg width="84" height="84"><circle cx="42" cy="42" r="35" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8"/><circle cx="42" cy="42" r="35" fill="none" stroke="var(--green)" stroke-width="8" stroke-dasharray="220" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="num">100%</div><div class="lbl">测试基线全绿</div></div>
+    <div class="ring"><svg width="84" height="84"><circle cx="42" cy="42" r="35" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8"/><circle cx="42" cy="42" r="35" fill="none" stroke="var(--blue)" stroke-width="8" stroke-dasharray="220" stroke-dashoffset="145" stroke-linecap="round"/></svg><div class="num">34%</div><div class="lbl">G1 波次进度</div></div>
+    <div class="ring"><svg width="84" height="84"><circle cx="42" cy="42" r="35" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8"/><circle cx="42" cy="42" r="35" fill="none" stroke="var(--green)" stroke-width="8" stroke-dasharray="220" stroke-dashoffset="0" stroke-linecap="round"/></svg><div class="num">0</div><div class="lbl">BLOCKER 未清</div></div>
+    <div class="ring"><svg width="84" height="84"><circle cx="42" cy="42" r="35" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8"/><circle cx="42" cy="42" r="35" fill="none" stroke="var(--amber)" stroke-width="8" stroke-dasharray="220" stroke-dashoffset="148" stroke-linecap="round"/></svg><div class="num">33</div><div class="lbl">OPEN 待裁定</div></div>
+  </div>
+  <div class="legend" style="justify-content:center">
+    <span>已裁定权威：ADJ-01~11</span><span>·</span><span>阶段验收：G0 STAGE_ACCEPTED</span><span>·</span><span>push 需 Owner 授权</span><span>·</span><span>证据链：docs/review 15 份审核报告</span>
+  </div>
+</div>
+</section>
+
+<div class="foot">Game Industry Tycoon · 主 AI / 游戏总设计师维护 · 数据截至 2026-11-22 20:35 · worktree HEAD 3139ee0</div>
+
+</body>
+</html>

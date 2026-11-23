@@ -168,6 +168,23 @@ export function realizeCommitmentFor(
       errorMessage: r.errorMessage ?? 'realize failed',
     }
   }
+  // 账面跟踪回写（FIN §4.1）：realizeCommitment 是纯函数（只 post 交易），承诺的
+  // realizedCents / linkedTxIds / state 推进由 ledger.settleCommitment 完成（幂等：
+  // txId 已在 linkedTxIds ⇒ 不重复累加）。缺这一步，运行期承诺状态与账本永久分叉。
+  if (!r.result.idempotent) {
+    const settled = ledger.settleCommitment(
+      commitment.companyId,
+      commitment.commitmentId,
+      r.result.amountCents as import('@domain/entities/finance').Cents,
+      r.result.transaction.transactionId,
+    )
+    if (!settled.success || !settled.result) {
+      return {
+        errorCode: settled.errorCode ?? 'FIN_COMMITMENT_MISMATCH',
+        errorMessage: settled.errorMessage ?? 'commitment settlement failed',
+      }
+    }
+  }
   return {
     commitment: r.result.commitment,
     txId: r.result.transaction.transactionId,

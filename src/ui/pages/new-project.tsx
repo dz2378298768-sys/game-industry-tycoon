@@ -4,7 +4,11 @@ import { content } from '@infrastructure/loading/content-loader'
 import { availablePlatforms, availableSegments, yearOfDay } from '@content/queries'
 import { TUNING } from '@content/tuning'
 
-interface Props { onNavigate: (route: string) => void }
+interface Props {
+  onNavigate: (route: string) => void
+  /** CODE-07B P-02：市场页"以此方向立项"预填类别（增量可选，不传则沿用默认） */
+  initialGenreId?: string | undefined
+}
 
 /**
  * P-03 / P-04 立项两步向导（S03+S04，批次 07A）：
@@ -17,7 +21,7 @@ interface Props { onNavigate: (route: string) => void }
  *  确认 = PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 校验 + project_budget 承诺（A-8：Σ = Budget_cap），原子。
  *  破产禁入（C-3/N-01）。qualityCeilingBand 不展示（U5 / A-39）。
  */
-export const NewProject: React.FC<Props> = ({ onNavigate }) => {
+export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   const { dayIndex, company, previewExecutionProject, createExecutionProject } = useGameStore()
   const isBankrupt = company?.status === 'bankrupt'
   const [step, setStep] = useState<1 | 2>(1)
@@ -26,7 +30,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate }) => {
 
   // ===== 第 1 步（P-03）字段 =====
   const [productName, setProductName] = useState('')
-  const [genreId, setGenreId] = useState(content.genres[0]?.id ?? 'action')
+  const [genreId, setGenreId] = useState(initialGenreId ?? content.genres[0]?.id ?? 'action')
   const [platformId, setPlatformId] = useState('')
   const [segmentIds, setSegmentIds] = useState<string[]>([])
   const [hrb, setHrb] = useState<number>(TUNING.project.hrbConservativeRatio)

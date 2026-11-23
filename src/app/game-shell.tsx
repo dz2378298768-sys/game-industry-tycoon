@@ -9,15 +9,17 @@ import { NewProject } from '@ui/pages/new-project'
 import { Finance } from '@ui/pages/finance'
 import { Products } from '@ui/pages/products'
 import { ProductDetail } from '@ui/pages/product-detail'
+import { Market } from '@ui/pages/market'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
 
-type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail'
+type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market'
 
 interface NavItem { key: Route; label: string }
 
 const NAV_ITEMS: NavItem[] = [
   { key: 'overview', label: t('nav.overview') },
+  { key: 'market', label: t('nav.market') },
   { key: 'employees', label: t('nav.employees') },
   { key: 'hire', label: t('nav.hire') },
   { key: 'projects', label: t('nav.projects') },
@@ -45,8 +47,15 @@ export const GameShell: React.FC = () => {
   const [route, setRoute] = React.useState<Route>('overview')
   const [projectDetailId, setProjectDetailId] = React.useState<string | null>(null)
   const [productDetailId, setProductDetailId] = React.useState<string | null>(null)
+  /** P-02 → P-03 类别预填（规格 §2 P-02 跳转） */
+  const [prefillGenreId, setPrefillGenreId] = React.useState<string | undefined>(undefined)
 
   const handleNavigate = (r: string, param?: string) => {
+    if (r === 'newProject') {
+      setPrefillGenreId(param)
+      setRoute('newProject')
+      return
+    }
     if (r === 'productDetail' && param) {
       setProductDetailId(param)
       setRoute('productDetail')
@@ -73,11 +82,12 @@ export const GameShell: React.FC = () => {
   const renderContent = () => {
     switch (route) {
       case 'overview': return <Overview onNavigate={handleNavigate} />
+      case 'market': return <Market onNavigate={handleNavigate} />
       case 'employees': return <Employees />
       case 'hire': return <Hire onNavigate={handleNavigate} />
       case 'projects': return <Projects onNavigate={handleNavigate} />
       case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
-      case 'newProject': return <NewProject onNavigate={handleNavigate} />
+      case 'newProject': return <NewProject onNavigate={handleNavigate} initialGenreId={prefillGenreId} />
       case 'finance': return <Finance />
       case 'products': return <Products onNavigate={handleNavigate} />
       case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />

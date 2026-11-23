@@ -96,7 +96,7 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
               <td>{t('p12.schedule')}</td>
               <td>
                 {t('p12.schedule.delay')}: {latestProject?.launchDelayDays ?? 0} ·{' '}
-                {t('p12.schedule.rework')}: —
+                {t('p12.schedule.rework')}: {latestProject ? store.getDeliveryStatus(latestProject.id).reworkCount : 0}
               </td>
             </tr>
             <tr>

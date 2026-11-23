@@ -14,6 +14,9 @@ export const P1_UI_TUNING = {
   /** ADJ-12 S2-1 / ADJ-16 R-4：单次市场调研费用 $5,000 = 500_000 cents；复用 FIN 12 类，不扩枚举。 */
   market: {
     researchCostCents: 500_000,
+    /** 07B-10：契合方向「定性分档展示规则」（非数值机会模型，ADJ-16 R-6）；单一来源，UI 零硬编码。 */
+    affinityBandHigh: 0.8,
+    affinityBandMedium: 0.6,
   },
 
   /** ADJ-12 S9-1 / ADJ-16 R-5：定价三档名称固定，数值待第五波数值 Agent 标定。 */

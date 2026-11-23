@@ -98,6 +98,15 @@ describe('P-07 变更返工 + P-08 测试优化面板（批次 07B）', () => {
     expect(text).not.toMatch(/综合|总评|加权平均|qualityScore|finalQualityScore|qualityCeiling|mean\(/)
   })
 
+  it('07B-07（P2）：D-02 C-01~C-05 + B/N/T 逐项行齐全，无数据源逐行降级', () => {
+    renderDetail()
+    const rows = screen.getByTestId('p08-checklist').querySelectorAll('tbody tr')
+    for (const id of ['C-01', 'C-02', 'C-03', 'C-04', 'C-05', 'B', 'N', 'T']) {
+      expect(screen.getByText(id)).toBeTruthy()
+    }
+    expect(rows.length).toBeGreaterThanOrEqual(11)
+  })
+
   it('A-21：缺陷明细 fail-closed 降级，不伪造 E 级缺陷横幅', () => {
     renderDetail()
     expect(screen.getByTestId('p08-defect-list').textContent).toContain('缺陷明细待接线')

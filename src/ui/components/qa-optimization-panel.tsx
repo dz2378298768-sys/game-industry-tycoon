@@ -41,6 +41,16 @@ export const QaOptimizationPanel: React.FC<Props> = ({ project, execution }) => 
     { id: 'QA-100', label: t('p08.check.qa'), pass: qaDone },
     { id: 'PROD', label: t('p08.check.production'), pass: productionDone },
     { id: 'WP', label: t('p08.check.wp'), pass: allWpDone },
+    // 07B-07（P2）：D-02 §5.1/§5.3 要求的 C-01~C-05 与 B/N/T 逐项行补齐；
+    // 内核无 QualityAssessment 明细源 → 逐行降级「评估不可用」（OPEN-D02-WIRING），不缺行、不伪造 PASS/FAIL。
+    { id: 'C-01', label: t('p08.check.c01'), pass: null },
+    { id: 'C-02', label: t('p08.check.c02'), pass: null },
+    { id: 'C-03', label: t('p08.check.c03'), pass: null },
+    { id: 'C-04', label: t('p08.check.c04'), pass: null },
+    { id: 'C-05', label: t('p08.check.c05'), pass: null },
+    { id: 'B', label: t('p08.check.b'), pass: null },
+    { id: 'N', label: t('p08.check.n'), pass: null },
+    { id: 'T', label: t('p08.check.t'), pass: null },
     { id: 'C-06', label: t('p08.check.c06'), pass: null },
     { id: 'C-07', label: t('p08.check.c07'), pass: null },
   ]

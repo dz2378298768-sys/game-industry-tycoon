@@ -24,7 +24,10 @@ const AFFINITY_BY_GENRE: Map<string, { max: number; topSegmentId: string }> = ((
 })()
 
 function bandOf(max: number): Band {
-  return max > 0.8 ? 'high' : max >= 0.6 ? 'medium' : 'low'
+  // 07B-10：阈值读 P1_UI_TUNING 单一来源（契合方向为定性分档展示，非数值机会模型）。
+  return max > P1_UI_TUNING.market.affinityBandHigh
+    ? 'high'
+    : max >= P1_UI_TUNING.market.affinityBandMedium ? 'medium' : 'low'
 }
 
 /**

@@ -195,6 +195,8 @@ interface GameStore {
   getDeliveryStatus(projectId: string): {
     state: string | null
     deliveryFailures: number
+    /** 07B-09：返工次数（ExecutionProject.reworkCount，真实字段）。 */
+    reworkCount: number
     lastDeliveryFailure: {
       day: number
       reasonCodes: string[]
@@ -683,10 +685,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   getDeliveryStatus(projectId) {
     const exec = get().game?.getExecutionProject(projectId)
-    if (!exec) return { state: null, deliveryFailures: 0, lastDeliveryFailure: null }
+    if (!exec) return { state: null, deliveryFailures: 0, reworkCount: 0, lastDeliveryFailure: null }
     return {
       state: exec.project.state,
       deliveryFailures: exec.project.deliveryFailures,
+      reworkCount: exec.project.reworkCount,
       lastDeliveryFailure: exec.project.lastDeliveryFailure,
     }
   },

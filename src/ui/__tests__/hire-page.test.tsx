@@ -47,9 +47,18 @@ describe('P-05 hire 页（候选池 + 确认卡 + 影响预览）', () => {
     const previewTable = screen.getByTestId('recruit-impact-preview')
     expect(previewTable.textContent).toContain('招聘前')
     expect(previewTable.textContent).toContain('招聘后')
-    // A-13：预览"前"值与 game-world.getFinancialOverview 同源
+    // A-13（N1 闭环）：预览"前"值与 game-world.getFinancialOverview 同源——逐字段数值相等，
+    // 不只断言 before 非空（审核备注：原用例仅断言非空，未真正校验同源）。
     const before = gw.getFinancialOverview()
     expect(before).not.toBeNull()
+    const previewRows = screen.getByTestId('recruit-impact-preview').textContent ?? ''
+    // 预览前值取自 preview.before.availableCashCents / runwayMonths（game-world 同源投影）
+    expect(previewRows).toContain(`$${(before!.availableCashCents / 100).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`)
+    const runwayBefore = Number.isFinite(before!.runwayMonths) ? before!.runwayMonths.toFixed(1) : '∞'
+    expect(previewRows).toContain(runwayBefore)
+    // store 投影与 game-world 投影同源：availableCash 相等
+    expect(useGameStore.getState().financial?.availableCashCents).toBe(before!.availableCashCents)
+    expect(useGameStore.getState().financial?.runwayMonths).toBe(before!.runwayMonths)
   })
 
   it('确认招聘：recruitFromCandidate 转发成功，承诺合计与可用现金变化（A-11 载体）', () => {

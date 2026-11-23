@@ -17,6 +17,12 @@ const FORBIDDEN = [
   /finalQualityScore/,
   /qualityCeilingBand/,
   /qualityCeiling/,
+  // A-20 终版词表（M-05/UI-04 扩展，规格 §2 P-08 验收）：禁合成均值/综合评分/总评/加权平均
+  /mean\(/,
+  /overall/,
+  /综合/,
+  /总评/,
+  /加权平均/,
 ]
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -42,7 +48,7 @@ function isGuardComment(line: string): boolean {
 }
 
 describe('A-20 词表守卫（UI 层禁转发质量合成词表）', () => {
-  it('src/ui 与 src/app 源码无 qualityScore/finalQualityScore/qualityCeiling( Band) 转发', () => {
+  it('src/ui 与 src/app 源码无质量合成词表（qualityScore/finalQualityScore/qualityCeiling/mean(/overall/综合/总评/加权平均）转发', () => {
     const violations: string[] = []
     for (const root of UI_ROOTS) {
       for (const sub of ['ui', 'app']) {
@@ -62,11 +68,15 @@ describe('A-20 词表守卫（UI 层禁转发质量合成词表）', () => {
     expect(violations, violations.join('\n')).toEqual([])
   })
 
-  it('i18n 文案无"质量上限"展示键（FIX-6 / U5 联动；禁用说明除外）', () => {
-    const zh = readFileSync(join(__dirname, '..', '..', 'i18n', 'zh-CN.json'), 'utf-8')
-    for (const line of zh.split('\n')) {
-      if (line.includes('质量上限') && !/禁|不|待裁定|OPEN/.test(line)) {
-        expect.fail(`i18n 含"质量上限"展示文案: ${line.trim()}`)
+  it('i18n 双语（zh-CN + en）文案无质量合成/质量上限展示键（FIX-6 / U5 / A-20 联动；禁用说明除外）', () => {
+    for (const locale of ['zh-CN', 'en']) {
+      const dict = readFileSync(join(__dirname, '..', '..', 'i18n', `${locale}.json`), 'utf-8')
+      for (const [idx, line] of dict.split('\n').entries()) {
+        // 中文合成词 + 英文合成词均禁（禁用说明/待裁定/OPEN 注释行豁免）
+        const hit = /质量上限|综合评分|总评|加权平均|qualityCeiling|finalQualityScore|overall score|weighted average/.test(line)
+        if (hit && !/禁|不|待裁定|OPEN|forbid|deprecated|disabled|not used/.test(line)) {
+          expect.fail(`i18n/${locale}.json:${idx + 1} 含质量合成展示文案: ${line.trim()}`)
+        }
       }
     }
   })

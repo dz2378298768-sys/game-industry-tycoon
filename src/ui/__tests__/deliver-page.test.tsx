@@ -14,6 +14,8 @@ import { Deliver } from '@ui/pages/deliver'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
+import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
+import { baseContext, baseSnapshot, completeStructure, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
 
 /** P-09 交付与上市页验收：A-24/A-25 U3 失败原因持久、A-26 无 demo、R-5 定价三档、A-42 披露确认。 */
 describe('P-09 交付与上市页（批次 07B）', () => {
@@ -31,6 +33,26 @@ describe('P-09 交付与上市页（批次 07B）', () => {
   function renderDeliver() {
     const projectId = useGameStore.getState().projects[0]!.id
     return render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)
+  }
+
+  /** 夹具：把项目推进到可交付态（WP 状态机由返工夹具驱动，见 code07b-e2e）。 */
+  function readyToDeliver(): string {
+    const projectId = useGameStore.getState().projects[0]!.id
+    useGameStore.getState().game!.getExecutionProject(projectId)!.project.state = 'READY_TO_DELIVER'
+    return projectId
+  }
+
+  /** 用 domain 真实 evaluateDeliveryGate 判定产物登记 gate 快照（非手写 pass=true 夹具）。 */
+  function registerRealGate(projectId: string, overrides: Parameters<typeof baseContext>[0] = {}) {
+    const result = evaluateDeliveryGate(baseContext(overrides), p1Templates(), 'full', tuning())
+    useGameStore.getState().game!.registerDeliveryGateEvaluation(projectId, 'full', {
+      pass: result.gate === 'PASS',
+      violations: result.errorCodes.map((code) => ({ code, severity: 'P1' as const })),
+      reasonCodes: [...result.errorCodes],
+      checkedAt: result.checkedAt,
+      source: 'd02-evaluateDeliveryGate',
+    })
+    return result
   }
 
   it('A-26：三形式资格区仅渲染 full / EA，DOM 无 demo 行', () => {
@@ -180,5 +202,79 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     const { container } = renderDeliver()
     expect(screen.queryByTestId('deliver-e-defect-banner')).toBeNull()
     expect(container.textContent).not.toContain('存在 E 级缺陷')
+  })
+
+  // ===== 07B REVISION2：P-09 真点击链路（核心验收：按钮可用 + 点击闭合，不绕过按钮） =====
+
+  it('07B-REV2 fail-closed：可交付态但无 D-02 评估快照 → 提交禁用带原因，不伪造 pass', () => {
+    readyToDeliver()
+    renderDeliver()
+    fireEvent.click(screen.getByTestId('deliver-submit-open'))
+    const confirm = screen.getByTestId('deliver-submit-confirm') as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    expect(screen.getByTestId('deliver-submit-blocked').textContent).toContain('评估快照不可用')
+    expect(screen.queryByTestId('deliver-gate-reasons')).toBeNull()
+  })
+
+  it('07B-REV2 真点击 PASS：确认弹窗 → 真点击确认 → 内核提交被触发 → 上市 products 0→1', () => {
+    const projectId = readyToDeliver()
+    expect(useGameStore.getState().products).toHaveLength(0)
+    const gate = registerRealGate(projectId)
+    expect(gate.gate).toBe('PASS')
+
+    const game = useGameStore.getState().game!
+    const submitSpy = vi.spyOn(game, 'submitDeliveryForProject')
+    renderDeliver()
+    fireEvent.click(screen.getByTestId('deliver-submit-open'))
+    const ack = screen.getByTestId('deliver-disclosure-ack') as HTMLInputElement
+    fireEvent.click(ack)
+    expect(ack.checked).toBe(true)
+    const confirm = screen.getByTestId('deliver-submit-confirm') as HTMLButtonElement
+    expect(confirm.disabled).toBe(false)
+    expect(confirm.getAttribute('aria-disabled')).toBe('false')
+    fireEvent.click(confirm)
+
+    // 真点击触发内核命令，且传的是 UI 只读查询返回的真实 gate（非 {pass:true} 夹具）
+    expect(submitSpy).toHaveBeenCalledTimes(1)
+    expect(submitSpy.mock.calls[0]![1].pass).toBe(true)
+    const after = game.getExecutionProject(projectId)!
+    expect(after.project.state).toBe('COMPLETED')
+    expect(after.builds).toHaveLength(1)
+    expect(after.builds[0]!.buildId).toBeTruthy()
+
+    const legacy = useGameStore.getState().projects[0]!
+    legacy.phase = 'READY_TO_LAUNCH'
+    legacy.plannedLaunchDay = 0
+    expect(useGameStore.getState().launchProject(projectId).success).toBe(true)
+    expect(useGameStore.getState().products).toHaveLength(1)
+  })
+
+  it('07B-REV2 真点击 FAIL：真实 gate FAIL → 失败原因逐条可见、state 保持 READY_TO_DELIVER（R14）', () => {
+    const projectId = readyToDeliver()
+    // 真实 FAIL：清空蓝图实例 → blocking 项未满足 → evaluateDeliveryGate 产出 D02-MISSING-CORE 等码。
+    const gate = registerRealGate(projectId, {
+      snapshot: baseSnapshot({ structure: completeStructure({ instances: [] }) }),
+      disclosureProvided: false,
+    })
+    expect(gate.gate).toBe('FAIL')
+    expect(gate.errorCodes.length).toBeGreaterThan(0)
+
+    renderDeliver()
+    fireEvent.click(screen.getByTestId('deliver-submit-open'))
+    fireEvent.click(screen.getByTestId('deliver-disclosure-ack'))
+    const confirm = screen.getByTestId('deliver-submit-confirm') as HTMLButtonElement
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+
+    const after = useGameStore.getState().game!.getExecutionProject(projectId)!
+    expect(after.project.state).toBe('READY_TO_DELIVER')
+    expect(after.project.deliveryFailures).toBe(1)
+    expect(after.project.lastDeliveryFailure!.reasonCodes).toEqual(gate.errorCodes)
+    expect(after.builds).toHaveLength(0)
+    // U3：失败原因逐条可见（真点击后 UI 重渲染，非命令级夹具）
+    expect(screen.getByTestId('deliver-failure-reasons').querySelectorAll('li')).toHaveLength(gate.errorCodes.length)
+    gate.errorCodes.forEach((code, idx) => {
+      expect(screen.getByTestId(`deliver-failure-reason-${idx}`).textContent).toContain(code)
+    })
   })
 })

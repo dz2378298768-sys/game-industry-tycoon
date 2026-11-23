@@ -15,6 +15,8 @@ import { ProjectDetail } from '@ui/pages/project-detail'
 import { Deliver } from '@ui/pages/deliver'
 import { useGameStore, t } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
+import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
+import { baseContext, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
 
 /** CODE-07B 端到端闭环：UI 页面链路可达 + store 状态链 + A-37 存读档一致性。 */
 describe('CODE-07B 端到端闭环（批次 07B）', () => {
@@ -114,21 +116,36 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     expect(afterRework.project.reworkSessionId).toBe(afterRework.reworkSessions[0]!.sessionId)
     detail.unmount()
 
-    // —— 4. 交付 PASS：UI 可达 + 内核 submitDelivery 生成 Build ——
+    // —— 4. 交付 PASS：真点击 UI 确认按钮（07B REVISION2，不再用 {pass:true} 夹具绕过按钮）——
+    // 夹具：WP 状态机推进到可交付态（返工夹具驱动）；gate 用 domain 真实 evaluateDeliveryGate 判定。
+    afterRework.project.state = 'READY_TO_DELIVER'
+    const gateResult = evaluateDeliveryGate(baseContext(), p1Templates(), 'full', tuning())
+    expect(gateResult.gate).toBe('PASS')
+    useGameStore.getState().game!.registerDeliveryGateEvaluation(projectId, 'full', {
+      pass: gateResult.gate === 'PASS',
+      violations: gateResult.errorCodes.map((code) => ({ code, severity: 'P1' as const })),
+      reasonCodes: [...gateResult.errorCodes],
+      checkedAt: gateResult.checkedAt,
+      source: 'd02-evaluateDeliveryGate',
+    })
+
+    const submitSpy = vi.spyOn(useGameStore.getState().game!, 'submitDeliveryForProject')
     const deliverView = render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)
     expect(screen.getByTestId('deliver-title')).toBeTruthy()
-    deliverView.unmount()
-    // 夹具：双轨闸门内核未接线（07B-12 D/B 类），直接置 READY_TO_DELIVER 后走真实 submitDelivery。
-    afterRework.project.state = 'READY_TO_DELIVER'
-    const delivered = useGameStore.getState().submitDeliveryForProject(
-      projectId, { pass: true, violations: [] }, 'full',
-    )
-    expect(delivered.success).toBe(true)
-    expect(delivered.result?.completed).toBe(true)
-    expect(delivered.result?.buildId).toBeTruthy()
+    fireEvent.click(screen.getByTestId('deliver-submit-open'))
+    fireEvent.click(screen.getByTestId('deliver-disclosure-ack'))
+    const confirm = screen.getByTestId('deliver-submit-confirm') as HTMLButtonElement
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+    // 真点击触发内核命令，且传的是 UI 只读查询返回的真实 gate（非命令级夹具）
+    expect(submitSpy).toHaveBeenCalledTimes(1)
+    expect(submitSpy.mock.calls[0]![1].pass).toBe(true)
+
     const afterDelivery = useGameStore.getState().game!.getExecutionProject(projectId)!
     expect(afterDelivery.project.state).toBe('COMPLETED')
     expect(afterDelivery.builds).toHaveLength(1)
+    expect(afterDelivery.builds[0]!.buildId).toBeTruthy()
+    deliverView.unmount()
 
     // —— 5. 上市：legacy launchProject → 产品进入 Products 页 ——
     const legacy = useGameStore.getState().projects[0]!

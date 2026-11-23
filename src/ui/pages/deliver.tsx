@@ -67,19 +67,21 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const failure = deliveryStatus.lastDeliveryFailure
   const hasFailure = deliveryStatus.deliveryFailures > 0 || failure !== null
 
-  // 07B REVISION2 确认按钮接线：可交付态 + gate 真实 PASS + 披露勾选(G-9) + 非破产才允许提交。
+  // 07B REVISION2 确认按钮接线：可交付态 + gate 评估可用（有真实判定）+ 披露勾选(G-9) + 非破产。
+  // gate 可用即可提交：PASS→COMPLETED+Build；FAIL→内核记录 lastDeliveryFailure（U3 / R14）。
+  // 仅"缺评估快照"fail-closed 禁用，绝不伪造 pass=true（ADJ-21 §2.3）。
   const isReadyToDeliver = deliveryStatus.state === 'READY_TO_DELIVER'
   const gateAvailable = gateView?.available === true
   const gatePass = gateView?.pass === true
-  const canSubmit = !isBankrupt && isReadyToDeliver && gateAvailable && gatePass && disclosureAck
+  const canSubmit = !isBankrupt && isReadyToDeliver && gateAvailable && disclosureAck
 
   const submitBlockReason = isBankrupt
     ? t('finance.bankrupt.blocked.deliver')
-    : disclosureAck === false && gateAvailable && gatePass
-      ? t('deliver.submit.disclosureRequired')
-      : gateAvailable
-        ? t('deliver.submit.blocked')
-        : `${t('deliver.submit.blocked')}${gateView?.unavailableReason ? `：${gateView.unavailableReason}` : ''}`
+    : !gateAvailable
+      ? `${t('deliver.submit.blocked')}${gateView?.unavailableReason ? `：${gateView.unavailableReason}` : ''}`
+      : !disclosureAck
+        ? t('deliver.submit.disclosureRequired')
+        : ''
 
   const handleSubmit = () => {
     if (!canSubmit || gateView === null) return

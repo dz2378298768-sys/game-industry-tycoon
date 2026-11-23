@@ -3,6 +3,8 @@ import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import { displayPriceCents } from '@ui/components/product-metrics'
 import type { MarketingChannel } from '@domain/value-objects/marketing-response'
 import { PUBLISHERS } from '@content/publishers'
+import { TUNING } from '@content/tuning'
+import { SEED_SEGMENT_TAGS } from '@content/d04-vocabulary'
 
 interface Props { productId: string; onNavigate: (route: string, param?: string) => void }
 
@@ -34,24 +36,42 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   const [platformScope, setPlatformScope] = React.useState('')
   const [estimate, setEstimate] = React.useState<import('@simulation/services/contract-estimate').ContractEstimate | null>(null)
 
-  /** Hook 必须在任何 early return 之前调用（rules-of-hooks），产品缺失时返回空表。 */
-  const salesByDay = React.useMemo(() => {
+  /**
+   * ADJ-12 S10-3 / A-29：模拟按日推进、UI 按周聚合。
+   * Hook 必须在任何 early return 之前调用（rules-of-hooks），产品缺失时返回空表。
+   */
+  const salesByWeek = React.useMemo(() => {
     const map = new Map<number, { units: number; gross: number; net: number }>()
     for (const record of product?.salesByPeriod ?? []) {
-      const acc = map.get(record.dayIndex) ?? { units: 0, gross: 0, net: 0 }
+      const week = Math.floor(record.dayIndex / 7)
+      const acc = map.get(week) ?? { units: 0, gross: 0, net: 0 }
       acc.units += record.grossUnits
       acc.gross += record.grossRevenueCents
       acc.net += record.netSalesRevenueCents
-      map.set(record.dayIndex, acc)
+      map.set(week, acc)
+    }
+    return [...map.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([week, agg]) => ({ week, startDay: week * 7, endDay: week * 7 + 6, ...agg }))
+  }, [product])
+
+  /** 退款按周聚合（仅金额；退款"原因"明细 G1 不落，S-02 显式化）。 */
+  const refundsByWeek = React.useMemo(() => {
+    const map = new Map<number, number>()
+    for (const batch of refundBatches.filter((b) => b.productId === productId && b.status === 'posted')) {
+      const week = Math.floor(batch.refundDayIndex / 7)
+      map.set(week, (map.get(week) ?? 0) + batch.refundAmountCents)
     }
     return [...map.entries()].sort((a, b) => b[0] - a[0])
-  }, [product])
+      .map(([week, amountCents]) => ({ week, startDay: week * 7, endDay: week * 7 + 6, amountCents }))
+  }, [refundBatches, productId])
 
   if (!product) {
     return <div className="panel">{t('product.missingRecord')}</div>
   }
 
   const retired = product.status === 'retired'
+  const isBankrupt = store.company?.status === 'bankrupt'
   const price = displayPriceCents(product)
   const postedRefunds = refundBatches.filter((b) => b.productId === product.id && b.status === 'posted')
   const pendingRefunds = refundBatches.filter((b) => b.productId === product.id && b.status === 'pending')
@@ -142,25 +162,89 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
         <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
           <input placeholder={t('product.setPrice')} value={priceYuan} onChange={(e) => setPriceYuan(e.target.value)} disabled={retired} />
           <button className="btn btn-small" onClick={submitPrice} disabled={retired}>{t('product.setPrice')}</button>
-          <input placeholder="%" value={discountRate} onChange={(e) => setDiscountRate(e.target.value)} disabled={retired} />
-          <button className="btn btn-small" onClick={submitDiscount} disabled={retired}>{t('product.applyDiscount')}</button>
+          <input placeholder="%" value={discountRate} onChange={(e) => setDiscountRate(e.target.value)} disabled={retired || isBankrupt} />
+          <button
+            className="btn btn-small"
+            onClick={submitDiscount}
+            disabled={retired || isBankrupt}
+            aria-disabled={retired || isBankrupt}
+            title={isBankrupt ? t('finance.bankrupt.blocked.salesActions') : undefined}
+          >{t('product.applyDiscount')}</button>
           <button className="btn btn-secondary btn-small" onClick={() => { const r = retireProduct(product.id); toast(r.message ?? '', r.success ? 'success' : 'error') }} disabled={retired}>{t('product.retire')}</button>
         </div>
       </div>
 
-      <div className="panel">
-        <h3>{t('sales.title')}</h3>
-        {salesByDay.length === 0 ? <div>{t('sales.empty')}</div> : (
+      {/* A-29：周聚合销量表（周序号 + 起止日；逐日明细不入 P1 UI） */}
+      <div className="panel" data-testid="p10-sales-weekly">
+        <h3>{t('sales.title')} · {t('p10.weekly')}</h3>
+        {salesByWeek.length === 0 ? <div>{t('sales.empty')}</div> : (
           <table className="table">
-            <thead><tr><th>{t('sales.day')}</th><th>{t('sales.units')}</th><th>{t('sales.gross')}</th><th>{t('sales.net')}</th></tr></thead>
+            <thead>
+              <tr>
+                <th>{t('p10.week')}</th>
+                <th>{t('p10.weekRange')}</th>
+                <th>{t('sales.units')}</th>
+                <th>{t('sales.gross')}</th>
+                <th>{t('sales.net')}</th>
+              </tr>
+            </thead>
             <tbody>
-              {salesByDay.map(([day, agg]) => (
-                <tr key={day}><td>{day}</td><td>{agg.units}</td><td>{formatMoney(agg.gross)}</td><td>{formatMoney(agg.net)}</td></tr>
+              {salesByWeek.map((w) => (
+                <tr key={w.week} data-testid={`p10-week-row-${w.week}`}>
+                  <td>{w.week + 1}</td>
+                  <td>Day {w.startDay}–{w.endDay}</td>
+                  <td>{w.units}</td>
+                  <td>{formatMoney(w.gross)}</td>
+                  <td>{formatMoney(w.net)}</td>
+                </tr>
               ))}
             </tbody>
           </table>
         )}
         <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{t('sales.netHint')}</div>
+      </div>
+
+      {/* R-2 / ADJ-16 R-2：口碑档内核无产出 → "暂无评价"，禁止前端由 reviewScore 推算档位（OPEN-P10-REPUTATION-WIRING） */}
+      <div className="panel" data-testid="p10-reputation">
+        <h3>{t('p10.reputation.title')}</h3>
+        <span className="badge badge-muted" data-testid="p10-reputation-band">{t('p10.reputation.none')}</span>
+        <p className="muted" style={{ fontSize: 11 }}>{t('p10.reputation.hint')}</p>
+      </div>
+
+      {/* A-28 CONDITIONAL：定位差异锚点结构可见（广谱/窄众标签 + 切片列结构），不依赖未定值销量公式 */}
+      <div className="panel" data-testid="p10-positioning">
+        <h3>{t('p10.positioning.title')}</h3>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} data-testid="p10-positioning-tags">
+          {(product.audienceSegmentIds ?? []).length === 0 && <span className="muted">{t('p10.positioning.noSegments')}</span>}
+          {SEED_SEGMENT_TAGS.filter((tag) => (product.audienceSegmentIds ?? []).includes(tag.tagId)).map((tag) => (
+            <span key={tag.tagId} className={`badge ${tag.granularity === 'broad' ? '' : 'paused'}`} title={`${tag.tagId} · ${tag.granularity}`}>
+              {tag.displayName}
+            </span>
+          ))}
+        </div>
+        <table className="table" style={{ marginTop: 8 }} data-testid="p10-positioning-slices">
+          <thead><tr><th>{t('p10.positioning.segment')}</th><th>{t('p10.positioning.platform')}</th><th>{t('sales.units')}</th></tr></thead>
+          <tbody>
+            {product.salesByPeriod.length === 0 ? (
+              <tr><td colSpan={3}>{t('p10.positioning.noSlices')}</td></tr>
+            ) : (
+              product.salesByPeriod.map((record) => (
+                <tr key={record.id}>
+                  <td>{record.marketId}</td>
+                  <td>{record.platformId}</td>
+                  <td>{record.grossUnits}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+        <p className="muted" style={{ fontSize: 11 }}>{t('p10.positioning.hint')}</p>
+      </div>
+
+      {/* 表现原因归因：内核无支撑原因数据 → fail-closed 不出现归因行（≤3 条上限保留结构） */}
+      <div className="panel" data-testid="p10-attribution">
+        <h3>{t('p10.attribution.title')}</h3>
+        <p className="muted" style={{ fontSize: 12 }}>{t('p10.attribution.empty')}</p>
       </div>
 
       <div className="panel">
@@ -186,6 +270,22 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
         <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
           {t('refund.pendingHint')} · {t('refund.posted')}: {postedRefunds.length} · {t('refund.pending')}: {pendingRefunds.length}
         </div>
+        {/* S10-2：退款率取 TUNING 常数（不做条件触发）；S10-3：金额按周聚合；原因明细 DEFER（S-02） */}
+        <div style={{ fontSize: 12, marginTop: 6 }} data-testid="p10-refund-summary">
+          {t('p10.refund.rate')}: {(TUNING.sales.refundRate * 100).toFixed(0)}% · {t('p10.refund.weekly')}
+          {refundsByWeek.length === 0
+            ? ` ${t('p10.refund.none')}`
+            : (
+              <ul>
+                {refundsByWeek.map((w) => (
+                  <li key={w.week}>
+                    {t('p10.week')} {w.week + 1} (Day {w.startDay}–{w.endDay}): {formatMoney(w.amountCents)}
+                  </li>
+                ))}
+              </ul>
+            )}
+        </div>
+        <p className="muted" style={{ fontSize: 11 }}>{t('p10.refund.hint')}</p>
       </div>
 
       <div className="panel">
@@ -196,8 +296,14 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
             <div key={channel} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
               <span style={{ width: 80 }}>{t(`marketing.channel.${channel}`)}</span>
               <span style={{ fontSize: 12, opacity: 0.8 }}>{t('marketing.current')}: {campaign ? formatMoney(campaign.dailyBudgetCents) : '—'} ({campaign?.status ?? 'ended'})</span>
-              <input placeholder={t('marketing.budget')} value={budgets[channel]} onChange={(e) => setBudgets({ ...budgets, [channel]: e.target.value })} style={{ width: 110 }} disabled={retired} />
-              <button className="btn btn-small" onClick={() => submitBudget(channel)} disabled={retired}>{t('marketing.apply')}</button>
+              <input placeholder={t('marketing.budget')} value={budgets[channel]} onChange={(e) => setBudgets({ ...budgets, [channel]: e.target.value })} style={{ width: 110 }} disabled={retired || isBankrupt} />
+              <button
+                className="btn btn-small"
+                onClick={() => submitBudget(channel)}
+                disabled={retired || isBankrupt}
+                aria-disabled={retired || isBankrupt}
+                title={isBankrupt ? t('finance.bankrupt.blocked.salesActions') : undefined}
+              >{t('marketing.apply')}</button>
             </div>
           )
         })}

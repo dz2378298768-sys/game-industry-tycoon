@@ -26,6 +26,12 @@ export const Products: React.FC<Props> = ({ onNavigate }) => {
             <th>{t('products.col.name')}</th>
             <th>{t('products.col.stage')}</th>
             <th>{t('products.col.status')}</th>
+            {/* FIX-1 / U1：删除合成平均分，三质量分列；D-02 终值向量未接线 → '—' */}
+            <th>{t('p10.quality.design')}</th>
+            <th>{t('p10.quality.implementation')}</th>
+            <th>{t('p10.quality.completeness')}</th>
+            {/* R-2：口碑档内核无产出 → 直读缺失态，不前端推算 */}
+            <th>{t('p10.reputation')}</th>
             <th>{t('products.col.price')}</th>
             <th>{t('products.col.netRevenue')}</th>
             <th>{t('products.col.awareness')}</th>
@@ -40,6 +46,10 @@ export const Products: React.FC<Props> = ({ onNavigate }) => {
                 <td>{product.name}</td>
                 <td>{t(`stage.${product.lifecycleStage}`)}</td>
                 <td>{t(`status.${product.status}`)}</td>
+                <td data-testid="p10-quality-design">—</td>
+                <td data-testid="p10-quality-implementation">—</td>
+                <td data-testid="p10-quality-completeness">—</td>
+                <td data-testid={`p10-reputation-${product.id}`}>{t('p10.reputation.none')}</td>
                 <td>{price === null ? t('product.noPrice') : formatMoney(price)}{product.discountRatePercent ? ` (-${product.discountRatePercent}%)` : ''}</td>
                 <td>{formatMoney(netRevenueCents(product, refundBatches))}</td>
                 <td>{Math.round(peakAwareness(product) * 100)}%</td>

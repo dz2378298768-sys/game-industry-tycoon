@@ -142,7 +142,12 @@ export class PersonnelService {
     this.employments = [...(slice.employments ?? [])]
     this.candidates = [...(slice.candidates ?? [])]
     this.personEvents = [...(slice.personEvents ?? [])]
-    if (snapshot !== undefined) this.snapshot = snapshot
+    if (snapshot !== undefined) {
+      this.snapshot = snapshot
+      // §18.3：公式参数快照是权威调参入口（存档持久化/测试覆盖均经此注入），
+      // adopt 时同步生效；快照缺失键回退 DEFAULT（expCap 等数组字段一并覆盖）。
+      this.params = { ...DEFAULT_PERSONNEL_PARAMS, ...(snapshot.params as Partial<typeof this.params>) }
+    }
   }
 
   /** 回写 WorldState 切片（GameWorld 命令后调用）。 */

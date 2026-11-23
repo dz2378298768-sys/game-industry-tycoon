@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
 import { writeCompanyCashBalance } from '@domain/entities/company'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
+import { createPersonnelSnapshot } from '@domain/value-objects/personnel-tuning'
 import { TUNING } from '@content/tuning'
 import { cityRentMultiplier } from '@content/queries'
 
@@ -16,17 +17,33 @@ function setup() {
   })
   const emp = hired.result
   if (!emp) throw new Error('hire failed')
+  // CODE-06：本套件只验证月结机制。D-03 §6.7 随机离职（personId 为随机 uuid）
+  // 会让员工在长跨度模拟中非确定性离职，这里把日离职概率上限清零以隔离被测行为。
+  const snap = createPersonnelSnapshot(0)
+  snap.params = { ...snap.params, pMax: 0, pBase: 0 }
+  gw.world.personnelFormulaSnapshot = snap
   return { gw, company, emp }
 }
 
 describe('财务月度结算 (D12-D15)', () => {
+  // CODE-06：月薪幂等键已从旧 periodKey `m1970-1` 迁到承诺键 `<commitmentId>:<YYYY-MM>`
+  // （②流水线 realizeCommitment），租金键仍为 `rent:{companyId}:m1970-1`。
+  function txInMonth(
+    gw: GameWorld,
+    companyId: string,
+    oldPeriodKey: string,
+    monthKey: string,
+  ) {
+    return gw.finance
+      .getTransactionsByCompany(companyId)
+      .filter(tx => tx.idempotencyKey.includes(oldPeriodKey) || tx.idempotencyKey.includes(monthKey))
+  }
+
   it('月末只结算一次工资与租金', () => {
     const { gw, emp } = setup()
     gw.advanceSimulation(30) // 1970-01-31
 
-    const jan = gw.finance
-      .getTransactionsByCompany(emp.companyId)
-      .filter(tx => tx.idempotencyKey.includes('m1970-1'))
+    const jan = txInMonth(gw, emp.companyId, 'm1970-1', '1970-01')
     expect(jan).toHaveLength(2)
     expect(jan.find(tx => tx.category === 'salary')?.amountCents).toBe(-emp.salaryMonthlyCents)
     expect(jan.find(tx => tx.category === 'office_rent')?.amountCents).toBe(
@@ -34,9 +51,7 @@ describe('财务月度结算 (D12-D15)', () => {
     )
 
     gw.advanceSimulation(1) // 1970-02-01
-    const stillJan = gw.finance
-      .getTransactionsByCompany(emp.companyId)
-      .filter(tx => tx.idempotencyKey.includes('m1970-1'))
+    const stillJan = txInMonth(gw, emp.companyId, 'm1970-1', '1970-01')
     expect(stillJan).toHaveLength(2)
   })
 
@@ -45,15 +60,11 @@ describe('财务月度结算 (D12-D15)', () => {
     const feb28 = gregorianToDayIndex(1972, 2, 28)
     gw.advanceSimulation(feb28)
 
-    const before = gw.finance
-      .getTransactionsByCompany(emp.companyId)
-      .filter(tx => tx.idempotencyKey.includes('m1972-2'))
+    const before = txInMonth(gw, emp.companyId, 'm1972-2', '1972-02')
     expect(before).toHaveLength(0)
 
     gw.advanceSimulation(1) // 1972-02-29
-    const after = gw.finance
-      .getTransactionsByCompany(emp.companyId)
-      .filter(tx => tx.idempotencyKey.includes('m1972-2'))
+    const after = txInMonth(gw, emp.companyId, 'm1972-2', '1972-02')
     expect(after).toHaveLength(2)
   })
 

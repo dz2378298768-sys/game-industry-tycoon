@@ -15,7 +15,13 @@ export interface ProjectFormulaParams {
   epsilon: number
   /** §6.2 k_output > 0。 */
   kOutput: number
-  /** §6.2 f_skill(ℓ)，ℓ∈{0..5}（D-03 映射）。 */
+  /**
+   * §6.2 f_skill(ℓ)，ℓ∈{0..5}（D-03 映射）。
+   * W5-C6（ADJ-2026-11-24-19 §1 C6）：**项目执行公式**语义域（语义域 B），
+   * 调用链 `project-execution-capacity.ts:skillEfficiency()` / `project-execution-engine.ts`。
+   * 与 `content/tuning.ts:employee.skillMultiplier`（日常产能/招聘预览，语义域 A）刻意分域、
+   * 均保留、禁止互相覆盖；两域仅在技能 3 级同为 1.0（基准锚点）。
+   */
   fSkill: Record<number, number>
   /** §6.4 workingDaysPerMonth（月薪折算工作日）。 */
   workingDaysPerMonth: number
@@ -50,6 +56,7 @@ export const DEFAULT_PROJECT_FORMULA_PARAMS: ProjectFormulaParams = {
   projectFormulaVersion: 'PROJ-FORMULA-v0.1.1',
   epsilon: 1e-9,
   kOutput: 1,
+  // 项目执行域（B）：L0=0（不伪造产能）/ L3=1.0（基准）。与日常域 skillMultiplier 刻意分域，见接口注释。
   fSkill: { 0: 0, 1: 0.6, 2: 0.8, 3: 1.0, 4: 1.2, 5: 1.4 },
   workingDaysPerMonth: 21,
   kRiskCost: 0.2,

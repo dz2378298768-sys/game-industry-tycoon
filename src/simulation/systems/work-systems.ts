@@ -22,7 +22,10 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-/** 技能等级 → 产能系数 */
+/**
+ * 技能等级 → **日常产能 / 招聘预览**系数（W5-C6 语义域 A）。
+ * 与项目执行公式的 `fSkill`（语义域 B）刻意分域，二者禁止互相覆盖；技能 3 级两域均 = 1.0。
+ */
 export function skillFactor(skillLevel: number): number {
   return TUNING.employee.skillMultiplier[skillLevel] ?? 1.0
 }

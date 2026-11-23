@@ -4,6 +4,8 @@ import { writeCompanyCashBalance } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
 import { DEFAULT_PERSONNEL_PARAMS } from '@domain/value-objects/personnel-tuning'
+import { skillFactor } from '@simulation/systems/work-systems'
+import { DEFAULT_PROJECT_FORMULA_PARAMS } from '@domain/value-objects/project-execution-tuning'
 
 function bootstrap() {
   const gw = new GameWorld(7)
@@ -87,6 +89,17 @@ describe('员工规则 (E16/E17/E18)', () => {
     expect(
       gw.finance.getTransactionsByCompany(emp.companyId).filter(tx => tx.category === 'severance'),
     ).toHaveLength(1)
+  })
+
+  it('W5-C6 日常域技能系数：skillFactor 读 skillMultiplier，技能 3 级 = 1.0 且与项目执行域刻意分域', () => {
+    // 日常/招聘预览域（A）：skillFactor 必须读 TUNING.employee.skillMultiplier
+    expect(skillFactor(3)).toBe(1.0)
+    expect(skillFactor(3)).toBe(TUNING.employee.skillMultiplier[3])
+    expect(skillFactor(1)).toBe(0.7)
+    // 项目执行域（B）：fSkill 技能 3 级同为 1.0，但 L1 为 0.6，证明两域互不覆盖
+    expect(DEFAULT_PROJECT_FORMULA_PARAMS.fSkill[3]).toBe(1.0)
+    expect(DEFAULT_PROJECT_FORMULA_PARAMS.fSkill[1]).toBe(0.6)
+    expect(skillFactor(1)).not.toBe(DEFAULT_PROJECT_FORMULA_PARAMS.fSkill[1])
   })
 
   it('负现金时禁止招聘', () => {

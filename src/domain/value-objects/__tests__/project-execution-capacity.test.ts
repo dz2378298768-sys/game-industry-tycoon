@@ -9,6 +9,7 @@ import {
   computeCapacityVector,
   computeCostPerUnit,
   estimateProjectCost,
+  skillEfficiency,
 } from '@domain/value-objects/project-execution-capacity'
 import {
   advanceOneDay,
@@ -18,6 +19,9 @@ import {
   allWorkPackagesDone,
 } from '@domain/value-objects/project-execution-daily'
 import { member, params, scenarioATeam, workload } from './project-execution-fixtures'
+import { TUNING } from '@content/tuning'
+import { skillFactor } from '@simulation/systems/work-systems'
+import { DEFAULT_PROJECT_FORMULA_PARAMS } from '@domain/value-objects/project-execution-tuning'
 
 describe('§6.2 Cap_d 与 §6.4 costPerUnit_d 的显式除零分支（C3）', () => {
   it('skillLevel=0 的成员不计入 team_d ⇒ Cap_d=0（§10 B-9 不伪造产能）', () => {
@@ -211,5 +215,30 @@ describe('场景 A 团队产能可解释', () => {
     expect(cap.design).toBeCloseTo(1.0, 9)
     expect(cap.qa).toBeCloseTo(1.0, 9)
     expect(cap.code).toBeGreaterThan(cap.art)
+  })
+})
+
+describe('W5-C6 技能系数刻意分域（ADJ-2026-11-24-19 §1 C6）', () => {
+  it('两域均保留且互不覆盖：技能 3 级两域同为 1.0（基准锚点）', () => {
+    const daily = TUNING.employee.skillMultiplier
+    const exec = DEFAULT_PROJECT_FORMULA_PARAMS.fSkill
+    // 技能 3 级：两域基准锚点均 = 1.0（量级自检，CODEBUDDY.md §13.4）
+    expect(daily[3]).toBe(1.0)
+    expect(exec[3]).toBe(1.0)
+    expect(skillFactor(3)).toBe(1.0)
+    expect(skillEfficiency(3, params())).toBe(1.0)
+  })
+
+  it('分域证据：L1/L2/L4/L5 两域取值刻意不同，禁止互相覆盖', () => {
+    const daily = TUNING.employee.skillMultiplier
+    const exec = DEFAULT_PROJECT_FORMULA_PARAMS.fSkill
+    // 日常域 A（招聘预览/日常产能）：0.7 / 0.85 / 1.15 / 1.3
+    expect([daily[1], daily[2], daily[4], daily[5]]).toEqual([0.7, 0.85, 1.15, 1.3])
+    // 项目执行域 B（执行公式）：0.6 / 0.8 / 1.2 / 1.4；L0 = 0 不伪造产能
+    expect([exec[1], exec[2], exec[4], exec[5]]).toEqual([0.6, 0.8, 1.2, 1.4])
+    expect(exec[0]).toBe(0)
+    // 两条调用链各读各表，确认未串域
+    expect(skillFactor(1)).toBe(0.7)
+    expect(skillEfficiency(1, params())).toBe(0.6)
   })
 })

@@ -17,7 +17,10 @@ export function isInfinite(x: number): boolean {
   return x === Number.POSITIVE_INFINITY
 }
 
-/** §6.2 `f_skill(ℓ)`；缺键 0（§10 B-9，不伪造产能）。 */
+/**
+ * §6.2 `f_skill(ℓ)`；缺键 0（§10 B-9，不伪造产能）。
+ * W5-C6 语义域 B（项目执行公式）：与日常产能 `skillFactor` 刻意分域、禁止互相覆盖。
+ */
 export function skillEfficiency(level: number, params: ProjectFormulaParams): number {
   return params.fSkill[level] ?? 0
 }

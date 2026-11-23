@@ -68,7 +68,13 @@ export const TUNING = {
     startingMorale: 70,
     /** 单位：0-100。新员工初始疲劳。 */
     startingFatigue: 20,
-    /** 单位：倍率。技能等级 1-5 对应产能系数。 */
+    /**
+     * 单位：倍率。技能等级 1-5 对应**日常产能 / 招聘预览**系数（语义域 A）。
+     * 调用链：`simulation/systems/work-systems.ts:skillFactor()` → 日常工作量与招聘预览。
+     * W5-C6（ADJ-2026-11-24-19 §1 C6）：与 `project-execution-tuning.ts:fSkill`（语义域 B，
+     * 项目执行公式）**刻意分域、均保留、禁止互相覆盖**。两域在技能 3 级均 = 1.0（基准锚点），
+     * 其余等级取值不同不是冲突而是分域设计；不得将本表改为 fSkill 值或反向同步。
+     */
     skillMultiplier: {
       1: 0.7,
       2: 0.85,

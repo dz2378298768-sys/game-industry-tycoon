@@ -15,6 +15,22 @@ describe('P-07 变更返工 + P-08 测试优化面板（批次 07B）', () => {
     expect(r.success).toBe(true)
   })
 
+  /** 注入真实 WP 工作量（领域 fixtures 口径）：Wizard 无模块词表 → 默认 0 WP（OPEN-CONTENT-MODULES）。 */
+  function seedReworkScope(projectId: string) {
+    const exec = useGameStore.getState().game!.getExecutionProject(projectId)!
+    exec.project.state = 'ACTIVE'
+    const wp = (id: string, discipline: 'code' | 'art', baseline: number, delivered: number) => ({
+      workPackageId: id, projectId: exec.project.projectId, snapshotId: exec.project.snapshotId,
+      sourceRef: { instanceId: id }, discipline, workUnits: baseline, baselineWorkUnits: baseline,
+      remainingWorkUnits: baseline - delivered, deliveredWorkUnits: delivered,
+      progress: delivered / baseline, skillRef: null, requiredSkillLevel: 0,
+      blockedBy: [], dependents: [], priority: 'P0' as const, state: 'READY' as const,
+      kind: 'NORMAL' as const, orderIndex: 0, reworkSessionId: null, reworkMode: null,
+    })
+    exec.workPackages = [wp('WP-CODE', 'code', 100, 60), wp('WP-ART', 'art', 50, 25)]
+    exec.project.workPackageIds = exec.workPackages.map((w) => w.workPackageId)
+  }
+
   function renderDetail() {
     const projectId = useGameStore.getState().projects[0]!.id
     return render(<ProjectDetail projectId={projectId} onNavigate={vi.fn()} />)
@@ -26,21 +42,48 @@ describe('P-07 变更返工 + P-08 测试优化面板（批次 07B）', () => {
     expect(screen.getByTestId('p08-test-panel')).toBeTruthy()
   })
 
-  it('A-18 U4：返工预估弹窗先于确认出现，四项预估齐全，确认按钮禁用', () => {
+  it('A-18 U4（REVISION）：返工预估弹窗先于确认出现，unit/沉没/延期为真实数值且确认可执行', () => {
     // 返工变更仅对开发中（PRODUCTION/QA）项目开放：CONCEPT → PRE_PRODUCTION → PRODUCTION
     const projectId = useGameStore.getState().projects[0]!.id
     expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
     expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
+    seedReworkScope(projectId)
     renderDetail()
     // 确认弹窗初始不存在
     expect(screen.queryByTestId('p07-rework-estimate')).toBeNull()
     fireEvent.click(screen.getByTestId('p07-open-estimate'))
     const estimate = screen.getByTestId('p07-rework-estimate')
     expect(estimate).toBeTruthy()
+    // unit：按学科分列的真实工作量（code 60 + art 25 → 分摊后非零）
+    const units = screen.getByTestId('p07-estimate-units').textContent ?? ''
+    expect(units).not.toContain('评估不可用')
+    expect(units).toContain('code')
+    expect(units).toContain('art')
+    // 沉没成本：B 类全额沉没 = 85 工作量（非占位）
+    const sunk = screen.getByTestId('p07-estimate-sunk').textContent ?? ''
+    expect(Number.parseFloat(sunk)).toBeGreaterThan(0)
+    // 档位 + 延期：内核 breakdown 同源（δ=85/150>0.4 → full，延期 0.25 天）
+    expect(screen.getByTestId('p07-estimate-band').textContent).toContain('full')
+    expect(screen.getByTestId('p07-estimate-delay').textContent).toContain('天')
+    // 确认按钮可用 → 点击走内核 planRework + beginRework，真实创建 ReworkSession
+    const confirm = screen.getByTestId('p07-rework-confirm')
+    expect(confirm.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(confirm)
+    const exec = useGameStore.getState().game!.getExecutionProject(projectId)!
+    expect(exec.reworkSessions).toHaveLength(1)
+    expect(exec.project.reworkSessionId).toBe(exec.reworkSessions[0]!.sessionId)
+  })
+
+  it('U4 fail-closed：未登记 ExecutionProject 时预估不可用且确认禁用（不伪造数值）', () => {
+    const projectId = useGameStore.getState().projects[0]!.id
+    expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
+    expect(useGameStore.getState().advanceProjectPhase(projectId).success).toBe(true)
+    // 清掉双索引使 getReworkEstimate 进入 fail-closed 分支
+    const gw = useGameStore.getState().game! as unknown as { executionProjects: Map<string, unknown> }
+    gw.executionProjects.clear()
+    renderDetail()
+    fireEvent.click(screen.getByTestId('p07-open-estimate'))
     expect(screen.getByTestId('p07-estimate-units').textContent).toContain('评估不可用')
-    expect(screen.getByTestId('p07-estimate-sunk').textContent).toContain('评估不可用')
-    expect(screen.getByTestId('p07-estimate-band').textContent).not.toBe('')
-    expect(screen.getByTestId('p07-estimate-delay').textContent).toContain('评估不可用')
     const confirm = screen.getByTestId('p07-rework-confirm')
     expect(confirm.hasAttribute('disabled')).toBe(true)
     expect(confirm.getAttribute('aria-disabled')).toBe('true')

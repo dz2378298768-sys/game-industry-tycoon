@@ -14,10 +14,24 @@ import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway, computeCashForecast } from '@domain/value-objects/finance-formulas'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
-import { createProjectExecution, setupBudgetCommitment, estimateCost } from '@domain/value-objects/project-execution-engine'
+import {
+  createProjectExecution,
+  setupBudgetCommitment,
+  estimateCost,
+  planRework,
+  beginRework,
+  submitDelivery,
+} from '@domain/value-objects/project-execution-engine'
 import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
-import { DEFAULT_PROJECT_FORMULA_PARAMS } from '@domain/value-objects/project-execution-tuning'
+import {
+  computeChangeWorkUnits,
+  computeReworkCostBreakdown,
+  estimateReworkCostRange,
+  type ReworkAffectedItemInput,
+} from '@domain/value-objects/project-execution-rework'
+import { DEFAULT_PROJECT_FORMULA_PARAMS, DISCIPLINE_ORDER } from '@domain/value-objects/project-execution-tuning'
 import { ProjectError } from '@domain/entities/project-execution'
+import type { ReworkCategory, ReworkMode, Discipline as ExecutionDiscipline } from '@domain/entities/project-execution'
 import type { CrisisLevel } from '@domain/entities/finance'
 import {
   createCompanyAssetSoldEvent,
@@ -135,6 +149,36 @@ export interface ExecutionSummary {
   workPackages: Array<{ workPackageId: string; discipline: string; state: string; kind: string; baselineWorkUnits: number; remainingWorkUnits: number }>
   capacityByDiscipline: Record<string, number>
   bottleneckDiscipline: string | null
+}
+
+/**
+ * CODE-07B REVISION / U4：返工预估只读投影。全部字段由内核纯函数
+ * （`computeReworkCostBreakdown` / `estimateReworkCostRange` / `estimateCost`）同源派生，
+ * application 层不造数；`available=false` 时 UI 必须 fail-closed。
+ */
+export interface ReworkEstimate {
+  projectId: string
+  category: ReworkCategory
+  /** δ 档位（内核 breakdown.mode）。 */
+  mode: ReworkMode
+  /** δ = W_change / max(ε, W_total)。 */
+  changeRatio: number
+  /** 返工工作量按学科分列（与 planRework 分摊同口径）。 */
+  disciplineUnits: Array<{ discipline: ExecutionDiscipline; workUnits: number }>
+  /** 返工总工作量（记账基数）。 */
+  reworkWorkUnits: number
+  /** 沉没工作量（已投入中不可复用部分）。 */
+  sunkWorkUnits: number
+  /** 成本区间（分）；+∞ 时置 null，以 costInfinite 标识，禁止 UI 显示 Infinity。 */
+  costLowCents: number | null
+  costHighCents: number | null
+  costInfinite: boolean
+  /** 延长天数区间（内核 durationExtension）。 */
+  delayLowDays: number
+  delayHighDays: number
+  /** 内核是否可评估（false ⇒ UI 显示不可用原因，不伪造数字）。 */
+  available: boolean
+  unavailableReason: string | null
 }
 
 export class GameWorld {
@@ -807,6 +851,199 @@ export class GameWorld {
       })),
       capacityByDiscipline,
       bottleneckDiscipline,
+    }
+  }
+
+  // ===== CODE-07B REVISION / U4：返工预估 + 确认后执行（application 层接线内核纯函数） =====
+
+  /**
+   * 返工 scope 派生（预估与确认共用同一口径，零分叉）：从 ExecutionProject 的真实 WP 生成 affected，
+   * 单位成本由 estimateCost 的 costPerWorkUnit 派生。δ 由玩家滑块 modulate W_d(new)。
+   * 预览（无副作用）不校验 state/A 类——那些是 planRework 在「确认后执行」时强制的内核规则；
+   * 预览仅在项目未登记 ExecutionProject 时 fail-closed。无 WP 时 breakdown 真值为 0（非造数）。
+   */
+  private reworkScopeFor(
+    projectId: string,
+    category: ReworkCategory,
+    deltaPercent: number,
+  ): {
+    execution: ProjectExecutionState
+    affected: ReworkAffectedItemInput[]
+    costPerUnit: number[]
+    baseTotal: number
+  } | { reason: string } {
+    const execution = this.executionProjects.get(projectId)
+    if (execution === undefined) return { reason: '项目未登记 ExecutionProject（未走立项向导或旧档），返工预估不可用' }
+    const company = this.getPlayerCompany()
+    const members = company === undefined ? [] : this.world.employees
+      .filter((e) => e.companyId === company.id && e.status === 'hired')
+      .map((e) => ({ employmentId: e.id, salaryCentsPerMonth: e.salaryMonthlyCents, skillLevels: {} }))
+    const est = estimateCost(execution, members, this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS)
+    const loaded = new Set(
+      execution.workPackages
+        .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DEACTIVATED' && wp.baselineWorkUnits > 0)
+        .map((wp) => wp.discipline),
+    )
+    const costPerUnit = DISCIPLINE_ORDER
+      .filter((d) => loaded.has(d))
+      .map((d) => est.costPerWorkUnit[d])
+      .filter((c) => Number.isFinite(c) && c > 0)
+
+    const baseTotal = execution.workPackages
+      .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DEACTIVATED')
+      .reduce((s, wp) => s + wp.baselineWorkUnits, 0)
+    const affected: ReworkAffectedItemInput[] = execution.workPackages
+      .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DEACTIVATED' && wp.baselineWorkUnits > 0)
+      .map((wp) => {
+        const oldWorkUnits = wp.baselineWorkUnits
+        const ratio = Math.max(0, 1 + (category === 'B' ? -1 : 1) * deltaPercent / 100)
+        return {
+          instanceId: wp.workPackageId,
+          discipline: wp.discipline,
+          oldWorkUnits,
+          deliveredWorkUnits: wp.deliveredWorkUnits,
+          newWorkUnits: oldWorkUnits * ratio,
+        }
+      })
+    // 无 WP（OPEN-CONTENT-MODULES）时 affected/baseTotal 为 0，downstream 纯函数给出真值 0，
+    // 不做任何数值伪造；确认执行时 planRework 会以 PROJ_REWORK_SCOPE_UNKNOWN fail-closed。
+    return { execution, affected, costPerUnit, baseTotal }
+  }
+
+  /**
+   * U4：确认前的返工预估只读投影（零副作用，不建会话、不写状态）。
+   * 数值全部来自内核纯函数；`available=false` 时 UI 显示不可用原因并禁用确认。
+   */
+  getReworkEstimate(projectId: string, category: ReworkCategory, deltaPercent: number): ReworkEstimate {
+    const scope = this.reworkScopeFor(projectId, category, deltaPercent)
+    if ('reason' in scope) {
+      return {
+        projectId, category, mode: 'minimal', changeRatio: 0, disciplineUnits: [],
+        reworkWorkUnits: 0, sunkWorkUnits: 0,
+        costLowCents: null, costHighCents: null, costInfinite: false,
+        delayLowDays: 0, delayHighDays: 0, available: false, unavailableReason: scope.reason,
+      }
+    }
+    const { affected, costPerUnit, baseTotal } = scope
+    const params = DEFAULT_PROJECT_FORMULA_PARAMS
+    const breakdown = computeReworkCostBreakdown({ category, affected, workTotal: baseTotal }, params)
+    const range = estimateReworkCostRange(breakdown.reworkWorkUnits, costPerUnit, params)
+
+    // 与 planRework 相同的逐项占比分摊，得到「按学科分列」的返工工作量（unit）。
+    const perItem = affected.map((item) =>
+      computeChangeWorkUnits({ category, affected: [item], workTotal: baseTotal }, params),
+    )
+    const changeSum = perItem.reduce((s, v) => s + v, 0)
+    const byDiscipline = new Map<ExecutionDiscipline, number>()
+    if (changeSum > 0) {
+      affected.forEach((item, i) => {
+        const share = (breakdown.reworkWorkUnits * perItem[i]!) / changeSum
+        if (share <= 0) return
+        byDiscipline.set(item.discipline, (byDiscipline.get(item.discipline) ?? 0) + share)
+      })
+    }
+    const costInfinite = !Number.isFinite(range.lowCents) || !Number.isFinite(range.highCents)
+    return {
+      projectId,
+      category,
+      mode: breakdown.mode,
+      changeRatio: breakdown.changeRatio,
+      disciplineUnits: DISCIPLINE_ORDER
+        .filter((d) => byDiscipline.has(d))
+        .map((d) => ({ discipline: d, workUnits: byDiscipline.get(d)! })),
+      reworkWorkUnits: breakdown.reworkWorkUnits,
+      sunkWorkUnits: breakdown.sunkWorkUnits,
+      costLowCents: costInfinite ? null : range.lowCents,
+      costHighCents: costInfinite ? null : range.highCents,
+      costInfinite,
+      delayLowDays: breakdown.durationExtension.low,
+      delayHighDays: breakdown.durationExtension.high,
+      available: true,
+      unavailableReason: null,
+    }
+  }
+
+  /**
+   * U4「确认后才执行」：经 planRework + beginRework 创建真实 ReworkSession 并并入执行态。
+   * 预估不可用 / scope 未知 ⇒ fail-closed 返回错误，不建假会话。
+   */
+  confirmRework(
+    projectId: string,
+    category: ReworkCategory,
+    deltaPercent: number,
+  ): CommandOutcome<{ sessionId: string; reworkWorkUnits: number }> {
+    const scope = this.reworkScopeFor(projectId, category, deltaPercent)
+    if ('reason' in scope) {
+      return { success: false, errorCode: 'PROJ_REWORK_SCOPE_UNKNOWN', message: scope.reason }
+    }
+    const { execution, affected, costPerUnit } = scope
+    const sessionId = `rw-${uuid()}`
+    const changeId = `chg-${sessionId}`
+    try {
+      const plan = planRework(
+        execution,
+        {
+          sessionId,
+          category,
+          affected,
+          targetDraftVersionId: execution.project.versionId,
+          targetSnapshotId: execution.project.snapshotId,
+          changes: [{ changeId, instanceIds: affected.map((a) => a.instanceId) }],
+          day: this.dayIndex,
+          costPerUnit,
+        },
+        DEFAULT_PROJECT_FORMULA_PARAMS,
+      )
+      const next = beginRework(execution, plan, this.dayIndex)
+      // 双索引同步：内核 projectId + legacy Project id 两键都指向更新后的状态。
+      for (const [key, value] of this.executionProjects) {
+        if (value === execution) this.executionProjects.set(key, next)
+      }
+      this.executionProjects.set(projectId, next)
+      return { success: true, result: { sessionId, reworkWorkUnits: plan.breakdown.reworkWorkUnits } }
+    } catch (error) {
+      if (error instanceof ProjectError) {
+        return { success: false, errorCode: error.code, message: error.message }
+      }
+      throw error
+    }
+  }
+
+  /**
+   * 交付提交（内核 submitDelivery 单一入口，fail-closed）：PASS ⇒ COMPLETED + Build；
+   * FAIL ⇒ 仅记录 deliveryFailures / lastDeliveryFailure，state 保持 READY_TO_DELIVER（R14）。
+   */
+  submitDeliveryForProject(
+    projectId: string,
+    gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> },
+    deliveryForm: import('@domain/entities/project-execution').DeliveryForm = 'full',
+  ): CommandOutcome<{ completed: boolean; buildId: string | null }> {
+    const execution = this.executionProjects.get(projectId)
+    if (execution === undefined) {
+      return { success: false, errorCode: 'PROJ_NOT_FOUND', message: '项目未登记 ExecutionProject' }
+    }
+    try {
+      const result = submitDelivery(execution, {
+        day: this.dayIndex,
+        gate,
+        versionLabel: execution.project.versionId,
+        deliveryForm,
+        actualCostCents: 0,
+        deliveredTier: 0,
+      })
+      this.executionProjects.set(projectId, result.state)
+      for (const [key, value] of this.executionProjects) {
+        if (value === execution && key !== projectId) this.executionProjects.set(key, result.state)
+      }
+      return {
+        success: true,
+        result: { completed: result.completed, buildId: result.build?.buildId ?? null },
+      }
+    } catch (error) {
+      if (error instanceof ProjectError) {
+        return { success: false, errorCode: error.code, message: error.message }
+      }
+      throw error
     }
   }
 

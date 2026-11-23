@@ -11,6 +11,7 @@ import type { MarketingCampaign } from '@domain/entities/marketing-campaign'
 import type { PublishingContract } from '@domain/entities/publishing-contract'
 import type { Transaction } from '@domain/entities/transaction'
 import type { CalendarSpeed, EmployeeRole, ProjectRole } from '@domain/enums'
+import type { ReworkCategory } from '@domain/entities/project-execution'
 import { BUDGET_TOP_UP_EVENT, recomputeRemaining } from '@domain/value-objects'
 import { EntityNotFoundError } from '@domain/errors'
 import { t, formatMoney, formatDay, setLocale as setI18nLocale, getLocale as getI18nLocale } from '@i18n'
@@ -202,6 +203,12 @@ interface GameStore {
   }
   /** P-02：市场调研（账本 research 交易 + 一次性结果卡数据） */
   conductMarketResearch(): import('@application/mediators/game-world').CommandOutcome<import('@application/mediators/game-world').MarketResearchResult>
+  /** CODE-07B REVISION / U4：返工预估只读投影（确认前展示，domain 纯函数同源，不造数） */
+  getReworkEstimate(projectId: string, category: ReworkCategory, deltaPercent: number): import('@application/mediators/game-world').ReworkEstimate | null
+  /** CODE-07B REVISION / U4「确认后才执行」：planRework + beginRework 创建真实 ReworkSession */
+  confirmRework(projectId: string, category: ReworkCategory, deltaPercent: number): { success: boolean; errorCode?: string | undefined; message?: string | undefined; result?: { sessionId: string; reworkWorkUnits: number } | undefined }
+  /** CODE-07B REVISION / 端到端：交付提交内核入口（submitDelivery，fail-closed） */
+  submitDeliveryForProject(projectId: string, gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> }, deliveryForm?: 'full' | 'early_access'): { success: boolean; errorCode?: string | undefined; message?: string | undefined; result?: { completed: boolean; buildId: string | null } | undefined }
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -691,6 +698,29 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().refresh()
     if (r.success) get().toast(t('market.research.success'), 'success')
     else get().toast(localizeError(r.errorCode, r.message), 'error')
+    return r
+  },
+
+  getReworkEstimate(projectId, category, deltaPercent) {
+    const gw = get().game
+    return gw ? gw.getReworkEstimate(projectId, category, deltaPercent) : null
+  },
+
+  confirmRework(projectId, category, deltaPercent) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.confirmRework(projectId, category, deltaPercent)
+    get().refresh()
+    if (r.success) get().toast(t('p07.rework.started'), 'success')
+    else get().toast(localizeError(r.errorCode, r.message), 'error')
+    return r
+  },
+
+  submitDeliveryForProject(projectId, gate, deliveryForm) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.submitDeliveryForProject(projectId, gate, deliveryForm)
+    get().refresh()
     return r
   },
 }))

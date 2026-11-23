@@ -1633,6 +1633,9 @@ export class GameWorld {
     }
 
     // 重建销售服务与 scheduler（finance/rng 实例已替换）；解释缓存随新实例清空
+    // CODE-06：PersonnelService 同样持有 finance 引用（承诺注册/停付/遣散兑现），
+    // 必须与账本一起重建，否则读档后人事命令会写到构造时的旧账本（silent fail）。
+    this.personnel = new PersonnelService({ finance: this.finance })
     this.sales = new MarketSimulationService({
       finance: this.finance,
       rng: this.rng,

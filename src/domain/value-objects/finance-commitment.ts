@@ -257,6 +257,12 @@ export interface RealizeCommitmentInput {
   allowNegativeBalance?: boolean
   source?: 'system_auto' | 'player_authorized'
   description?: string
+  /**
+   * 兑现交易类别覆盖（D-03 §7.2 / TASK-P1-CODE-06）：
+   * 默认按 sourceType 通用映射（commitmentCategory）；招聘费需 project_expense、
+   * 遣散需 severance（contract_obligation 的语义特化）。可选，不传保持既有行为。
+   */
+  categoryOverride?: TransactionCategory
 }
 
 export interface RealizeCommitmentResult {
@@ -312,7 +318,7 @@ export function realizeCommitment(input: RealizeCommitmentInput): CommandResult<
     idempotencyKey: key,
     companyId: c.companyId,
     day: input.day,
-    category: commitmentCategory(c.sourceType),
+    category: input.categoryOverride ?? commitmentCategory(c.sourceType),
     amountCents: -c.amountCents, // 承诺支出为流出
     description: input.description ?? `兑现承诺 ${c.commitmentId} ${periodKey}`,
     referenceId: c.commitmentId,

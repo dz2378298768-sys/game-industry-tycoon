@@ -3,6 +3,7 @@ import { GameWorld } from '@application/mediators/game-world'
 import { writeCompanyCashBalance } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
+import { DEFAULT_PERSONNEL_PARAMS } from '@domain/value-objects/personnel-tuning'
 
 function bootstrap() {
   const gw = new GameWorld(7)
@@ -24,7 +25,7 @@ describe('员工规则 (E16/E17/E18)', () => {
     expect(out.result?.salaryMonthlyCents).toBe(expected)
   })
 
-  it('招聘成本为月薪的 15%', () => {
+  it('招聘成本为月薪 × recruitFeeMonths（CODE-06 / ADJ-12 S5-3：×1）', () => {
     const { gw } = bootstrap()
     const company = gw.getPlayerCompany()
     if (!company) throw new Error('no company')
@@ -36,7 +37,7 @@ describe('员工规则 (E16/E17/E18)', () => {
       salaryMonthlyCents: 100_000,
     })
     const effective = out.result?.salaryMonthlyCents ?? 0
-    const cost = Math.round(effective * TUNING.employee.hireCostRatio)
+    const cost = Math.round(effective * DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths)
     expect(before - gw.finance.getCashBalance(company.id)).toBe(cost)
   })
 

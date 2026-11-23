@@ -91,7 +91,9 @@ describe('R-005 薪资非法输入与回滚', () => {
   it('财务入账失败时回滚 EmployeeService 内部状态', () => {
     const gw = new GameWorld(12)
     gw.createCompany({ name: 'Rollback Studios', cityId: 'san_francisco' })
-    vi.spyOn(gw.finance, 'postTransaction').mockReturnValue({
+    // CODE-06：招聘费经 ②流水线 realizeCommitment → UnifiedLedger.postTransaction 入账
+    // （不再是 FinanceService.postTransaction 裸调用），失败注入点随之迁移。
+    vi.spyOn(gw.finance.getLedger(), 'postTransaction').mockReturnValue({
       success: false,
       errorCode: 'FIN_TEST_FAILURE',
       errorMessage: 'forced failure',

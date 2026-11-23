@@ -24,8 +24,8 @@ export const TUNING = {
   version: 3,
 
   company: {
-    /** 单位：美分。公司初始现金，只能由 FinanceService 的初始化交易入账一次。 */
-    startingCashCents: 6_500_000,
+    /** 单位：美分。公司初始现金，只能由 FinanceService 的初始化交易入账一次。ADJ-12 S1-1：$120,000 单一来源。 */
+    startingCashCents: 12_000_000,
     /** 单位：0-100 分。 */
     startingBrand: 10,
     /** 单位：0-100 分。 */

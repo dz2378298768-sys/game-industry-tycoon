@@ -3,13 +3,13 @@ import { GameWorld } from '@application/mediators/game-world'
 import { TUNING } from '@content/tuning'
 
 describe('P0 公司初始化现金一致性', () => {
-  it('创建公司后现金恰好为 $65,000', () => {
+  it('创建公司后现金恰好为 $120,000', () => {
     const gw = new GameWorld(1)
     const company = gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
 
-    expect(company.cashBalanceCents).toBe(6_500_000)
+    expect(company.cashBalanceCents).toBe(12_000_000)
     expect(company.cashBalanceCents).toBe(TUNING.company.startingCashCents)
-    expect(gw.finance.getCashBalance(company.id)).toBe(6_500_000)
+    expect(gw.finance.getCashBalance(company.id)).toBe(12_000_000)
   })
 
   it('初始化交易恰好一笔 advance', () => {
@@ -37,7 +37,7 @@ describe('P0 公司初始化现金一致性', () => {
     })
 
     expect(r.idempotent).toBe(true)
-    expect(gw.finance.getCashBalance(company.id)).toBe(6_500_000)
+    expect(gw.finance.getCashBalance(company.id)).toBe(12_000_000)
     expect(gw.finance.getTransactionsByCompany(company.id)).toHaveLength(1)
   })
 

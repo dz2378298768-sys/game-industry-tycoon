@@ -70,7 +70,7 @@ describe('财务月度结算 (D12-D15)', () => {
 
   it('负现金仍可继续结算工资和租金', () => {
     const { gw, company } = setup()
-    gw.advanceSimulation(800) // 超过 26 个月，现金必然为负
+    gw.advanceSimulation(1700) // 起始资金 $120,000（ADJ-12 S1-1），1700 天（约 56 个月）烧穿为负
 
     expect(gw.finance.getCashBalance(company.id)).toBeLessThan(0)
     const salaries = gw.finance.getAllTransactions().filter(tx => tx.category === 'salary')
@@ -83,7 +83,7 @@ describe('财务月度结算 (D12-D15)', () => {
 
   it('负现金时禁止创建新项目', () => {
     const { gw, company } = setup()
-    gw.advanceSimulation(800)
+    gw.advanceSimulation(1700)
     writeCompanyCashBalance(company, gw.finance.getCashBalance(company.id))
 
     const out = gw.createProject({
@@ -95,7 +95,7 @@ describe('财务月度结算 (D12-D15)', () => {
       audienceSegmentIds: ['arcade_enthusiasts'],
     })
     expect(out.success).toBe(false)
-    // 推进 800 天后公司早已破产（DESIGN-OI-21），破产守卫优先于 FIN_DISTRESS
+    // 推进 1700 天后公司早已破产（DESIGN-OI-21），破产守卫优先于 FIN_DISTRESS
     expect(['FIN_COMPANY_BANKRUPT', 'FIN_DISTRESS']).toContain(out.errorCode)
   })
 })

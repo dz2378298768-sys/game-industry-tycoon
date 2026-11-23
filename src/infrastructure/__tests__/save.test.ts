@@ -274,11 +274,11 @@ describe('CODE-04：账本承诺集合的存档往返', () => {
     const saleTxId = ledger.getTransactionByKeyInCompany(company.id, 'sale:prj-1')!.transactionId
     const reversed = ledger.reverseTransaction(saleTxId, '全额退款', 'refund:prj-1')
     expect(reversed.success).toBe(true)
-    // 冲销后账本净额回到开局注资基线 6_500_000；Company 展示字段由 syncCash
+    // 冲销后账本净额回到开局注资基线 12_000_000；Company 展示字段由 syncCash
     // 回写为账本派生值（CODE-08 唯一写入口）。
-    expect(ledger.getCashBalance(company.id)).toBe(6_500_000)
+    expect(ledger.getCashBalance(company.id)).toBe(12_000_000)
     gw.finance.syncCash(company)
-    expect(company.cashBalanceCents).toBe(6_500_000)
+    expect(company.cashBalanceCents).toBe(12_000_000)
 
     const world = gw.serialize()
     const salePersisted = world.transactions.find((t) => t.id === saleTxId)
@@ -288,9 +288,9 @@ describe('CODE-04：账本承诺集合的存档往返', () => {
     const restored = new GameWorld(9)
     restored.restore(structuredClone(world))
     const restoredLedger = restored.finance.getLedger()
-    // INV-1：status 不参与求和，冲销对两侧均入账 → 余额保持 6_500_000；现金字段从账本重建且一致。
-    expect(restoredLedger.getCashBalance(company.id)).toBe(6_500_000)
-    expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(6_500_000)
+    // INV-1：status 不参与求和，冲销对两侧均入账 → 余额保持 12_000_000；现金字段从账本重建且一致。
+    expect(restoredLedger.getCashBalance(company.id)).toBe(12_000_000)
+    expect(restored.getPlayerCompany()?.cashBalanceCents).toBe(12_000_000)
     expect(() => restored.finance.assertCashConsistent(restored.getPlayerCompany()!)).not.toThrow()
     // P2-02 回归：冲销对经 status + reversedBy 双向一致（reversalOf 审计链不入档为既定形状）。
     const restoredSale = restoredLedger.getTransactionById(saleTxId)

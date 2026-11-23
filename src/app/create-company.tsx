@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
+import { TUNING } from '@content/tuning'
 
 export const CreateCompany: React.FC = () => {
   const { createCompany, init } = useGameStore()
@@ -40,9 +41,9 @@ export const CreateCompany: React.FC = () => {
           </button>
 
           <p className="muted mt-16" style={{ fontSize: 12, textAlign: 'center' }}>
+            {/* FIX-3：起始资金单一来源 TUNING（ADJ-12 S1-1 $120,000），不再硬编码 */}
             {t('company.create.intro')
-              .replace('{cash}', formatMoney(5_000_000))
-              .replace('{year}', '1970')}
+              .replace('{cash}', formatMoney(TUNING.company.startingCashCents))}
           </p>
         </form>
       </div>

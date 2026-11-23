@@ -5,7 +5,10 @@
  *   - ProjectService / GameWorld / DailyScheduler / EmployeeService 不得重复定义同名参数。
  *   - 每个参数标注单位。数值为候选值，状态见 `dataStatus`，不代表已平衡。
  *   - 城市相关系数不在此处，按设计裁定保存在 `content/cities.json`。
+ *   - 财务阈值例外（ADJ-2026-11-23-18 §3.2 / FIN V0.2 §6.4）：`finance` 四字段的
+ *     唯一默认值来源是 `domain/value-objects/finance-tuning.ts`，本处从其派生，禁止双写。
  */
+import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 
 export interface ThresholdMultiplier {
   /** 达到该值即采用对应倍率（从高到低匹配） */
@@ -169,19 +172,25 @@ export const TUNING = {
     },
   },
 
+  /**
+   * 财务阈值（ADJ-2026-11-23-18 §3.2 单一事实源 / FIN V0.2 §6.4 F-06）：
+   * 四字段全部从 `DEFAULT_FINANCE_TUNING` 派生，本处不再写死字面量，禁止双写。
+   * 单位双写：恢复线 $6,000 = 600_000 cents；警告线 $4,000 = 400_000 cents；破产线 $0 = 0 cents。
+   * 量级自检：600_000 > 400_000 > 0，恢复线严格高于警告线，形成 $4k~$6k 真实滞后带（带宽 $2,000 = 200_000 cents）。
+   */
   finance: {
-    /** 单位：比例。预算使用超过该比例时产生警告（不强制取消）。 */
-    budgetOverrunWarnAt: 1.0,
-    /** 单位：美分。L1 现金警告线：现金低于此值（≥0）触发顶部警告横幅（DESIGN-OI-21 §2.1）。400_000 = $4,000。 */
-    cashWarningThresholdCents: 400_000,
-    /** 单位：美分。L2 破产线：现金低于此值触发公司 status='bankrupt'（DESIGN-OI-21 §2.1）。 */
-    cashBankruptThresholdCents: 0,
+    /** 单位：比例。预算使用超过该比例时产生警告（不强制取消）。1.0 = 100%。 */
+    budgetOverrunWarnAt: DEFAULT_FINANCE_TUNING.budgetOverrunWarnAt,
+    /** 单位：美分。L1 现金警告线：现金低于此值（≥0）触发顶部警告横幅（FIN V0.2 §6.4 / DESIGN-OI-21 §2.1）。400_000 = $4,000。 */
+    cashWarningThresholdCents: DEFAULT_FINANCE_TUNING.cashWarningThresholdCents,
+    /** 单位：美分。L2 破产线：现金低于此值触发公司 status='bankrupt'（FIN V0.2 §6.4 / DESIGN-OI-21 §2.1）。0 = $0。 */
+    cashBankruptThresholdCents: DEFAULT_FINANCE_TUNING.cashBankruptThresholdCents,
     /**
-     * 单位：美分。自救恢复线：bankrupt 公司现金回到此值（≥ L1 警告线）时恢复 active。
-     * 取 $4,000 而非 $5,000：与 L1 同线形成滞回区间（0 ~ $4,000 不反复切换），
-     * 并修订 DESIGN-OI-21 §2.4 的 $5,000 口径（见 DECISION-M3-P0-BANKRUPTCY-CLOSURE-001 §3）。
+     * 单位：美分。自救恢复线：bankrupt 公司现金回到此值（严格 > L1 警告线）时恢复 active。
+     * 600_000 = $6,000（ADJ-2026-11-23-18 §3 权威；FIN V0.2 §6.4 / F-06 真实滞后带）。
+     * 旧值 400_000（DECISION-M3-P0-BANKRUPTCY-CLOSURE-001 D1 "与 L1 同线"）已废止，不再作为权威。
      */
-    cashRecoveryThresholdCents: 400_000,
+    cashRecoveryThresholdCents: DEFAULT_FINANCE_TUNING.cashRecoveryThresholdCents,
   },
 
   /**

@@ -544,8 +544,9 @@ export class DailyScheduler {
    * - 唯一检查时点：每日调度末尾、syncCompanyCash 之后执行一次。
    * - 破产判据：status==='active' 且 balance < cashBankruptThresholdCents（默认 0）
    *   → status='bankrupt' + CompanyBankrupted。
-   * - 恢复判据：status==='bankrupt' 且 balance >= cashRecoveryThresholdCents（$4,000）
-   *   → status='active' + CompanyRecovered；0 ~ $4,000 为滞回区间，不来回切换。
+   * - 恢复判据：status==='bankrupt' 且 balance >= cashRecoveryThresholdCents（$6,000 = 600_000 cents，
+   *   ADJ-2026-11-23-18 §3 / FIN V0.2 §6.4 F-06 真实滞后带，唯一源在 finance-tuning.ts）
+   *   → status='active' + CompanyRecovered；0 ~ $6,000 为滞回区间，不来回切换。
    * - 幂等：只对对应前置状态的公司在同一日内触发一次，已终态（dissolved）不参与。
    */
   private applyBankruptcyCheck(state: WorldState, dayIndex: number): WorldState {
@@ -630,7 +631,7 @@ export class DailyScheduler {
     return changed ? { ...state, products } : state
   }
 
-  /** 恢复线 = max($4,000, 6 × 缩减后固定月支出 + 保留项目月 burn)；P0-2 v2.2 §2.2。 */
+  /** 恢复线 = max($6,000 = 600_000 cents, 6 × 缩减后固定月支出 + 保留项目月 burn)；P0-2 v2.2 §2.2 / ADJ-18 §3。 */
   private computeRecoveryLine(c: Company, projects: readonly Project[]): number {
     const fixed = Math.max(0, c.monthlyFixedExpenseCents ?? 0)
     const retainedBurn = projects

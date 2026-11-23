@@ -113,6 +113,18 @@ export interface ExecutionProjectPreview {
   workPackages: Array<{ workPackageId: string; discipline: string; baselineWorkUnits: number; dependsOn: readonly string[] }>
 }
 
+/** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源派生）。 */
+export interface ExecutionSummary {
+  costEstCents: number | null
+  costEstInfinite: boolean
+  ratio: number
+  verdict: import('@domain/entities/project-execution').HrbVerdict
+  budgetCapCents: number
+  workPackages: Array<{ workPackageId: string; discipline: string; state: string; kind: string; baselineWorkUnits: number; remainingWorkUnits: number }>
+  capacityByDiscipline: Record<string, number>
+  bottleneckDiscipline: string | null
+}
+
 export class GameWorld {
   public world: WorldState
   public calendar: GameCalendar
@@ -721,12 +733,69 @@ export class GameWorld {
       return { success: false, errorCode: created.errorCode, message: created.message }
     }
     this.executionProjects.set(projectId, execution)
+    if (created.result) {
+      // 双索引：内核 projectId + legacy Project id（P-06 详情页按 legacy id 取 ExecutionProject）
+      this.executionProjects.set(created.result.id, execution)
+    }
     return { success: true, result: { projectId } }
   }
 
   /** ExecutionProject 只读（P-06 后续接线；内存暂存）。 */
   getExecutionProject(projectId: string): ProjectExecutionState | undefined {
     return this.executionProjects.get(projectId)
+  }
+
+  /**
+   * P-06：产能 Cap_d 与瓶颈学科（§5.3-2）+ Cost_est / ratio / verdict（内核 estimateCost 同源）。
+   * ExecutionProject 未登记（旧项目/未走新向导）→ null（UI 显示缺省"按现有预算面板口径"）。
+   */
+  getExecutionSummary(projectId: string): ExecutionSummary | null {
+    const execution = this.executionProjects.get(projectId)
+    if (execution === undefined) return null
+    const company = this.getPlayerCompany()
+    const members = company === undefined ? [] : this.world.employees
+      .filter((e) => e.companyId === company.id && e.status === 'hired')
+      .map((e) => ({
+        employmentId: e.id,
+        salaryCentsPerMonth: e.salaryMonthlyCents,
+        skillLevels: {},
+      }))
+    const est = estimateCost(execution, members, this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS)
+    const infinite = members.length === 0 || !Number.isFinite(est.costEstCents)
+    // Cap_d（§5.3-2）：按学科在职员工数近似产能（D-06 技能档 P1 未接线 → 计数口径，不造数值）
+    const capacityByDiscipline: Record<string, number> = { design: 0, code: 0, art: 0, audio: 0, qa: 0 }
+    for (const e of this.world.employees) {
+      if (e.companyId !== company?.id || e.status !== 'hired') continue
+      if (e.role === 'designer') capacityByDiscipline['design'] = (capacityByDiscipline['design'] ?? 0) + e.skillLevel
+      else if (e.role === 'programmer') capacityByDiscipline['code'] = (capacityByDiscipline['code'] ?? 0) + e.skillLevel
+      else if (e.role === 'artist') capacityByDiscipline['art'] = (capacityByDiscipline['art'] ?? 0) + e.skillLevel
+      else if (e.role === 'qa') capacityByDiscipline['qa'] = (capacityByDiscipline['qa'] ?? 0) + e.skillLevel
+    }
+    // 瓶颈 = 有 WP 工作量的学科中产能最小者；无 WP → null
+    const disciplinesWithWork = new Set(execution.workPackages.filter((wp) => wp.state !== 'DEACTIVATED').map((wp) => wp.discipline))
+    let bottleneckDiscipline: string | null = null
+    let minCap = Number.POSITIVE_INFINITY
+    for (const d of disciplinesWithWork) {
+      const cap = capacityByDiscipline[d] ?? 0
+      if (cap < minCap) { minCap = cap; bottleneckDiscipline = d }
+    }
+    return {
+      costEstCents: infinite ? null : est.costEstCents,
+      costEstInfinite: infinite,
+      ratio: est.ratio,
+      verdict: est.verdict,
+      budgetCapCents: execution.project.budgetCapCents,
+      workPackages: execution.workPackages.map((wp) => ({
+        workPackageId: wp.workPackageId,
+        discipline: wp.discipline,
+        state: wp.state,
+        kind: wp.kind,
+        baselineWorkUnits: wp.baselineWorkUnits,
+        remainingWorkUnits: wp.remainingWorkUnits,
+      })),
+      capacityByDiscipline,
+      bottleneckDiscipline,
+    }
   }
 
   // ----- Employee -----

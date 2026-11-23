@@ -183,6 +183,16 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
     ? (typeof project.initialDefectLevel === 'number' ? project.initialDefectLevel : computeInitialDefectLevel(project))
     : null
 
+  // ===== P-06 研发推进增量：WP 列表 / Cap_d 瓶颈 / Cost_est ratio verdict（内核同源） =====
+  const execution = store.getExecutionSummary?.(project.id) ?? null
+  const DISCIPLINE_LABEL: Record<string, string> = {
+    design: t('project.discipline.design'),
+    code: t('project.discipline.programming'),
+    art: t('project.discipline.art'),
+    audio: t('project.discipline.audio'),
+    qa: t('project.discipline.qa'),
+  }
+
   const disciplines: Array<{ key: 'design' | 'programming' | 'art' | 'qa'; labelZh: string }> = [
     { key: 'design', labelZh: t('project.discipline.design') },
     { key: 'programming', labelZh: t('project.discipline.programming') },
@@ -457,6 +467,27 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               </div>
             )}
           </div>
+          {/* P-06：Cost_est / ratio / verdict（内核同源；ratio 超限 → BUDGET_OVERRUN 徽标，FIN §3.8） */}
+          {execution && (
+            <>
+              <div className="kpi-card" data-testid="exec-cost-est">
+                <div className="label">{t('project.execution.costEst')}</div>
+                <div className="value">
+                  {execution.costEstInfinite
+                    ? t('project.execution.costEstUnavailable')
+                    : fmtMoneyPlain(execution.costEstCents ?? 0)}
+                </div>
+              </div>
+              <div className="kpi-card" data-testid="exec-verdict">
+                <div className="label">{t('project.execution.ratioVerdict')}</div>
+                <div className="value" style={{ color: execution.ratio >= 1 ? '#b3423a' : undefined }}>
+                  {(execution.ratio * 100).toFixed(1)}%
+                  {execution.ratio >= 1 && <span className="badge danger" style={{ marginLeft: 6 }}>{t('error.crisis.budgetOverrun')}</span>}
+                </div>
+                <div className="muted" style={{ fontSize: 10 }}>{t(`project.execution.verdict.${execution.verdict}`)}</div>
+              </div>
+            </>
+          )}
         </div>
 
         {drilldownOpen && (
@@ -582,6 +613,77 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           </tbody>
         </table>
       </div>
+
+      {/* P-06：WP 列表区（无优先级列，A-10/S4-1；REWORK 行加返工标签） */}
+      {execution && execution.workPackages.length > 0 && (
+        <div className="panel" data-testid="wp-list">
+          <h2>{t('project.execution.wpTitle')}</h2>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>{t('project.execution.wp.discipline')}</th>
+                <th>{t('project.execution.wp.name')}</th>
+                <th>{t('project.execution.wp.progress')}</th>
+                <th>{t('project.execution.wp.remaining')}</th>
+                <th>{t('project.execution.wp.state')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {execution.workPackages.map(wp => {
+                const done = wp.remainingWorkUnits <= 0
+                const blocked = wp.state === 'BLOCKED'
+                const notStarted = wp.remainingWorkUnits >= wp.baselineWorkUnits
+                return (
+                  <tr key={wp.workPackageId}>
+                    <td><span className="badge active">{DISCIPLINE_LABEL[wp.discipline] ?? wp.discipline}</span></td>
+                    <td>
+                      {wp.workPackageId}
+                      {wp.kind === 'REWORK' && <span className="badge risk" style={{ marginLeft: 6 }}>{t('project.execution.reworkTag')}</span>}
+                    </td>
+                    <td style={{ width: 160 }}>
+                      <div className="progress-bar">
+                        <div className="fill" style={{ width: `${Math.round(((wp.baselineWorkUnits - wp.remainingWorkUnits) / Math.max(1, wp.baselineWorkUnits)) * 100)}%` }} />
+                      </div>
+                    </td>
+                    <td>{wp.remainingWorkUnits}</td>
+                    <td>
+                      <span className={`badge ${done ? 'active' : blocked ? 'danger' : 'paused'}`}>
+                        {done ? t('project.execution.state.done') : blocked ? t('project.execution.state.blocked') : notStarted ? t('project.execution.state.notStarted') : t('project.execution.state.inProgress')}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* P-06：产能 Cap_d 与瓶颈学科区（U6：瓶颈红色描边 + 徽标，A-14） */}
+      {execution && (
+        <div className="panel" data-testid="capacity-panel">
+          <h2>{t('project.execution.capacityTitle')}</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+            {Object.entries(execution.capacityByDiscipline).map(([d, cap]) => {
+              const isBottleneck = execution.bottleneckDiscipline === d
+              return (
+                <div
+                  key={d}
+                  className="kpi-card"
+                  style={isBottleneck ? { border: '2px solid #b3423a' } : undefined}
+                  data-testid={isBottleneck ? 'bottleneck-card' : undefined}
+                >
+                  <div className="label">
+                    {DISCIPLINE_LABEL[d] ?? d}
+                    {isBottleneck && <span className="badge danger" style={{ marginLeft: 6 }}>{t('project.execution.bottleneck')}</span>}
+                  </div>
+                  <div className="value">{cap}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         <h2>{t('project.teamAssignments')}</h2>

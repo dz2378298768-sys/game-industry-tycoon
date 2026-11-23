@@ -107,6 +107,11 @@ export const TUNING = {
     },
     /** 单位：工作点。QA 工作量的最小保底值，避免小预算项目 QA 瞬间完成。 */
     minQaWorkPoints: 40,
+    /** HRB 两档（ADJ-12 S3-2）：0.45 保守 / 0.6 标准，P-03 radio 二选一，默认保守。 */
+    hrbConservativeRatio: 0.45,
+    hrbStandardRatio: 0.6,
+    /** 立项默认上市日 = 立项日 + 本天数（ADJ-12 S4-2，引用 Project V0.1.1 §17 TUNING-PROJ-3）。 */
+    defaultLaunchHorizonDays: 200,
   },
 
   qa: {

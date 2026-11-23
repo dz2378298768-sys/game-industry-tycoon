@@ -14,6 +14,10 @@ import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway } from '@domain/value-objects/finance-formulas'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
+import { createProjectExecution, setupBudgetCommitment, estimateCost } from '@domain/value-objects/project-execution-engine'
+import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
+import { DEFAULT_PROJECT_FORMULA_PARAMS } from '@domain/value-objects/project-execution-tuning'
+import { ProjectError } from '@domain/entities/project-execution'
 import type { CrisisLevel } from '@domain/entities/finance'
 import {
   createCompanyAssetSoldEvent,
@@ -98,6 +102,17 @@ export interface RecruitImpactPreview {
   salaryMonthlyCents: number
 }
 
+/** P-04：立项预览（内核同源派生；Cost_est=+∞ 时 costEstCents=null，UI 显示"暂不可估"）。 */
+export interface ExecutionProjectPreview {
+  budgetCapCents: number
+  costEstCents: number | null
+  costEstInfinite: boolean
+  ratio: number
+  verdict: import('@domain/entities/project-execution').HrbVerdict
+  reasoning: string[]
+  workPackages: Array<{ workPackageId: string; discipline: string; baselineWorkUnits: number; dependsOn: readonly string[] }>
+}
+
 export class GameWorld {
   public world: WorldState
   public calendar: GameCalendar
@@ -114,6 +129,8 @@ export class GameWorld {
   public contracts: ContractService
   public scheduler: DailyScheduler
   private readonly salesInputs: MarketInputProvider
+  /** P-03/P-04：ExecutionProject 状态（内存暂存；存档序列化未包含 → OPEN-PROJ-EXEC-PERSIST） */
+  private readonly executionProjects = new Map<string, ProjectExecutionState>()
 
   /** AI 竞争开关：默认关闭，M3-A2 决策器接入后由生产工厂显式开启（避免既有 Tests 世界被 AI 公司污染） */
   private readonly aiCompetitionEnabled: boolean
@@ -549,6 +566,167 @@ export class GameWorld {
       .getCommitments(company.id, { state: 'committed' })
       .filter((c) => c.sourceType === 'employment_salary' && c.period === 'monthly')
       .reduce((sum, c) => sum + c.amountCents, 0)
+  }
+
+  // ===== P-03 / P-04 立项向导（S03+S04，批次 07A）=====
+
+  /**
+   * 立项预览（P-04）：内核同源派生 Budget_cap / Cost_est / ratio / verdict / WP 清单。
+   * 零负载 + 空团队 → Cost_est=+∞（UI 显示"暂不可估"，禁止显示 Infinity）；
+   * 模块词表缺种子（OPEN-CONTENT-MODULES）→ workload 全零 fail-closed。
+   */
+  previewExecutionProject(params: { hrb: number; budgetCapacityCents: number }): CommandOutcome<ExecutionProjectPreview> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
+    const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
+    if (params.budgetCapacityCents > availableCashCents) {
+      return {
+        success: false,
+        errorCode: 'PROJ_BUDGET_CAPACITY_EXCEEDS_CASH',
+        message: `预算容量 $${(params.budgetCapacityCents / 100).toLocaleString()} 超出可用现金 $${(availableCashCents / 100).toLocaleString()}（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
+      }
+    }
+    try {
+      const projectId = `preview-${uuid()}`
+      const state = createProjectExecution(
+        {
+          projectId,
+          companyId: company.id,
+          studioId: company.id,
+          versionId: `draft-${projectId}`,
+          snapshotId: `draft-open-modules-${projectId}`,
+          formulaVersion: 'open-content-modules',
+          day: this.dayIndex,
+          hrb: params.hrb,
+          budgetCapacityCents: params.budgetCapacityCents,
+          availableCashCents,
+          decomposition: {
+            projectId,
+            snapshotId: `draft-open-modules-${projectId}`,
+            workload: { design: 0, code: 0, art: 0, audio: 0, qa: 0 },
+            instances: [],
+            contentPacks: [],
+            requireRules: [],
+          },
+        },
+        DEFAULT_PROJECT_FORMULA_PARAMS,
+      )
+      const est = estimateCost(state, [], this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS)
+      // 规格（P1 清单 §二）：团队为 0 或 audio Cap=0 → Cost_est=+∞；UI 显示"暂不可估"禁止显示 Infinity。
+      // 当前无团队 → 无论 workload 是否为零均按 +∞ 口径 fail-closed。
+      const teamEmpty = true
+      const infinite = teamEmpty || !Number.isFinite(est.costEstCents)
+      return {
+        success: true,
+        result: {
+          budgetCapCents: state.project.budgetCapCents,
+          costEstCents: infinite ? null : est.costEstCents,
+          costEstInfinite: infinite,
+          ratio: est.ratio,
+          verdict: est.verdict,
+          reasoning: est.reasoning,
+          workPackages: state.workPackages.map((wp) => ({
+            workPackageId: wp.workPackageId,
+            discipline: wp.discipline,
+            baselineWorkUnits: wp.baselineWorkUnits,
+            dependsOn: wp.sourceRef.instanceId ? [wp.sourceRef.instanceId] : [],
+          })),
+        },
+      }
+    } catch (error) {
+      if (error instanceof ProjectError) {
+        return { success: false, errorCode: error.code, message: error.message }
+      }
+      throw error
+    }
+  }
+
+  /**
+   * 立项确认（P-04）：预算容量 ≤ AvailableCash（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）；
+   * 承诺登记 = one_off project_budget, amount = Budget_cap（内核 setupBudgetCommitment，C2/A-8）；
+   * 失败整体回滚不留半成品（原子性）。ExecutionProject 状态入内存 Map（持久化 OPEN-PROJ-EXEC-PERSIST）。
+   */
+  createExecutionProject(params: {
+    name: string
+    genreId: string
+    hrb: number
+    budgetCapacityCents: number
+  }): CommandOutcome<{ projectId: string }> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
+    const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
+    if (params.budgetCapacityCents > availableCashCents) {
+      return {
+        success: false,
+        errorCode: 'PROJ_BUDGET_CAPACITY_EXCEEDS_CASH',
+        message: `预算容量超出可用现金（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
+      }
+    }
+    // 立项 = 立约承诺登记（不改现金，A-7 红线）：承诺先行，失败即整体拒绝；
+    // legacy Project 随后创建，其失败则回滚承诺（原子性）。
+    const projectId = uuid()
+    let execution: ProjectExecutionState
+    try {
+      execution = createProjectExecution(
+        {
+          projectId,
+          companyId: company.id,
+          studioId: company.id,
+          versionId: `draft-${projectId}`,
+          snapshotId: `draft-open-modules-${projectId}`,
+          formulaVersion: 'open-content-modules',
+          day: this.dayIndex,
+          hrb: params.hrb,
+          budgetCapacityCents: params.budgetCapacityCents,
+          availableCashCents,
+          plannedLaunchDay: this.dayIndex + TUNING.project.defaultLaunchHorizonDays,
+          decomposition: {
+            projectId,
+            snapshotId: `draft-open-modules-${projectId}`,
+            workload: { design: 0, code: 0, art: 0, audio: 0, qa: 0 },
+            instances: [],
+            contentPacks: [],
+            requireRules: [],
+          },
+        },
+        DEFAULT_PROJECT_FORMULA_PARAMS,
+      )
+      execution = setupBudgetCommitment(execution, { ledger: this.finance.getLedger(), day: this.dayIndex })
+    } catch (error) {
+      if (error instanceof ProjectError) {
+        return { success: false, errorCode: error.code, message: error.message }
+      }
+      throw error
+    }
+    // legacy Project（现有列表/详情 UI 载体）——budgetTotalCapCents = Budget_cap 对齐展示
+    const created = this.createProject({
+      name: params.name,
+      genreId: params.genreId,
+      budgetTotalCapCents: execution.project.budgetCapCents,
+      plannedLaunchDay: this.dayIndex + TUNING.project.defaultLaunchHorizonDays,
+      targetPlatformIds: [],
+      audienceSegmentIds: [],
+    })
+    if (!created.success) {
+      // 回滚承诺（不留半成品）：取消承诺，生效月 = 当月
+      for (const cid of execution.project.commitmentIds) {
+        this.finance.getLedger().releaseCommitment(
+          company.id,
+          cid,
+          monthKeyFromOffsetForRunway(dayIndexToGregorian(this.dayIndex)),
+        )
+      }
+      return { success: false, errorCode: created.errorCode, message: created.message }
+    }
+    this.executionProjects.set(projectId, execution)
+    return { success: true, result: { projectId } }
+  }
+
+  /** ExecutionProject 只读（P-06 后续接线；内存暂存）。 */
+  getExecutionProject(projectId: string): ProjectExecutionState | undefined {
+    return this.executionProjects.get(projectId)
   }
 
   // ----- Employee -----

@@ -182,6 +182,10 @@ interface GameStore {
   previewRecruitImpact(candidateId: string): import('@application/mediators/game-world').RecruitImpactPreview | null
   /** P-05：月薪承诺合计（KPI） */
   monthlySalaryCommitmentCents(): number
+  /** P-04：立项预览（内核同源派生 Budget_cap/Cost_est/ratio/verdict/WP） */
+  previewExecutionProject(params: { hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined } & { preview?: import('@application/mediators/game-world').ExecutionProjectPreview }
+  /** P-04：立项确认（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 校验 + project_budget 承诺，原子） */
+  createExecutionProject(params: { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -625,6 +629,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
   monthlySalaryCommitmentCents() {
     const gw = get().game
     return gw ? gw.monthlySalaryCommitmentCents() : 0
+  },
+
+  previewExecutionProject(params) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.previewExecutionProject(params)
+    if (r.success && r.result) return { success: true, preview: r.result }
+    return { success: false, errorCode: r.errorCode, message: r.message }
+  },
+
+  createExecutionProject(params) {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.createExecutionProject(params)
+    get().refresh()
+    if (r.success) get().toast(t('newProject.created'), 'success')
+    else get().toast(localizeError(r.errorCode, r.message), 'error')
+    return { success: r.success, errorCode: r.errorCode, message: r.message }
   },
 }))
 

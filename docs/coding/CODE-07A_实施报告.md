@@ -34,7 +34,7 @@
 
 ## 三、R-7 留证（禁前端自造日历）
 
-- `src/i18n/index.ts` formatDay 直接 import 内核 `dayIndexToGregorian` / `gregorianToDayIndex`（`src/domain/time/day-index.ts`），无任何本地月/日换算表。
+- `src/i18n/index.ts` formatDay 直接 import 内核 `dayIndexToGregorian` / `gregorianToDayIndex`（`src/domain/value-objects/day-index.ts`），无任何本地月/日换算表。
 - 交叉验证测试：`gregorianToDayIndex(2026,1,5) = 20458`；Day 0 → 2026-01-05（周一）；Day 785 → 2028-02-29（闰年由内核锚定，非前端计算）。
 - 测试：`src/i18n/__tests__/format-day.test.ts`（5 用例）。
 

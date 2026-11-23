@@ -13,6 +13,8 @@ import { DescopeDialog } from '@ui/components/descope-dialog'
 import { DelayLaunchDialog } from '@ui/components/delay-launch-dialog'
 import { selectProjectActionState, selectRiskBadges } from '@ui/components/project-actions'
 import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolveProjectStatus } from '@ui/components/project-status'
+import { ChangeReworkPanel } from '@ui/components/change-rework-panel'
+import { QaOptimizationPanel } from '@ui/components/qa-optimization-panel'
 
 interface Props { projectId: string; onNavigate: (route: string) => void }
 
@@ -772,6 +774,15 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           )
         )}
       </div>
+
+      {/* P-07 / P-08（批次 07B）：问题处理与设计变更 + 测试与优化面板 */}
+      <ChangeReworkPanel
+        project={project}
+        isBankrupt={store.company?.status === 'bankrupt'}
+        onOpenDescope={() => { setDescopeError(null); setDescopeOpen(true) }}
+        onOpenTopUp={() => setTopUpOpen(true)}
+      />
+      <QaOptimizationPanel project={project} execution={execution} />
 
       {/* 追加预算弹窗（金额 + 原因），确认后走 TopUpBudgetCmd，不直接改 budget 字段 */}
       {topUpOpen && (

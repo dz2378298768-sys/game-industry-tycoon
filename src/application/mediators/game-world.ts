@@ -181,6 +181,38 @@ export interface ReworkEstimate {
   unavailableReason: string | null
 }
 
+/**
+ * 07B REVISION2：交付闸门评估只读视图（P-09 UI 接线，fail-closed）。
+ *
+ * 内核当前不产出 D-02 QualityAssessment 快照（OPEN-D02-WIRING）；本视图由编排层把
+ * `evaluateDeliveryGate` 的真实判定结果登记后暴露给 UI。缺快照 / 项目非可交付态一律
+ * `available=false, pass=false`，绝不伪造 pass=true（ADJ-21 §2.3）。
+ */
+export interface DeliveryGateEvaluation {
+  /** 是否存在可用的真实 D-02 判定快照。 */
+  available: boolean
+  /** 闸门是否 PASS；仅当 available=true 且真实判定 PASS 且无 E 级违规时为 true。 */
+  pass: boolean
+  /** 可直接传给 submitDeliveryForProject 的 gate（与内核 evaluateGate 语义一致）。 */
+  gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> }
+  /** 失败 / 不可用原因码，逐条供 UI fail-closed 展示（U3 不回退）。 */
+  reasonCodes: readonly string[]
+  /** 不可用的结构化原因；可用时为 null。 */
+  unavailableReason: string | null
+  /** 判定来源（'d02-evaluateDeliveryGate' | 'unavailable'）。 */
+  source: string
+  checkedAt: number | null
+}
+
+/** 由 evaluateDeliveryGate 真实判定产物转换的登记入参（编排 / 测试入口，UI 不调用）。 */
+export interface DeliveryGateEvaluationInput {
+  pass: boolean
+  violations: ReadonlyArray<{ code: string; severity: string }>
+  reasonCodes?: readonly string[]
+  checkedAt?: number
+  source?: string
+}
+
 export class GameWorld {
   public world: WorldState
   public calendar: GameCalendar
@@ -199,6 +231,11 @@ export class GameWorld {
   private readonly salesInputs: MarketInputProvider
   /** P-03/P-04：ExecutionProject 状态（内存暂存；存档序列化未包含 → OPEN-PROJ-EXEC-PERSIST） */
   private readonly executionProjects = new Map<string, ProjectExecutionState>()
+  /**
+   * 07B REVISION2：D-02 交付闸门评估判定快照（key=projectId::form）。
+   * 仅供只读视图消费；不参与 submitDeliveryForProject / evaluateGate 判定，内核提交语义零改动。
+   */
+  private readonly deliveryGateEvaluations = new Map<string, DeliveryGateEvaluationInput>()
 
   /** AI 竞争开关：默认关闭，M3-A2 决策器接入后由生产工厂显式开启（避免既有 Tests 世界被 AI 公司污染） */
   private readonly aiCompetitionEnabled: boolean
@@ -1045,6 +1082,67 @@ export class GameWorld {
       }
       throw error
     }
+  }
+
+  // ----- 07B REVISION2：P-09 交付闸门评估只读视图（fail-closed） -----
+
+  /**
+   * 只读查询：把已登记的 `evaluateDeliveryGate` 真实判定结果暴露给 UI。
+   * fail-closed：缺快照 / 项目非可交付态 / 快照非 PASS 一律返回 pass=false，
+   * 并给出结构化原因，UI 据此禁用提交并展示原因，绝不伪造 pass=true。
+   */
+  getDeliveryGateEvaluation(
+    projectId: string,
+    form: import('@domain/entities/project-execution').DeliveryForm = 'full',
+  ): DeliveryGateEvaluation {
+    const fail = (unavailableReason: string): DeliveryGateEvaluation => ({
+      available: false,
+      pass: false,
+      gate: { pass: false, violations: [] },
+      reasonCodes: [],
+      unavailableReason,
+      source: 'unavailable',
+      checkedAt: null,
+    })
+
+    const exec = this.executionProjects.get(projectId)
+    if (exec === undefined) return fail('项目未登记 ExecutionProject')
+    if (exec.project.state !== 'READY_TO_DELIVER') {
+      return fail('项目未处于可交付态（READY_TO_DELIVER）')
+    }
+    const snapshot = this.deliveryGateEvaluations.get(`${projectId}::${form}`)
+    if (snapshot === undefined) return fail('D-02 交付闸门评估快照不可用')
+
+    const violations = [...(snapshot.violations ?? [])]
+    const eFree = violations.every((v) => v.severity !== 'E')
+    const pass = snapshot.pass === true && eFree
+    return {
+      available: true,
+      pass,
+      gate: { pass, violations },
+      reasonCodes: [...(snapshot.reasonCodes ?? [])],
+      unavailableReason: null,
+      source: snapshot.source ?? 'd02-evaluateDeliveryGate',
+      checkedAt: snapshot.checkedAt ?? null,
+    }
+  }
+
+  /**
+   * 登记 D-02 判定快照（编排层在评估后写入，UI 不调用）。
+   * 入参必须来自 `evaluateDeliveryGate` 的真实判定产物，不得手写 pass=true 绕过闸门。
+   */
+  registerDeliveryGateEvaluation(
+    projectId: string,
+    form: import('@domain/entities/project-execution').DeliveryForm,
+    evaluation: DeliveryGateEvaluationInput,
+  ): void {
+    this.deliveryGateEvaluations.set(`${projectId}::${form}`, {
+      pass: evaluation.pass === true,
+      violations: [...(evaluation.violations ?? [])],
+      reasonCodes: [...(evaluation.reasonCodes ?? [])],
+      checkedAt: evaluation.checkedAt ?? this.dayIndex,
+      source: evaluation.source ?? 'd02-evaluateDeliveryGate',
+    })
   }
 
   // ----- Employee -----

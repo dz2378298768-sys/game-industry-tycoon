@@ -1,10 +1,13 @@
 import { createNewCompany } from '@domain/entities/company'
 import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
+import type { Employment, Person } from '@domain/entities/personnel'
 import type { Project } from '@domain/entities/project'
 import type { WorldState } from '@simulation/services/world-state'
 import type { QualityProfile } from '@domain/value-objects'
 import type { FinanceService } from '@simulation/services/finance-service'
+import { buildSalaryCommitment } from '@domain/value-objects/personnel-salary'
+import { computeProbationEndDay } from '@domain/value-objects/personnel-status'
 
 export const QUALITY: QualityProfile = {
   gameplay: 60,
@@ -150,4 +153,66 @@ export function makeWorld(parts: Partial<WorldState> = {}): WorldState {
     schemaVersion: 2, // 与生产 makeWorld 一致；v1 老档由测试显式构造
     ...parts,
   }
+}
+
+// ===== CODE-06（TASK-P1-CODE-06）：D-03 人才层夹具 =====
+
+/** D-03 Employment 夹具（与 makeEmployee 的默认 id/salary 对齐：旧 id = employmentId，§15.1）。 */
+export function makeEmployment(overrides: Partial<Employment> = {}): Employment {
+  const probationEndDay = computeProbationEndDay(0, 3, 21)
+  return {
+    employmentId: 'emp-1',
+    personId: 'd03-per-emp-1',
+    companyId: 'company-1',
+    role: 'programmer',
+    status: 'active',
+    occupiesPerson: true,
+    salaryMonthlyCents: 200_000,
+    pendingSalaryMonthlyCents: null,
+    pendingEffectiveDay: null,
+    startDay: 0,
+    endDay: null,
+    initialTermMonths: 12,
+    renewalCount: 0,
+    moraleModifier: 0,
+    probationEndDay,
+    noticeStartDay: null,
+    terminationKind: null,
+    salaryCommitmentId: 'd03-sal-emp-1',
+    version: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  }
+}
+
+export function makePerson(overrides: Partial<Person> = {}): Person {
+  return {
+    personId: 'd03-per-emp-1',
+    displayName: 'Dev One',
+    birthDay: 0,
+    regionId: 'default',
+    skills: { personId: 'd03-per-emp-1', level: { code: 3 }, exp: {}, lastLevelUpDay: {} },
+    seniority: 'junior',
+    traits: null,
+    preferences: null,
+    baseMorale: 70,
+    status: 'on_leave',
+    currentEmploymentId: 'emp-1',
+    careerRecord: [],
+    rehireCount: 0,
+    version: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  }
+}
+
+/**
+ * 按 Employment 注册薪资承诺（§7.2；月度，endAt=合同期末）。
+ * 调度器②流水线按账本承诺兑现——夹具必须先注册，salary 才会在月末产出。
+ */
+export function seedSalaryCommitment(finance: FinanceService, employment: Employment): void {
+  const r = finance.getLedger().registerCommitment(buildSalaryCommitment(employment))
+  if (!r.success) throw new Error(`seedSalaryCommitment failed: ${r.errorMessage ?? ''}`)
 }

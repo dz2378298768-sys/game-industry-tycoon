@@ -18,7 +18,7 @@ import type {
 import { D03_ERROR } from '@domain/entities/personnel'
 import { toD03Discipline } from '@domain/entities/personnel'
 import type { PersonnelParams } from './personnel-tuning'
-import { computeProbationEndDay, contractEndDayOf } from './personnel-status'
+import { computeProbationEndDay } from './personnel-status'
 import { buildSalaryCommitment, type CommitmentBuildInput } from './personnel-salary'
 
 /** role → 规格学科（迁移派生一次，R14；producer/manager 无学科）。 */

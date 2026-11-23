@@ -385,7 +385,7 @@ export const worldStateSchema = z
     d03SchemaVersion: z.number().int().optional(),
     /** §11 S7 / §18.3 C13 必存项：参数快照三元组。 */
     personnelFormulaSnapshot: z
-      .object({ version: z.string().min(1), params: z.record(z.number()), createdAt: z.number().int().nonnegative() })
+      .object({ version: z.string().min(1), params: z.record(z.union([z.number(), z.array(z.number())])), createdAt: z.number().int().nonnegative() })
       .passthrough()
       .optional(),
   })

@@ -3,7 +3,7 @@ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
 import { ProjectService } from '@simulation/services/project-service'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
-import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
+import { makeEmployee, makeEmployment, makeProject, makeWorld, seedOpeningCash, seedSalaryCommitment } from '../../__tests__/helpers'
 import type { WorldState } from '@simulation/services/world-state'
 import type { Project } from '@domain/entities/project'
 import type { DomainEvent } from '@domain/events'
@@ -81,7 +81,10 @@ describe('G-05 预算耗尽判定与事件（DESIGN-G05 §6 / G05-R8）', () => 
         { employeeId: 'emp-1', projectId: 'project-1', allocationRatio: 1, roleOnProject: 'generalist' },
       ],
     })
-    const world = worldOf({ employees: [emp], projects: [project] })
+    // CODE-06：夹具注册 D-03 Employment + 薪资承诺（月薪唯一产出点 = 承诺兑现）
+    const employment = makeEmployment({ employmentId: emp.id, personId: `d03-per-${emp.id}`, salaryMonthlyCents: emp.salaryMonthlyCents })
+    const world = worldOf({ employees: [emp], employments: [employment], projects: [project] })
+    seedSalaryCommitment(finance, employment)
 
     // 月末：工资 300 分摊使 remainingCap = 100 - 300 = -200，触发耗尽
     const exhausted = scheduler.executeDay(world, JAN_END)

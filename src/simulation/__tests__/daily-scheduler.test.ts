@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { FinanceService } from '@simulation/services/finance-service'
-import { makeWorld, makeProject, makeEmployee, seedOpeningCash } from '../../__tests__/helpers'
+import { makeWorld, makeProject, makeEmployee, makeEmployment, seedOpeningCash, seedSalaryCommitment } from '../../__tests__/helpers'
 
 function makeScheduler() {
   const finance = new FinanceService()
@@ -17,6 +17,26 @@ function makeScheduler() {
   // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出
   const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
     const world = makeWorld(parts)
+    // CODE-06：月薪唯一产出点 = ②流水线（承诺兑现）——夹具按 §15.1 同步注册
+    // D-03 Employment + 薪资承诺（旧行为"月末按 status 结算"的薪资分支已停用）。
+    if (world.employments === undefined) {
+      const employments = world.employees
+        .filter((e) => e.status === 'hired' || e.status === 'on_leave')
+        .map((e) =>
+          makeEmployment({
+            employmentId: e.id,
+            personId: `d03-per-${e.id}`,
+            companyId: e.companyId,
+            role: e.role,
+            salaryMonthlyCents: e.salaryMonthlyCents,
+            status: 'active',
+          }),
+        )
+      if (employments.length > 0) {
+        world.employments = employments
+        for (const emp of employments) seedSalaryCommitment(finance, emp)
+      }
+    }
     seedOpeningCash(finance, world.companies)
     return world
   }

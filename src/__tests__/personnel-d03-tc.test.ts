@@ -40,7 +40,6 @@ import { recordWpCompletion } from '@domain/value-objects/personnel-growth'
 import { dailyResignProb, hash01, shouldResign } from '@domain/value-objects/personnel-resign'
 import { migrateEmployees } from '@domain/value-objects/personnel-migration'
 import { cancelEffectiveMonthFor, isRetirementDue, realizeCommitmentFor } from '@domain/value-objects/personnel-salary'
-import { realizeCommitment } from '@domain/value-objects/finance-commitment'
 import { DEFAULT_PERSONNEL_PARAMS } from '@domain/value-objects/personnel-tuning'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 import { UnifiedLedger } from '@domain/entities/finance/ledger'
@@ -75,6 +74,7 @@ function personOf(personId: string, level: Partial<Record<D03Discipline, number>
 
 function toTeamMembers(members: ReturnType<typeof queryTeam>['members']) {
   return members.map((m) => ({
+    employmentId: m.employmentId,
     skillLevels: m.skillLevels as Record<Discipline, number>,
     available: () => m.available,
     salaryCentsPerMonth: m.salaryMonthlyCents,
@@ -421,7 +421,7 @@ describe('D-03 TC-11 / TC-11b / TC-12（承诺链路与 ADJ-09）', () => {
   })
 
   it('TC-11b ④ 结算日 2026-04-30 当天解雇 ⇒ 仍 3 笔（ADJ-09 套利反证：干满整月必付）', () => {
-    expect(runScene(SETTLE['2026-04'])).toEqual({ salaryTxs: 3, realizedCents: 1_500_000 })
+    expect(runScene(SETTLE['2026-04']!)).toEqual({ salaryTxs: 3, realizedCents: 1_500_000 })
   })
 
   it('TC-11b ⑤ 离职 2026-03-31 ⇒ 2 笔（02/03）', () => {

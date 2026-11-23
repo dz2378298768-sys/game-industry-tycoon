@@ -14,7 +14,6 @@ import type { Employee } from '@domain/entities/employee'
 import type { EmployeeRole } from '@domain/enums'
 import type {
   Candidate,
-  D03Assignment,
   D03Discipline,
   D03Result,
   Employment,
@@ -36,8 +35,6 @@ import {
   beginResigning,
   completeResigning,
   computeProbationEndDay,
-  contractEndDayOf,
-  endEmploymentContract,
   isProbationExpired,
   passProbation,
   terminateEmployment,
@@ -51,7 +48,6 @@ import {
   buildSalaryCommitment,
   cancelEffectiveMonthFor,
   realizeCommitmentFor,
-  type CommitmentBuildInput,
 } from '@domain/value-objects/personnel-salary'
 import { refreshCandidatePool } from '@domain/value-objects/personnel-candidates'
 import { isRetirementDue } from '@domain/value-objects/personnel-salary'

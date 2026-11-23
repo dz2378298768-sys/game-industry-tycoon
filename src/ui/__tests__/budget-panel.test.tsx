@@ -107,7 +107,7 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
   it('预算面板六字段齐全，金额不带正号，使用率按领域公式计算', () => {
     const { container } = renderDetail()
     const text = container.textContent ?? ''
-    for (const label of ['预算上限', '已承诺', '已花', '剩余额度', '预算使用率', '预计可用天数']) {
+    for (const label of ['预算上限', '已承诺', '已花', '剩余额度', '预算使用率', '项目预算剩余可支撑天数（30 日滚动，项目预算口径）']) {
       expect(text).toContain(label)
     }
     // (committed + spent) / totalCap = 500000 / 1000000 = 50%
@@ -115,8 +115,9 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
     // 预算面板金额不带正号（DESIGN-G05 v1.5 §10.1a-1）：已花 $3,000 / 上限 $10,000
     expect(text).toContain('已花 $3,000 / 上限 $10,000')
     expect(text).not.toMatch(/\+\$/)
-    // runwayDays 标注为估计值
-    expect(text).toContain('估计值')
+    // FIX-4 / A-38：项目级跑道显式标注口径，不再用泛化"估计值"后缀
+    expect(text).toContain('项目预算口径')
+    expect(text).not.toContain('估计值')
     expect(text).toContain('暂无法估算')
   })
 

@@ -142,7 +142,9 @@ describe('TASK-M1.1-G05-001-E-FIX 预算面板显示口径', () => {
     const { container } = renderDetail()
     const text = container.textContent ?? ''
     expect(text).toContain('10 天')
-    expect(text).toContain('估计值')
+    // FIX-4 / A-38：口径标签替代泛化"估计值"
+    expect(text).toContain('项目预算口径')
+    expect(text).not.toContain('估计值')
     expect(text).toContain('计算于第 100 天')
     expect(text).not.toContain('暂无法估算')
   })

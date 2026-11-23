@@ -444,10 +444,8 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             </div>
           </div>
           <div className="kpi-card">
-            <div className="label">
-              {t('project.budget.runwayDays')}{' '}
-              <span className="muted" style={{ fontSize: 10 }}>({t('project.budget.estimation')})</span>
-            </div>
+            {/* FIX-4 / A-38：项目级跑道显式标注口径（30 日滚动、项目预算），与公司级（现金跑道月）区分 */}
+            <div className="label">{t('project.budget.runwayDays')}</div>
             <div className="value">
               {runwayDays === null
                 ? t('project.budget.runway.unavailable')

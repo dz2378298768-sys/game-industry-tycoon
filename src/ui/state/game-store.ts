@@ -188,6 +188,8 @@ interface GameStore {
   createExecutionProject(params: { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
   /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源） */
   getExecutionSummary(projectId: string): import('@application/mediators/game-world').ExecutionSummary | null
+  /** P-11：现金流预测只读投影（FIN §6.1/§6.3 → netCashByMonth）。 */
+  getCashForecast(): import('@domain/entities/finance').CashForecast | null
   /** P-09：ExecutionProject 交付状态只读投影（ADJ-08 §1.3 失败原因审计）。内核未登记 → 全空。 */
   getDeliveryStatus(projectId: string): {
     state: string | null
@@ -666,6 +668,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   getExecutionSummary(projectId) {
     const gw = get().game
     return gw ? gw.getExecutionSummary(projectId) : null
+  },
+
+  getCashForecast() {
+    return get().game?.getCashForecast() ?? null
   },
 
   getDeliveryStatus(projectId) {

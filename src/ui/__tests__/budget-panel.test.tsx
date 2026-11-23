@@ -234,7 +234,7 @@ describe('TASK-M1.1-G05-001-E 预算 UI 冒烟', () => {
     })]
     const { container } = render(<Finance />)
     expect(screen.queryByText('项目成本归属')).toBeNull()
-    const txRow = container.querySelector('tbody tr')!
+    const txRow = container.querySelector('[data-testid="finance-transactions-table"] tbody tr')!
     fireEvent.click(txRow)
     expect(screen.getByText('项目成本归属')).toBeTruthy()
     const text = container.textContent ?? ''

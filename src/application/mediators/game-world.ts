@@ -11,7 +11,7 @@ import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
 import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
-import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway } from '@domain/value-objects/finance-formulas'
+import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway, computeCashForecast } from '@domain/value-objects/finance-formulas'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
 import { createProjectExecution, setupBudgetCommitment, estimateCost } from '@domain/value-objects/project-execution-engine'
@@ -2276,6 +2276,31 @@ export class GameWorld {
       crisisLevel,
       reasonCodes,
     }
+  }
+
+  /**
+   * P-11：现金流预测只读投影（FIN §6.1/§6.3，包装 finance-formulas.computeCashForecast）。
+   * 无应付/应收/预计流入数据源时传空数组（fail-closed，不造数）；netCashByMonth 供财务页逐月净额表。
+   */
+  getCashForecast(): import('@domain/entities/finance').CashForecast | null {
+    const company = this.getPlayerCompany()
+    if (!company) return null
+    const tuning = DEFAULT_FINANCE_TUNING
+    const cashBalanceCents = this.finance.getCashBalance(company.id)
+    const commitments = this.finance.getLedger().getCommitments(company.id)
+    return computeCashForecast(
+      {
+        forecastId: `forecast-${company.id}-${this.dayIndex}`,
+        companyId: company.id,
+        asOfDay: this.dayIndex,
+        cashBalanceCents,
+        commitments,
+        payables: [],
+        receivables: [],
+        expectedInflowsByMonth: [],
+      },
+      tuning,
+    )
   }
 }
 

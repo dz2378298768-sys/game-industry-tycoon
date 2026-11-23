@@ -96,7 +96,7 @@ export const GameShell: React.FC = () => {
       case 'projects': return <Projects onNavigate={handleNavigate} />
       case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
       case 'newProject': return <NewProject onNavigate={handleNavigate} initialGenreId={prefillGenreId} />
-      case 'finance': return <Finance />
+      case 'finance': return <Finance onNavigate={handleNavigate} />
       case 'products': return <Products onNavigate={handleNavigate} />
       case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />
       case 'deliver': return deliverProjectId ? <Deliver projectId={deliverProjectId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />

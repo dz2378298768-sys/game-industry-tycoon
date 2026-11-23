@@ -242,7 +242,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 {project.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
               </button>
               {/* P-09：交付入口（仅已登记 ExecutionProject 的项目可达；内核 READY_TO_DELIVER 状态机未与 UI 生命周期接线，OPEN-P09-DELIVERY-WIRING） */}
-              {store.getDeliveryStatus(project.id).state !== null && (
+              {typeof store.getDeliveryStatus === 'function' && store.getDeliveryStatus(project.id).state !== null && (
                 <button className="btn btn-secondary" onClick={() => onNavigate('deliver', project.id)} data-testid="project-open-deliver">
                   {t('project.actions.deliver')}
                 </button>

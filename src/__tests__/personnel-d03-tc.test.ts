@@ -601,6 +601,19 @@ describe('D-03 TC-19 / TC-22 / TC-23 / TC-24 / S5-1 / S5-2', () => {
     expect(deriveMorale(person, employment)).toBeLessThanOrEqual(100)
   })
 
+  it('TC-22b 士气 365 天连续下跌：|modifier| ≤ B 且 morale ∈ [0,100] 恒成立', () => {
+    const p = DEFAULT_PERSONNEL_PARAMS
+    let m = 0
+    for (let d = 0; d < 365; d++) {
+      m = nextMoraleModifier(m, -10, p)
+      expect(Math.abs(m)).toBeLessThanOrEqual(p.moraleModifierBound)
+      const morale = deriveMorale(makePerson({ baseMorale: 70 }), makeEmployment({ moraleModifier: m }))
+      expect(morale).toBeGreaterThanOrEqual(0)
+      expect(morale).toBeLessThanOrEqual(100)
+    }
+    expect(m).toBe(-p.moraleModifierBound) // 恰为 −30
+  })
+
   it('TC-23 退休：到龄 ⇒ resigning；期满 ⇒ terminated(contract_end) ⇒ Person 派生 departed', () => {
     const DAY = 40 * 365
     const person = makePerson({ personId: 'p-old', birthDay: DAY - 61 * 365 })

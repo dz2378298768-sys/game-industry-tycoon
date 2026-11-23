@@ -7,7 +7,7 @@ import {
   salaryAllocationIdempotencyKey,
 } from '@domain/entities/project-cost-allocation'
 import { parseSave } from '@infrastructure/storage/save-schema'
-import { makeEmployee, makeProject, makeWorld, seedOpeningCash } from '../../__tests__/helpers'
+import { makeEmployee, makeEmployment, makeProject, makeWorld, seedOpeningCash, seedSalaryCommitment } from '../../__tests__/helpers'
 import type { Project } from '@domain/entities/project'
 
 const MONTH_END = gregorianToDayIndex(1970, 1, 31) // day 30
@@ -27,6 +27,26 @@ function makeScheduler() {
   // R7：每日现金回写改为"先断言后写入"，世界状态里的公司现金必须由账本派生量给出（不在账本中入账＝第二写入者）
   const worldOf = (parts: Parameters<typeof makeWorld>[0] = {}) => {
     const world = makeWorld(parts)
+    // CODE-06：月薪唯一产出点 = ②流水线（承诺兑现）——夹具按 §15.1 同步注册
+    // D-03 Employment + 薪资承诺（旧行为"月末按 status 结算"的薪资分支已停用）。
+    if (world.employments === undefined) {
+      const employments = world.employees
+        .filter((e) => e.status === 'hired' || e.status === 'on_leave')
+        .map((e) =>
+          makeEmployment({
+            employmentId: e.id,
+            personId: `d03-per-${e.id}`,
+            companyId: e.companyId,
+            role: e.role,
+            salaryMonthlyCents: e.salaryMonthlyCents,
+            status: 'active',
+          }),
+        )
+      if (employments.length > 0) {
+        world.employments = employments
+        for (const emp of employments) seedSalaryCommitment(finance, emp)
+      }
+    }
     seedOpeningCash(finance, world.companies)
     return world
   }
@@ -190,15 +210,35 @@ describe('G-05 工资成本分摊（DESIGN-G05 §3 / BDD）', () => {
     )
   })
 
-  it('离职员工不参与分摊，也不产生工资交易', () => {
+  it('离职员工不参与分摊；离职当月工资照常兑现 1 笔（ADJ-09），次月起停付', () => {
     const { finance, scheduler, worldOf } = makeScheduler()
+    // CODE-06（ADJ-2026-11-22-09）：离职当月只要有 ≥1 天在职即计 1 个完整周期；
+    // 旧口径"结算日 status≠hired ⇒ 跳过"已被推翻（允许干满整月结算日解雇白拿，套利）。
     const emp = makeEmployee({ id: 'emp-1', status: 'fired', salaryMonthlyCents: 1_000_000 })
-    const world = worldOf({ employees: [emp], projects: [projectWith('project-a', 1)] })
+    const employment = makeEmployment({
+      employmentId: emp.id,
+      personId: `d03-per-${emp.id}`,
+      salaryMonthlyCents: emp.salaryMonthlyCents,
+      status: 'terminated',
+      occupiesPerson: false,
+      endDay: MONTH_END,
+      terminationKind: 'terminated',
+      salaryCommitmentId: 'd03-sal-emp-1',
+    })
+    const world = worldOf({
+      employees: [emp],
+      employments: [employment],
+      projects: [projectWith('project-a', 1)],
+    })
+    seedSalaryCommitment(finance, employment)
+    // 解雇发生在月末结算前：cancelCommitment(effectiveMonth = monthOf(endDay)+1) 只释放次月起周期
+    finance.getLedger().releaseCommitment('company-1', employment.salaryCommitmentId, '1970-02')
 
     const next = scheduler.executeDay(world, MONTH_END)
 
+    // 离职当月：仍兑现 1 笔（已赚取周期补记，ADJ-09 反套利），但无任何分摊（分配已随解雇解除）
     expect(allocationsOf(next.projects)).toHaveLength(0)
-    expect(finance.getAllTransactions().filter((tx) => tx.category === 'salary')).toHaveLength(0)
+    expect(finance.getAllTransactions().filter((tx) => tx.category === 'salary')).toHaveLength(1)
   })
 
   it('分摊记录随存档持久化，并通过现金交易引用完整性校验', () => {

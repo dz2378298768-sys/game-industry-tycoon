@@ -16,6 +16,7 @@
 import type { WorldState } from './world-state'
 import type { FinanceService } from './finance-service'
 import type { Employment } from '@domain/entities/personnel'
+import { isEarnedPeriodOfCancelled, monthKeyOf } from '@domain/value-objects/finance-commitment'
 import { buildSalaryCommitment, realizeCommitmentFor, startOfMonthDay, type CommitmentBuildInput } from '@domain/value-objects/personnel-salary'
 import { renewedSalaryCommitmentId } from '@domain/value-objects/personnel-salary'
 import { contractEndDayOf } from '@domain/value-objects/personnel-status'
@@ -54,18 +55,28 @@ export function settleMonthlySalaries(
   const dissolvedCompanies = new Set(state.companies.filter((c) => c.status === 'dissolved').map((c) => c.id))
 
   for (const employment of employments) {
-    if (!employment.occupiesPerson) continue
     if (dissolvedCompanies.has(employment.companyId)) continue
     if (employment.salaryMonthlyCents <= 0 || !Number.isInteger(employment.salaryMonthlyCents)) continue
 
     let commitment = ledger.getCommitment(employment.companyId, employment.salaryCommitmentId)
     if (commitment === undefined) {
       // §11 S2：salaryCommitmentId 缺失 ⇒ 按 §7.2 重建并记迁移日志（console 留痕）。
+      // 重建仅针对在职雇佣；离职员无承诺则不存在可补记的已赚取周期。
+      if (!employment.occupiesPerson) continue
       const rebuilt = commitmentMissingBuild(employment)
       const reg = ledger.registerCommitment(rebuilt)
       if (!reg.success) continue
       commitment = reg.result!.commitment
       console.info(`[d03] 薪资承诺缺失，按 §7.2 重建：${employment.salaryCommitmentId}`)
+    }
+
+    // 非在职（terminated）雇佣：仅当承诺已取消且本结算月属已赚取周期时补记
+    // （ADJ-09 反套利：离职当月 ≥1 天在职 ⇒ 1 整月；R1：cancelled 拒绝的是
+    // effectiveMonth 及之后，生效月之前照常兑现）。未取消/非已赚取 ⇒ 跳过。
+    if (!employment.occupiesPerson) {
+      if (commitment.state !== 'cancelled' || !isEarnedPeriodOfCancelled(commitment, monthKeyOf(day))) {
+        continue
+      }
     }
 
     let target = commitment

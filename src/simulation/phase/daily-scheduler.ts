@@ -355,6 +355,9 @@ export class DailyScheduler {
       for (const entry of settlement.realized) {
         if (entry.companyId !== company.id || entry.idempotent) continue
         const emp = employments?.find((e: Employment) => e.employmentId === entry.employmentId)
+        // 离职员工的已赚取周期补记（ADJ-09）只兑现工资，不参与分摊：
+        // 分配已随解雇/辞职解除（D-03 不变量），此处双保险过滤非在职雇佣。
+        if (emp !== undefined && !emp.occupiesPerson) continue
         const salaryMonthlyCents = emp?.salaryMonthlyCents ?? entry.amountCents
         const empName = emp !== undefined ? `员工 ${emp.employmentId}` : `员工 ${entry.employmentId}`
 

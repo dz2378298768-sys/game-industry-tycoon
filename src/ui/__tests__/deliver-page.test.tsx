@@ -85,6 +85,23 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(screen.getByTestId('deliver-failure-eviolations').querySelectorAll('li')).toHaveLength(1)
   })
 
+  it('07B-04（REVISION）：blockingUnmet 逐条呈现（闸门 FAIL 的 reasonCodes 全列，不折叠为一句）', () => {
+    const projectId = useGameStore.getState().projects[0]!.id
+    const exec = useGameStore.getState().game!.getExecutionProject(projectId)!
+    exec.project.lastDeliveryFailure = {
+      day: 12,
+      reasonCodes: ['D02-MISSING-CORE', 'D02-DISCLOSURE-REQUIRED', 'D01-QUALITY-GATE'],
+      eViolations: [{ code: 'D01-QUALITY-GATE', severity: 'E' }],
+    }
+    renderDeliver()
+    const list = screen.getByTestId('deliver-unmet-list')
+    expect(list.querySelectorAll('li')).toHaveLength(3)
+    expect(screen.getByTestId('deliver-unmet-item-0').textContent).toContain('D02-MISSING-CORE')
+    expect(screen.getByTestId('deliver-unmet-item-1').textContent).toContain('D02-DISCLOSURE-REQUIRED')
+    expect(screen.getByTestId('deliver-unmet-item-2').textContent).toContain('D01-QUALITY-GATE')
+    expect(screen.queryByTestId('deliver-unmet-blocking')).toBeNull()
+  })
+
   it('A-25（REVISION）：交付失败 → 存档 → 读档 → UI 仍逐条显示 reasonCodes', async () => {
     const projectId = useGameStore.getState().projects[0]!.id
     const exec = useGameStore.getState().game!.getExecutionProject(projectId)!

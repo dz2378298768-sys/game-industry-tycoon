@@ -120,12 +120,28 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
         <p className="muted" style={{ fontSize: 11 }}>{t('deliver.qual.hint')}</p>
       </div>
 
-      {/* 未解决项区 */}
+      {/* 未解决项区（U3 / 07B-04：blockingUnmet 逐条呈现，源 = 交付闸门 FAIL 的 reasonCodes） */}
       <div className="panel" data-testid="deliver-unmet">
         <h2 style={{ marginTop: 0 }}>{t('deliver.section.unmet')}</h2>
-        <p className="muted" style={{ fontSize: 12 }} data-testid="deliver-unmet-blocking">
-          {t('deliver.unmet.unavailable')}
-        </p>
+        {failure !== null && failure.reasonCodes.length > 0 ? (
+          <ul data-testid="deliver-unmet-list">
+            {failure.reasonCodes.map((code, idx) => (
+              <li key={`${code}-${idx}`} data-testid={`deliver-unmet-item-${idx}`}>
+                {t('deliver.unmet.item').replace('{code}', code)}
+                {localizeReasonCode(code) !== code && (
+                  <span className="muted"> — {localizeReasonCode(code)}</span>
+                )}
+                {failure.eViolations.some((v) => v.code === code) && (
+                  <span className="negative" style={{ fontSize: 11 }}> · E</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted" style={{ fontSize: 12 }} data-testid="deliver-unmet-blocking">
+            {t('deliver.unmet.unavailable')}
+          </p>
+        )}
         {hasFailure && (
           <p className="muted" style={{ fontSize: 11 }}>
             {t('deliver.designDefect.hint')}{' '}

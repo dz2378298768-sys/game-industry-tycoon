@@ -758,6 +758,7 @@
   "deliver.disclosures.unavailable": "Disclosure list unavailable (pending wiring, OPEN-D02-WIRING)",
   "deliver.disclosures.ea": "Required EA disclosures",
   "deliver.unmet.unavailable": "Unresolved items assessment unavailable (gate pending wiring, OPEN-P09-DELIVERY-WIRING)",
+  "deliver.unmet.item": "Blocking unmet item: {code}",
   "deliver.designDefect.hint": "If the failure includes a D-01 E-level (blueprint content) defect, you must initiate a design change.",
   "deliver.designDefect.goto": "Go to Issues & Design Change",
   "deliver.failure.count": "Cumulative delivery failures: {n}",

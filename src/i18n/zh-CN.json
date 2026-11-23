@@ -758,6 +758,7 @@
   "deliver.disclosures.unavailable": "披露清单信息不足（待接线，OPEN-D02-WIRING）",
   "deliver.disclosures.ea": "EA 必需披露项",
   "deliver.unmet.unavailable": "未解决项评估不可用（闸门未接线，OPEN-P09-DELIVERY-WIRING）",
+  "deliver.unmet.item": "阻断未解决项：{code}",
   "deliver.designDefect.hint": "若失败含 D-01 E 级（蓝图内容）缺陷，需主动发起设计变更。",
   "deliver.designDefect.goto": "前往问题处理与设计变更",
   "deliver.failure.count": "累计交付失败 {n} 次",

@@ -160,7 +160,7 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(screen.queryByTestId('deliver-failure')).toBeNull()
   })
 
-  it('A-42 / G-9：EA 披露确认弹窗逐条展示 + 显式确认控件；提交禁用带 OPEN 原因', () => {
+  it('A-42 / G-9：EA 披露确认弹窗逐条展示 + 显式确认控件；评估快照缺失时提交禁用带 fail-closed 原因', () => {
     renderDeliver()
     expect(screen.queryByTestId('deliver-submit-confirm')).toBeNull()
     fireEvent.click(screen.getByTestId('deliver-submit-open'))
@@ -168,8 +168,10 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     const ack = screen.getByTestId('deliver-disclosure-ack') as HTMLInputElement
     expect(ack.checked).toBe(false)
     const confirm = screen.getByTestId('deliver-submit-confirm')
+    // 07B REVISION2：不再写死永久禁用——缺真实 gate 快照时如实禁用并给出原因（fail-closed）。
     expect(confirm.hasAttribute('disabled')).toBe(true)
-    expect(confirm.getAttribute('title')).toContain('OPEN-P09-DELIVERY-WIRING')
+    expect(confirm.getAttribute('title')).toContain('评估不可用')
+    expect(screen.getByTestId('deliver-submit-blocked').textContent).toContain('可交付态')
     fireEvent.click(ack)
     expect(ack.checked).toBe(true)
   })

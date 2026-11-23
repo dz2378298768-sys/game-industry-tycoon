@@ -14,7 +14,8 @@ import { ModalShell } from '@ui/components/modal-shell'
  * fail-closed 纪律：
  *  - 三形式资格 / 未解决项 / 披露清单依赖 D-02 QualityAssessment 快照，内核未产出 →
  *    显示"评估不可用 / 信息不足"，不伪造资格结论或披露项（OPEN-D02-WIRING）；
- *  - 交付提交闸门（D-01 RevalidationGate ∧ D-02 gate）未接线 → 确认按钮禁用并带原因文案；
+ *  - 07B REVISION2：交付闸门评估经 mediator 只读查询暴露（evaluateDeliveryGate 真实判定产物），
+ *    fail-closed —— 缺评估快照 / 项目非可交付态一律禁用确认按钮并带原因文案；
  *  - 方向档（市场预期 / 退款风险 / 品牌影响）直接消费领域权威标准 DELIVERY_FORM_STANDARDS（非数值）；
  *  - 定价三档 / 营销预算档数值来自 TUNING 且标 NUMERIC_PENDING_P2，不臆造终值（ADJ-16 R-5）；
  *  - demo 形式 UI 不暴露（ADJ-12 S9-3 DEFER，A-26）。
@@ -41,6 +42,8 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const store = useGameStore()
   const project = store.projects.find((p) => p.id === projectId)
   const deliveryStatus = store.getDeliveryStatus(projectId)
+  // 07B REVISION2：只读查询暴露 D-02 判定；缺快照/非可交付态 fail-closed（pass=false）。
+  const gateView = store.getDeliveryGateEvaluation(projectId, 'full')
   const isBankrupt = store.company?.status === 'bankrupt'
 
   const [pricingTier, setPricingTier] = React.useState('medium')
@@ -64,11 +67,25 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const failure = deliveryStatus.lastDeliveryFailure
   const hasFailure = deliveryStatus.deliveryFailures > 0 || failure !== null
 
-  // 确认按钮：闸门/资格评估未接线（OPEN-P09-DELIVERY-WIRING），EA 路径还需披露勾选（G-9）
+  // 07B REVISION2 确认按钮接线：可交付态 + gate 真实 PASS + 披露勾选(G-9) + 非破产才允许提交。
+  const isReadyToDeliver = deliveryStatus.state === 'READY_TO_DELIVER'
+  const gateAvailable = gateView?.available === true
+  const gatePass = gateView?.pass === true
+  const canSubmit = !isBankrupt && isReadyToDeliver && gateAvailable && gatePass && disclosureAck
+
   const submitBlockReason = isBankrupt
     ? t('finance.bankrupt.blocked.deliver')
-    : t('deliver.submit.blocked')
-  const submitBlocked = true // 内核闸门未接线，任何路径都不可真正提交
+    : disclosureAck === false && gateAvailable && gatePass
+      ? t('deliver.submit.disclosureRequired')
+      : gateAvailable
+        ? t('deliver.submit.blocked')
+        : `${t('deliver.submit.blocked')}${gateView?.unavailableReason ? `：${gateView.unavailableReason}` : ''}`
+
+  const handleSubmit = () => {
+    if (!canSubmit || gateView === null) return
+    const outcome = store.submitDeliveryForProject(projectId, gateView.gate, 'full')
+    if (outcome.success) setConfirmOpen(false)
+  }
 
   return (
     <div>
@@ -201,7 +218,6 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
           className="btn"
           onClick={() => setConfirmOpen(true)}
           title={submitBlockReason}
-          aria-disabled={submitBlocked}
           data-testid="deliver-submit-open"
         >
           {t('deliver.submit')}
@@ -262,10 +278,11 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
             <>
               <button
                 className="btn"
-                disabled
-                aria-disabled
-                title={submitBlockReason}
+                disabled={!canSubmit}
+                aria-disabled={!canSubmit}
+                title={submitBlockReason || undefined}
                 data-testid="deliver-submit-confirm"
+                onClick={handleSubmit}
               >
                 {t('deliver.submit.confirm')}
               </button>
@@ -288,7 +305,20 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
             {t('deliver.submit.disclosureAck')}
           </label>
           {!disclosureAck && <p className="negative" style={{ fontSize: 12 }}>{t('deliver.submit.disclosureRequired')}</p>}
-          <p className="negative" style={{ fontSize: 12, marginTop: 12 }}>{submitBlockReason}</p>
+          {gateAvailable && !gatePass && (gateView?.reasonCodes.length ?? 0) > 0 && (
+            <ul data-testid="deliver-gate-reasons" style={{ fontSize: 12 }}>
+              {gateView!.reasonCodes.map((code, idx) => (
+                <li key={`${code}-${idx}`} data-testid={`deliver-gate-reason-${idx}`}>
+                  {t('deliver.unmet.item').replace('{code}', code)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!canSubmit && (
+            <p className="negative" style={{ fontSize: 12, marginTop: 12 }} data-testid="deliver-submit-blocked">
+              {submitBlockReason}
+            </p>
+          )}
         </ModalShell>
       )}
     </div>

@@ -2,6 +2,7 @@ import React from 'react'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
+import { TUNING } from '@content/tuning'
 import { makeCompany } from './fixtures'
 
 describe('CompanyAlertBanner 槽位 A 优先级（DESIGN-UI-LAYER §2.1 / V1~V4）', () => {
@@ -20,6 +21,16 @@ describe('CompanyAlertBanner 槽位 A 优先级（DESIGN-UI-LAYER §2.1 / V1~V4�
     expect(alert.textContent).toContain('现金偏低')
     expect(alert.textContent).toContain('$4,000')
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('W5-C2 边界：cash===400_000（$4,000）为 SAFE，不渲染警告横幅；399_999 才 WARNING', () => {
+    // DESING-OI-21 §2.1 / CODEBUDDY.md §0：判据为严格小于（<），恰好等于警告线属安全。
+    const safe = render(
+      <CompanyAlertBanner company={makeCompany({ cashBalanceCents: 400_000 })} onNavigate={vi.fn()} />,
+    )
+    expect(safe.container.querySelector('.company-alerts')).toBeNull()
+    expect(TUNING.finance.cashWarningThresholdCents).toBe(400_000) // $4,000
+    expect(TUNING.finance.cashBankruptThresholdCents).toBe(0) // $0
   })
 
   it('破产 + 现金警告 + 解散标记同时存在：只显示最高级 DISSOLVED', () => {

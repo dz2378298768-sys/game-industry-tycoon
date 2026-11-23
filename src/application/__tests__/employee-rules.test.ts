@@ -4,6 +4,7 @@ import { writeCompanyCashBalance } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
 import { DEFAULT_PERSONNEL_PARAMS } from '@domain/value-objects/personnel-tuning'
+import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { skillFactor } from '@simulation/systems/work-systems'
 import { DEFAULT_PROJECT_FORMULA_PARAMS } from '@domain/value-objects/project-execution-tuning'
 
@@ -89,6 +90,24 @@ describe('员工规则 (E16/E17/E18)', () => {
     expect(
       gw.finance.getTransactionsByCompany(emp.companyId).filter(tx => tx.category === 'severance'),
     ).toHaveLength(1)
+  })
+
+  it('W5-C8 招聘/薪资量级自检：1 月薪中介费 + 基准薪资×城市系数不倒挂遣散费 $5,000', () => {
+    // 单位双写：基准 $1,300 = 130_000 cents/月；城市系数区间 0.6~1.45；
+    // 最高城市月薪 = 130_000 × 1.45 = 188_500 cents = $1,885。
+    const base = TUNING.employee.defaultStartingSalaryCents
+    expect(base).toBe(130_000)
+    const maxCity = Math.max(...['san_francisco', 'new_york', 'seattle', 'los_angeles', 'sao_paulo'].map((id) => citySalaryMultiplier(id)))
+    expect(maxCity).toBeCloseTo(1.45, 6) // 纽约上限
+    const maxSalary = Math.round(base * maxCity)
+    expect(maxSalary).toBe(188_500)
+    // 不倒挂：最高月薪 < 遣散费 $5,000 = 500_000 cents/人（FIN §8.4）
+    const severance = DEFAULT_FINANCE_TUNING.severancePerEmployeeCents
+    expect(severance).toBe(500_000)
+    expect(maxSalary).toBeLessThan(severance)
+    // 招聘费 = 1 个月薪（ADJ-12 S5-3），且与遣散费口径同单位
+    expect(DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths).toBe(1)
+    expect(Math.round(maxSalary * DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths)).toBeLessThan(severance)
   })
 
   it('W5-C6 日常域技能系数：skillFactor 读 skillMultiplier，技能 3 级 = 1.0 且与项目执行域刻意分域', () => {

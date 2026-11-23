@@ -557,5 +557,17 @@
   "error.projReworkNotActive": "Rework session not active",
   "error.reworkChangeUnmatched": "Rework change unmatched",
   "error.projReworkScopeUnknown": "Rework scope unknown",
-  "error.projReworkLimit": "Rework limit exceeded"
+  "error.projReworkLimit": "Rework limit exceeded",
+  "company.create.overwrite.title": "Existing save detected",
+  "company.create.overwrite.hint": "Starting a new game will overwrite the current save without backup. Confirm to continue.",
+  "company.create.overwrite.confirm": "I understand: overwrite old save",
+  "company.create.summary.cash": "Starting Cash",
+  "company.create.summary.startDay": "Start Date",
+  "company.create.summary.region": "Market",
+  "company.create.summary.team": "Starting Team",
+  "company.create.region.northAmerica": "North America",
+  "company.create.team.founder": "Founder ×1",
+  "company.create.guide.have": "What you have: $120,000 starting cash and 1 founder.",
+  "company.create.guide.can": "What you can do: check market trends → start a project → hire a team to build.",
+  "company.create.guide.next": "Next step: visit the Market page to learn demand directions, then start a project."
 }

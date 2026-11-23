@@ -37,8 +37,8 @@ const SPEEDS: { value: CalendarSpeed; label: string }[] = [
 export const GameShell: React.FC = () => {
   const store = useGameStore()
   const {
-    dayIndex, speed, company, messages,
-    setSpeed, advanceDays, save, load,
+    dayIndex, speed, company, messages, financial,
+    setSpeed, advanceDays, save, load, restartNewGame,
     locale, setLocale,
   } = store
 
@@ -85,12 +85,32 @@ export const GameShell: React.FC = () => {
     }
   }
 
+  // CODE-07A 全局层：顶栏可用现金 + 公司级现金跑道（月），<2.0 红 <4.0 橙
+  const runwayMonths = financial?.runwayMonths
+  const runwayColor =
+    runwayMonths === undefined ? '#9ab7d3'
+      : runwayMonths < 2.0 ? '#b3423a'
+        : runwayMonths < 4.0 ? '#e8912d'
+          : '#9ab7d3'
+  const runwayText =
+    runwayMonths === undefined ? '—'
+      : Number.isFinite(runwayMonths)
+        ? t('topbar.runwayMonths').replace('{months}', runwayMonths.toFixed(1))
+        : t('topbar.runwayInfinity')
+
   return (
     <div className="app-shell">
       <div className="top-bar">
         <h1>{t('app.title')}</h1>
         <div className="day-label">{formatDay(dayIndex)}</div>
         <div className="day-label" style={{ color: '#c9a865' }}>💰 {formatMoney(company?.cashBalanceCents ?? 0)}</div>
+        {/* CODE-07A：顶栏公司级可用现金（FIN §6.2 口径）与现金跑道（月） */}
+        <div className="day-label" style={{ color: '#c9a865' }} data-testid="topbar-available-cash">
+          {t('topbar.availableCash')} {financial ? formatMoney(financial.availableCashCents) : '—'}
+        </div>
+        <div className="day-label" style={{ color: runwayColor }} data-testid="topbar-runway">
+          {t('topbar.runway')} {runwayText}
+        </div>
         {/* FIX-5 / ADJ-16 R-3：Brand 玩法面 v1 隐藏；入口代码保留，恢复时按 ADJ-16 R-3 处理 */}
         <div className="controls">
           {SPEEDS.map(s => (
@@ -118,8 +138,13 @@ export const GameShell: React.FC = () => {
         </div>
       </div>
 
-      {/* 槽位 A：公司级横幅（全局唯一，不随页面切换消失，DESIGN-UI-LAYER §2.1） */}
-      <CompanyAlertBanner company={company} onNavigate={() => handleNavigate('finance')} />
+      {/* 槽位 A：公司级横幅（全局唯一，不随页面切换消失，DESIGN-UI-LAYER §2.1）；四分支 + GAME OVER 重开 */}
+      <CompanyAlertBanner
+        company={company}
+        crisis={financial}
+        onNavigate={(r) => handleNavigate(r ?? 'finance')}
+        onRestart={() => { void restartNewGame() }}
+      />
 
       <div className="main-layout">
         <nav className="sidebar">

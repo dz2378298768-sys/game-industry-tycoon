@@ -11,6 +11,10 @@ import type { MarketInputProvider } from '@simulation/services/sales-types'
 import { seedInitialAwareness } from '@content/market-inputs'
 import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
+import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway } from '@domain/value-objects/finance-formulas'
+import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
+import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
+import type { CrisisLevel } from '@domain/entities/finance'
 import {
   createCompanyAssetSoldEvent,
   createProductLifecycleChangedEvent,
@@ -73,6 +77,17 @@ export interface TopUpBudgetCmd {
   amountCents: number
   seq: number
   reason: string
+}
+
+/** CODE-07A：公司级财务派生视图（UI 只读投影）。 */
+export interface GameFinancialOverview {
+  dayIndex: number
+  cashBalanceCents: number
+  availableCashCents: number
+  committedCents: number
+  runwayMonths: number
+  crisisLevel: CrisisLevel
+  reasonCodes: ReturnType<typeof reasonCodesForSignals>
 }
 
 export class GameWorld {
@@ -1710,4 +1725,68 @@ export class GameWorld {
   isQaDone(project: Project): boolean {
     return isQaComplete(project)
   }
+
+  /**
+   * CODE-07A 全局层（G1）：公司级财务派生视图（UI 只读，不写回）。
+   * 口径（FIN §6.1/§6.2，ADJ-11 修复后）：availableCash=computeAvailableCash，
+   * runway=computeRunwayMonths（起点恒 CashBalance）；无应付/应收数据源时传空数组（fail-closed）。
+   * crisisLevel 由派生信号即时归一（CrisisState 持久化未接线 → OPEN-FIN-CRISIS-WIRING，
+   * 补救窗口剩余天数 UI 侧 fail-closed '—'）。
+   */
+  getFinancialOverview(): GameFinancialOverview | null {
+    const company = this.getPlayerCompany()
+    if (!company) return null
+    const tuning = DEFAULT_FINANCE_TUNING
+    const cashBalanceCents = this.finance.getCashBalance(company.id)
+    const commitments = this.finance.getLedger().getCommitments(company.id)
+    // 无应付/应收权威数据源（P1 未接线）：传空数组，不造数（C-2 纪律）
+    const availableCashCents = computeAvailableCash(
+      { cashBalanceCents, commitments, payables: [], receivables: [] },
+      tuning,
+    )
+    const today = this.dayIndex
+    const month = monthKeyFromOffsetForRunway(dayIndexToGregorian(today))
+    const windowEnd = monthKeyFromOffsetForRunway(dayIndexToGregorian(today + Math.round(tuning.horizonMonths * 30.44)))
+    const annotated = annotateCommitmentsForRunway(commitments, month, windowEnd)
+    const runwayMonths = computeRunwayMonths({
+      cashBalanceCents,
+      commitments: annotated,
+      expectedInflowsByMonth: [],
+      horizonMonths: tuning.horizonMonths,
+      startMonth: month,
+    })
+    const signals = {
+      today,
+      cashBalanceCents,
+      availableCashCents,
+      runwayMonths,
+      hasOverduePayable: false,
+      budgetOverrunRatio: 0,
+      hasReworkSunk: false,
+    }
+    const reasonCodes = reasonCodesForSignals(signals, tuning)
+    const crisisLevel: CrisisLevel = company.status === 'bankrupt'
+      ? 'bankrupt'
+      : cashBalanceCents < 0 || runwayMonths < tuning.runwayCriticalMonths
+        ? 'critical'
+        : cashBalanceCents < tuning.cashWarningThresholdCents
+          ? 'warning'
+          : runwayMonths < tuning.runwayWarningMonths
+            ? 'watch'
+            : 'healthy'
+    return {
+      dayIndex: today,
+      cashBalanceCents,
+      availableCashCents,
+      committedCents: Math.max(0, cashBalanceCents - availableCashCents),
+      runwayMonths,
+      crisisLevel,
+      reasonCodes,
+    }
+  }
+}
+
+/** dayIndex → YYYY-MM（用于跑道窗口标注；复用内核日历换算）。 */
+function monthKeyFromOffsetForRunway(g: { year: number; month: number }): string {
+  return `${g.year}-${String(g.month).padStart(2, '0')}`
 }

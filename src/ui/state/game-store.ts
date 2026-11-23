@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { GameWorld } from '@application/mediators/game-world'
 import { createGameWorld } from '@application/factories/create-game-world'
-import { saveGame, loadGame, hasSave } from '@infrastructure/storage/save-service'
+import { saveGame, loadGame, hasSave, clearSave } from '@infrastructure/storage/save-service'
 import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
 import type { Project } from '@domain/entities/project'
@@ -65,6 +65,26 @@ export const ERROR_I18N: Record<string, string> = {
   CONTRACT_THRESHOLD_OUT_OF_RANGE: 'error.contractThresholdOutOfRange',
   CONTRACT_ALREADY_ACTIVE: 'error.contractAlreadyActive',
   CONTRACT_NOT_FOUND: 'error.contractNotFound',
+  // CODE-07A P1 增量：P1 错误码逐字映射（DESIGN-UI-LAYER §9.1）
+  E_EMPTY: 'error.emptyContent',
+  E_EMPTY_CONTENT: 'error.emptyContent',
+  E_USP: 'error.uspMissing',
+  PROJ_BUDGET_CAPACITY_EXCEEDS_CASH: 'error.projBudgetExceedsCash',
+  PROJ_DEPENDENCY_CYCLE: 'error.projDependencyCycle',
+  PROJ_TEAM_REQUIRED: 'error.projTeamRequired',
+  PROJ_SNAPSHOT_SWITCH_BLOCKED: 'error.projSnapshotSwitchBlocked',
+  PROJ_REWORK_SESSION_MISSING: 'error.projReworkSessionMissing',
+  PROJ_REWORK_NOT_ACTIVE: 'error.projReworkNotActive',
+  REWORK_CHANGE_UNMATCHED: 'error.reworkChangeUnmatched',
+  PROJ_REWORK_SCOPE_UNKNOWN: 'error.projReworkScopeUnknown',
+  PROJ_REWORK_LIMIT: 'error.projReworkLimit',
+  BUDGET_OVERRUN: 'error.crisis.budgetOverrun',
+  LOW_RUNWAY: 'error.crisis.lowRunway',
+  LOW_CASH: 'error.crisis.lowCash',
+  COMMITTED_EXCEEDS_CASH: 'error.crisis.committedExceedsCash',
+  NEGATIVE_CASH: 'error.crisis.negCash',
+  PAYABLE_OVERDUE: 'error.crisis.payableOverdue',
+  REWORK_SUNK: 'error.crisis.reworkSunk',
 }
 
 /** 错误码优先映射 i18n；无错误码时回退领域文案，再回退通用文案 */
@@ -84,6 +104,8 @@ interface GameStore {
   marketingCampaigns: MarketingCampaign[]
   publishingContracts: PublishingContract[]
   transactions: Transaction[]
+  /** CODE-07A：公司级财务派生视图（game-world.getFinancialOverview 只读投影，随 refresh 刷新） */
+  financial: import('@application/mediators/game-world').GameFinancialOverview | null
   dayIndex: number
   speed: CalendarSpeed
   messages: Message[]
@@ -150,6 +172,8 @@ interface GameStore {
   load(): Promise<boolean>
   getHasSave(): Promise<boolean>
   isFinanciallyDistressed(): boolean
+  /** CODE-07A：清档重开（GAME OVER 横幅入口）：删存档 + 新 GameWorld + 全切片清空 */
+  restartNewGame(): Promise<void>
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -162,6 +186,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   marketingCampaigns: [],
   publishingContracts: [],
   transactions: [],
+  financial: null,
   dayIndex: 0,
   speed: 'paused',
   messages: [],
@@ -494,8 +519,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
       marketingCampaigns: gw.world.marketingCampaigns,
       publishingContracts: gw.world.publishingContracts,
       transactions: company ? gw.finance.getTransactionsByCompany(company.id) : [],
+      financial: gw.getFinancialOverview(),
       dayIndex: gw.calendar.currentDayIndex,
     })
+  },
+
+  async restartNewGame() {
+    await clearSave()
+    const gw = createGameWorld(Math.floor(Math.random() * 1_000_000))
+    gw.calendar.setSpeed('paused')
+    set({
+      game: gw,
+      company: null,
+      employees: [],
+      projects: [],
+      products: [],
+      refundBatches: [],
+      marketingCampaigns: [],
+      publishingContracts: [],
+      transactions: [],
+      financial: null,
+      dayIndex: gw.calendar.currentDayIndex,
+      speed: 'paused',
+    })
+    get().toast(t('banner.gameover.restartDone'), 'info')
   },
 
   toast(text, type = 'info') {

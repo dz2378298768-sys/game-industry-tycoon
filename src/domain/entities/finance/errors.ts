@@ -70,7 +70,7 @@ export class LedgerInconsistentError extends FinanceError {
 /**
  * A-3 单点一致性断言失败：`Company.cashBalanceCents`（兼容展示字段）与账本
  * `Σ amountCents` 不一致。**fail-loud，不得静默对齐**（任务卡 §A.2）。
- * 只有 `hydrateCashFromLedger` 可写该字段；出现本错说明存在第二写入者。
+ * 只有 domain 层 `writeCompanyCashBalance`（账本派生回写，CODE-08 封口后全仓唯一写入口）可写该字段；出现本错说明存在第二写入者。
  */
 export class CashMismatchError extends FinanceError {
   constructor(companyId: string, declared: number, actual: number) {

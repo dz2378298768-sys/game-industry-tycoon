@@ -188,6 +188,16 @@ interface GameStore {
   createExecutionProject(params: { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
   /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源） */
   getExecutionSummary(projectId: string): import('@application/mediators/game-world').ExecutionSummary | null
+  /** P-09：ExecutionProject 交付状态只读投影（ADJ-08 §1.3 失败原因审计）。内核未登记 → 全空。 */
+  getDeliveryStatus(projectId: string): {
+    state: string | null
+    deliveryFailures: number
+    lastDeliveryFailure: {
+      day: number
+      reasonCodes: string[]
+      eViolations: ReadonlyArray<{ code: string; severity: string }>
+    } | null
+  }
   /** P-02：市场调研（账本 research 交易 + 一次性结果卡数据） */
   conductMarketResearch(): import('@application/mediators/game-world').CommandOutcome<import('@application/mediators/game-world').MarketResearchResult>
 }
@@ -656,6 +666,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   getExecutionSummary(projectId) {
     const gw = get().game
     return gw ? gw.getExecutionSummary(projectId) : null
+  },
+
+  getDeliveryStatus(projectId) {
+    const exec = get().game?.getExecutionProject(projectId)
+    if (!exec) return { state: null, deliveryFailures: 0, lastDeliveryFailure: null }
+    return {
+      state: exec.project.state,
+      deliveryFailures: exec.project.deliveryFailures,
+      lastDeliveryFailure: exec.project.lastDeliveryFailure,
+    }
   },
 
   conductMarketResearch() {

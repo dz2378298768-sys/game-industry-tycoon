@@ -16,7 +16,7 @@ import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolvePro
 import { ChangeReworkPanel } from '@ui/components/change-rework-panel'
 import { QaOptimizationPanel } from '@ui/components/qa-optimization-panel'
 
-interface Props { projectId: string; onNavigate: (route: string) => void }
+interface Props { projectId: string; onNavigate: (route: string, param?: string) => void }
 
 export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const store = useGameStore()
@@ -241,6 +241,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               <button className="btn btn-secondary" onClick={() => toggleProjectPause(project.id)}>
                 {project.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
               </button>
+              {/* P-09：交付入口（仅已登记 ExecutionProject 的项目可达；内核 READY_TO_DELIVER 状态机未与 UI 生命周期接线，OPEN-P09-DELIVERY-WIRING） */}
+              {store.getDeliveryStatus(project.id).state !== null && (
+                <button className="btn btn-secondary" onClick={() => onNavigate('deliver', project.id)} data-testid="project-open-deliver">
+                  {t('project.actions.deliver')}
+                </button>
+              )}
               {project.phase === 'READY_TO_LAUNCH' ? (
                 // 正式上市：不带 aria-disabled（V3），破产后仍可上市，仅按 QA/计划日守卫
                 <button

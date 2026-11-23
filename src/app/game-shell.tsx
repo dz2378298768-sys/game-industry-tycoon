@@ -10,10 +10,11 @@ import { Finance } from '@ui/pages/finance'
 import { Products } from '@ui/pages/products'
 import { ProductDetail } from '@ui/pages/product-detail'
 import { Market } from '@ui/pages/market'
+import { Deliver } from '@ui/pages/deliver'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
 
-type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market'
+type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver'
 
 interface NavItem { key: Route; label: string }
 
@@ -47,6 +48,8 @@ export const GameShell: React.FC = () => {
   const [route, setRoute] = React.useState<Route>('overview')
   const [projectDetailId, setProjectDetailId] = React.useState<string | null>(null)
   const [productDetailId, setProductDetailId] = React.useState<string | null>(null)
+  /** P-09 交付页入口项目（仅 projectDetail 交付按钮跳转） */
+  const [deliverProjectId, setDeliverProjectId] = React.useState<string | null>(null)
   /** P-02 → P-03 类别预填（规格 §2 P-02 跳转） */
   const [prefillGenreId, setPrefillGenreId] = React.useState<string | undefined>(undefined)
 
@@ -59,6 +62,11 @@ export const GameShell: React.FC = () => {
     if (r === 'productDetail' && param) {
       setProductDetailId(param)
       setRoute('productDetail')
+      return
+    }
+    if (r === 'deliver' && param) {
+      setDeliverProjectId(param)
+      setRoute('deliver')
       return
     }
     if (r === 'projectDetail' && param) {
@@ -91,6 +99,7 @@ export const GameShell: React.FC = () => {
       case 'finance': return <Finance />
       case 'products': return <Products onNavigate={handleNavigate} />
       case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />
+      case 'deliver': return deliverProjectId ? <Deliver projectId={deliverProjectId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
       default: return <Overview onNavigate={handleNavigate} />
     }
   }

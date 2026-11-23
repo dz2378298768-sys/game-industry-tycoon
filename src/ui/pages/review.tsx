@@ -105,7 +105,7 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
             </tr>
           </tbody>
         </table>
-        {/* U1：三质量分列终值，D-02 ProductArchive 未接线 → '—'，无综合分 */}
+        {/* U1：三质量分列终值，D-02 ProductArchive 未接线 → '—'，三列始终分列展示 */}
         <div style={{ marginTop: 12 }} data-testid="p12-quality">
           <p style={{ fontSize: 13, fontWeight: 600 }}>{t('p12.quality.title')}</p>
           <table className="data-table">

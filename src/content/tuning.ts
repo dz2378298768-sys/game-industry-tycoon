@@ -225,8 +225,8 @@ export const TUNING = {
     randomPerturbationRange: { min: 0.8, max: 1.2 },
     /** 单位：概率。小市场整数保底：rawUnits>0 但 floor=0 时的补 1 单位概率。0 = 关闭（Q7）。 */
     smallMarketFloorChance: 0,
-    /** 单位：比例。基础预期退款率（DATA-001 §2 权威）。 */
-    refundRate: 0.03,
+    /** 单位：比例。基础预期退款率（ADJ-2026-11-23-18 §6 裁定 ADJ-12 S10-2 的 5% 为权威，旧值 0.03 遗留已弃用）。 */
+    refundRate: 0.05,
     /** 单位：比例。按缺陷等级修正后的预期退款率允许区间。 */
     refundRateRange: { min: 0.02, max: 0.35 },
     /** 单位：天。销售日之后第几天执行退款（pending 批次窗口）。 */

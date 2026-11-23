@@ -179,8 +179,9 @@ describe('销售管线公式层（T01–T13 / T33 / T39–T41）', () => {
     expect(computation.grossRevenueCents).toBe(4_777_407)
     expect(computation.platformFeeCents).toBe(1_433_222)
     expect(computation.netSalesRevenueCents).toBe(3_344_185)
-    expect(computation.refundRate).toBeCloseTo(0.02, 10)
-    expect(computation.estimatedRefundUnits).toBe(31)
+    // ADJ-18 §6：refundRate 0.05 权威；本工作示例缺陷档下夹取后为 0.04（旧 0.03 时为 0.02/31 件）。
+    expect(computation.refundRate).toBeCloseTo(0.04, 10)
+    expect(computation.estimatedRefundUnits).toBe(63)
   })
 
   it('T39 平台映射 14 条表驱动与三态解析', () => {
@@ -279,11 +280,15 @@ describe('T27 explainSales 纯函数哈希（单元部分）', () => {
     expect(() => canonicalJson({ a: undefined })).toThrow(/SALES_INVALID_INPUT/)
   })
 
-  it('退款率夹取与缺陷斜率', () => {
-    expect(computeRefundRate(25, SALES_TUNING)).toBeCloseTo(0.02, 10)
-    expect(computeRefundRate(30, SALES_TUNING)).toBeCloseTo(0.03, 10)
+  it('退款率夹取与缺陷斜率（ADJ-18 §6：TUNING.sales.refundRate = 0.05 权威）', () => {
+    // 量级自检：0.05 ∈ refundRateRange [0.02, 0.35]，通过（CODEBUDDY.md §13.4）。
+    expect(SALES_TUNING.refundRate).toBe(0.05)
+    expect(SALES_TUNING.refundRate).toBeGreaterThanOrEqual(SALES_TUNING.refundRateRange.min)
+    expect(SALES_TUNING.refundRate).toBeLessThanOrEqual(SALES_TUNING.refundRateRange.max)
+    expect(computeRefundRate(25, SALES_TUNING)).toBeCloseTo(0.04, 10)
+    expect(computeRefundRate(30, SALES_TUNING)).toBeCloseTo(0.05, 10)
     expect(computeRefundRate(0, SALES_TUNING)).toBeCloseTo(0.02, 10)
-    expect(computeRefundRate(100, SALES_TUNING)).toBeCloseTo(0.17, 10)
+    expect(computeRefundRate(100, SALES_TUNING)).toBeCloseTo(0.19, 10)
   })
 
   it('转化率夹取到 [0.01,0.5]', () => {

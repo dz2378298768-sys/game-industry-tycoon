@@ -98,7 +98,8 @@ describe('P-10 市场反馈与销售页（批次 07B）', () => {
     } as never)
     renderDetail()
     const summary = screen.getByTestId('p10-refund-summary')
-    expect(summary.textContent).toContain('%')
+    // ADJ-18 §6：退款率权威值 5%，锁定具体值而非仅含 '%'（07B-06）。
+    expect(summary.textContent).toContain('5%')
     expect(summary.textContent).toContain('Day 98–104')
     expect(summary.textContent).not.toMatch(/原因|reason/i)
   })

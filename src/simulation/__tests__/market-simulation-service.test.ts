@@ -140,15 +140,16 @@ describe('销售管线服务（T10–T21 / T24–T26 / T28 / T32 / T34 / T36–T
     expect(record?.grossRevenueCents).toBe(4_777_407)
     expect(record?.platformFeeCents).toBe(1_433_222)
     expect(record?.netSalesRevenueCents).toBe(3_344_185)
-    expect(record?.estimatedRefundUnits).toBe(31)
+    // ADJ-18 §6：refundRate 0.05 权威；本工作示例缺陷档下夹取后退款率 0.04 → 1,593 × 0.04 = 63 件。
+    expect(record?.estimatedRefundUnits).toBe(63)
     expect(record?.actualRefundUnits).toBe(0)
 
     expect(state.refundBatches).toHaveLength(1)
     const batch = state.refundBatches[0]
     expect(batch?.saleDayIndex).toBe(SALES_DAY)
     expect(batch?.refundDayIndex).toBe(SALES_DAY + 14)
-    expect(batch?.refundedUnits).toBe(31)
-    expect(batch?.refundAmountCents).toBe(31 * 2999)
+    expect(batch?.refundedUnits).toBe(63)
+    expect(batch?.refundAmountCents).toBe(63 * 2999)
     expect(batch?.source).toBe('auto_window')
     expect(batch?.status).toBe('pending')
 

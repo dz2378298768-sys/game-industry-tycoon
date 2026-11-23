@@ -6,7 +6,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 export default tseslint.config(
   // docs/ 存放文档与浏览器取证脚本（Node CommonJS，运行在 CDP 上下文），
   // 不参与应用构建，不受应用 TS 规范约束；归档脚本不应让 lint:check 失败。
-  { ignores: ['dist', 'node_modules', 'docs'] },
+  { ignores: ['dist', 'node_modules', 'docs', 'code'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

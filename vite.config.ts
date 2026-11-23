@@ -19,5 +19,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // code/ 下是本地 git worktree 与审核隔离副本（各自有独立 .git），
+    // 不是本工程源码，禁止被测试收集（CODE-07A 验收发现污染：353 文件混入）。
+    exclude: ['**/node_modules/**', 'code/**', 'dist/**'],
   },
 })

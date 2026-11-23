@@ -1,6 +1,15 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+/** idb-keyval 内存 mock（A-25 交付失败读档持久：save → 全新 GameWorld → load → UI 逐条展示）。 */
+const mem = vi.hoisted(() => new Map<string, unknown>())
+vi.mock('idb-keyval', () => ({
+  get: vi.fn(async (key: string) => mem.get(key)),
+  set: vi.fn(async (key: string, value: unknown) => { mem.set(key, value) }),
+  del: vi.fn(async (key: string) => { mem.delete(key) }),
+}))
+
 import { Deliver } from '@ui/pages/deliver'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
@@ -73,6 +82,37 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(screen.getByTestId('deliver-failure-day').textContent).toContain('7')
     expect(screen.getByTestId('deliver-failure-reasons').querySelectorAll('li')).toHaveLength(2)
     expect(screen.getByTestId('deliver-failure-reason-0').textContent).toContain('D02-MISSING-CORE')
+    expect(screen.getByTestId('deliver-failure-eviolations').querySelectorAll('li')).toHaveLength(1)
+  })
+
+  it('A-25（REVISION）：交付失败 → 存档 → 读档 → UI 仍逐条显示 reasonCodes', async () => {
+    const projectId = useGameStore.getState().projects[0]!.id
+    const exec = useGameStore.getState().game!.getExecutionProject(projectId)!
+    exec.project.deliveryFailures = 1
+    exec.project.lastDeliveryFailure = {
+      day: 9,
+      reasonCodes: ['D02-MISSING-CORE', 'D02-DISCLOSURE-REQUIRED'],
+      eViolations: [{ code: 'D02-MISSING-CORE', severity: 'E' }],
+    }
+    await useGameStore.getState().save()
+
+    // 全新 GameWorld 内存 Map 为空，只有存档切片能恢复交付失败审计（A-25 成立条件）。
+    useGameStore.setState({ game: createGameWorld(42) } as never)
+    const ok = await useGameStore.getState().load()
+    expect(ok).toBe(true)
+    await waitFor(() => {
+      const restored = useGameStore.getState().game!.getExecutionProject(projectId)
+      expect(restored?.project.lastDeliveryFailure?.reasonCodes).toEqual([
+        'D02-MISSING-CORE', 'D02-DISCLOSURE-REQUIRED',
+      ])
+    })
+
+    render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)
+    expect(screen.getByTestId('deliver-failure-count').textContent).toContain('1')
+    expect(screen.getByTestId('deliver-failure-day').textContent).toContain('9')
+    expect(screen.getByTestId('deliver-failure-reasons').querySelectorAll('li')).toHaveLength(2)
+    expect(screen.getByTestId('deliver-failure-reason-0').textContent).toContain('D02-MISSING-CORE')
+    expect(screen.getByTestId('deliver-failure-reason-1').textContent).toContain('D02-DISCLOSURE-REQUIRED')
     expect(screen.getByTestId('deliver-failure-eviolations').querySelectorAll('li')).toHaveLength(1)
   })
 

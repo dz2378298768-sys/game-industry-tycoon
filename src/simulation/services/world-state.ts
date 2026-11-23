@@ -15,6 +15,17 @@ import type {
   PersonEvent,
   PersonnelFormulaSnapshot,
 } from '@domain/entities/personnel'
+import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
+
+/**
+ * CODE-07B REVISION / U3（A-25）：ExecutionProject 存档切片条目。
+ * `key` 为 mediator Map 的索引键（内核 projectId + legacy Project id 双索引），
+ * `state` 为内核 ProjectExecutionState 原样持久化。旧档缺省 undefined，读档不升版本。
+ */
+export interface ExecutionProjectSaveEntry {
+  key: string
+  state: ProjectExecutionState
+}
 
 export interface WorldState {
   companies: Company[]
@@ -52,6 +63,11 @@ export interface WorldState {
   d03SchemaVersion?: number
   /** §11 S7 / §18.3 C13 必存项：personnelFormulaVersion + 参数快照三元组。 */
   personnelFormulaSnapshot?: PersonnelFormulaSnapshot
+  /**
+   * CODE-07B REVISION / U3（A-25）：ExecutionProject 内存态切片随档持久化。
+   * 含交付失败审计 lastDeliveryFailure / reasonCodes；旧档缺省 undefined（不升版本）。
+   */
+  executionProjects?: ExecutionProjectSaveEntry[]
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {

@@ -2017,6 +2017,9 @@ export class GameWorld {
       // CODE-04：承诺集合由账本持久化（唯一来源），读档时随 replay 重放。
       commitments: this.world.companies.flatMap((c) => this.finance.getLedger().getCommitments(c.id)),
       aiDecisionLog: [...this.aiDecisionLog],
+      // CODE-07B REVISION / U3（A-25）：ExecutionProject 双索引切片随档持久化。
+      // 同一 state 在 Map 中以「内核 projectId + legacy Project id」两键登记，逐键落盘以完整还原索引。
+      executionProjects: Array.from(this.executionProjects.entries()).map(([key, state]) => ({ key, state })),
       // DESIGN-G05 §7.3：写入预算权威公式快照，供读档一致性校验。
       // 快照在此处按权威公式即时重算，避免领域对象中的旧快照被写入存档。
       projects: this.world.projects.map((p) => ({
@@ -2055,6 +2058,12 @@ export class GameWorld {
       }
     }
     this.world = state
+    // CODE-07B REVISION / U3（A-25）：先清空旧内存态再按存档重建双索引，
+    // 避免同一 GameWorld 上 load() 残留旧档 ExecutionProject（含交付失败审计）。
+    this.executionProjects.clear()
+    for (const entry of state.executionProjects ?? []) {
+      this.executionProjects.set(entry.key, entry.state as ProjectExecutionState)
+    }
     this.aiDecisionLog = (state.aiDecisionLog ?? []) as AiPlan[]
     this.calendar = new GameCalendar(state.currentDayIndex)
     this.rng = new RandomService(state.saveSeed)

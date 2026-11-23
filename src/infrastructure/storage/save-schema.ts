@@ -388,6 +388,20 @@ export const worldStateSchema = z
       .object({ version: z.string().min(1), params: z.record(z.union([z.number(), z.array(z.number())])), createdAt: z.number().int().nonnegative() })
       .passthrough()
       .optional(),
+    /**
+     * CODE-07B REVISION / U3（A-25）：ExecutionProject 切片。内核状态结构含嵌套领域对象与
+     * `+∞` 数值（JSON 落盘为 null），此处只校验外层键，内部原样 passthrough 保留，不升存档版本。
+     */
+    executionProjects: z
+      .array(
+        z
+          .object({
+            key: z.string().min(1),
+            state: z.object({ project: z.object({}).passthrough() }).passthrough(),
+          })
+          .passthrough(),
+      )
+      .default([]),
   })
   .passthrough()
 

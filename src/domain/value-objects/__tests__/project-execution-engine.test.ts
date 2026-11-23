@@ -350,6 +350,15 @@ function openNormalWorkload(s: { workPackages: ReadonlyArray<WorkPackage> }): Di
   return w
 }
 
+/** R3B m-3：递归 deep-freeze，作为 mutation detector（strict mode 下改写冻结对象即抛 TypeError）。 */
+function deepFreeze<T>(v: T): T {
+  if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
+    Object.freeze(v)
+    for (const k of Object.keys(v as object)) deepFreeze((v as Record<string, unknown>)[k])
+  }
+  return v
+}
+
 describe('TC-07 反证：返工完成闸门 FAIL ⇒ 不切快照、会话 active、state ACTIVE', () => {
   it('RevalidationGate FAIL（E 级）⇒ switched=false、snapshotId 不变、会话 active', () => {
     const s = advanceReworkDone(startRework(create()))
@@ -667,6 +676,191 @@ describe('R3（ADJ-06 §3）：rebaseline 守恒缺口 fail-closed', () => {
   })
 })
 
+describe('R3B（ADJ-14 D-1）："已承载"折算口径边界', () => {
+  /** 已 100% 交付的 DONE NORMAL WP（学科先行完成的玩家可达局面）。 */
+  function doneNormal(id: string, d: WorkPackage['discipline'], baseline: number): WorkPackage {
+    return {
+      workPackageId: id, projectId: 'P1', snapshotId: 'SNAP-1', sourceRef: {},
+      discipline: d, workUnits: baseline, baselineWorkUnits: baseline, remainingWorkUnits: 0,
+      deliveredWorkUnits: baseline, progress: 1, skillRef: null, requiredSkillLevel: 0,
+      blockedBy: [], dependents: [], priority: 'P0', state: 'DONE', kind: 'NORMAL',
+      orderIndex: 0, reworkSessionId: null, reworkMode: null,
+    }
+  }
+  function openWp(id: string, d: WorkPackage['discipline'], baseline: number, delivered: number): WorkPackage {
+    return {
+      workPackageId: id, projectId: 'P1', snapshotId: 'SNAP-1', sourceRef: {},
+      discipline: d, workUnits: baseline, baselineWorkUnits: baseline,
+      remainingWorkUnits: baseline - delivered, deliveredWorkUnits: delivered,
+      progress: baseline > 0 ? delivered / baseline : 0, skillRef: null, requiredSkillLevel: 0,
+      blockedBy: [], dependents: [], priority: 'P0', state: 'READY', kind: 'NORMAL',
+      orderIndex: 0, reworkSessionId: null, reworkMode: null,
+    }
+  }
+
+  it('边界①（rebaseline 级，先红后绿）：学科全交付 + W_d(new) 无新增 ⇒ 可切换（不再抛 UNBALANCED）', () => {
+    const doneWp = doneNormal('wp-art-done', 'art', 50)
+    const reb = rebaselineWorkPackages([doneWp], workload({ art: 50 }), 'SNAP-2')
+    expect(reb.archivedIds).toContain('wp-art-done')
+    expect(reb.workPackages[0]!.state).toBe('DONE')
+    expect(reb.workPackages[0]!.deliveredWorkUnits).toBe(50)
+    expect(checkRemainingInvariant(reb, workload({ art: 50 }))).toBe(true)
+  })
+
+  it('边界②（rebaseline 级，先红后绿）：学科全交付 + W_d(new) 有新增 ⇒ 仍抛 UNBALANCED（缺口 = 新增量 30）', () => {
+    const doneWp = doneNormal('wp-art-done', 'art', 50)
+    expect(() => rebaselineWorkPackages([doneWp], workload({ art: 80 }), 'SNAP-2')).toThrow(ProjectError)
+    try {
+      rebaselineWorkPackages([doneWp], workload({ art: 80 }), 'SNAP-2')
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.REBASELINE_UNBALANCED)
+      // 已承载折算后剩余缺口必须精确 = 新增量（80 − 50）
+      expect((e as Error).message).toContain('gap=30')
+    }
+  })
+
+  it('边界③a（rebaseline 级，先红后绿）：组合边界——code/design 全交付无新增（已承载）+ art 部分交付（open 承载）⇒ 切换成功、守恒成立', () => {
+    const wps = [doneNormal('wp-code-done', 'code', 60), doneNormal('wp-design-done', 'design', 24), openWp('wp-art', 'art', 50, 30)]
+    const wl = workload({ code: 60, design: 24, art: 50 })
+    const reb = rebaselineWorkPackages(wps, wl, 'SNAP-2')
+    expect(checkRemainingInvariant(reb, wl)).toBe(true)
+    expect(reb.archivedIds).toEqual(['wp-code-done', 'wp-design-done'])
+    const artOut = reb.workPackages.find((w) => w.workPackageId === 'wp-art')!
+    expect(artOut.baselineWorkUnits).toBeCloseTo(50, 9)
+    expect(artOut.remainingWorkUnits).toBeCloseTo(20, 9)
+  })
+
+  it('边界③b（rebaseline 级）：组合边界——code/art 可承载 + qa 全交付但 W_d 新增 6 ⇒ 整体 fail-closed 抛错（缺口=6）', () => {
+    const wps = [doneNormal('wp-code-done', 'code', 60), openWp('wp-art', 'art', 50, 30), doneNormal('wp-qa-done', 'qa', 19)]
+    const wl = workload({ code: 60, art: 50, qa: 25 })
+    expect(() => rebaselineWorkPackages(wps, wl, 'SNAP-2')).toThrow(ProjectError)
+    try {
+      rebaselineWorkPackages(wps, wl, 'SNAP-2')
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.REBASELINE_UNBALANCED)
+      expect((e as Error).message).toContain('qa')
+      expect((e as Error).message).toContain('gap=6')
+    }
+  })
+
+  it('边界①（引擎级，先红后绿）：code 学科全交付 + W_d(new).code 保持已交付量 ⇒ completeRework 可切换', () => {
+    let s = startRework(create())
+    // 玩家可达局面：code 学科 NORMAL WP 先行 100% 交付（DONE），art 返工随后真实日推进完成
+    const codeIds = new Set(
+      s.workPackages.filter((wp) => wp.kind === 'NORMAL' && wp.discipline === 'code').map((wp) => wp.workPackageId),
+    )
+    s = {
+      ...s,
+      workPackages: s.workPackages.map((wp) =>
+        codeIds.has(wp.workPackageId)
+          ? { ...wp, state: 'DONE' as const, deliveredWorkUnits: wp.baselineWorkUnits, remainingWorkUnits: 0, progress: 1 }
+          : wp,
+      ),
+    }
+    const advanced = advanceReworkDone(s)
+    const codeDelivered = advanced.workPackages
+      .filter((wp) => wp.kind === 'NORMAL' && wp.discipline === 'code')
+      .reduce((sum, wp) => sum + wp.deliveredWorkUnits, 0)
+    expect(codeDelivered).toBeGreaterThan(0)
+    const newWorkload = openNormalWorkload(advanced)
+    newWorkload.code = codeDelivered // 无新增：保持已交付量（M-1 口径，不再要求显式清零）
+    const out = completeRework(advanced, { day: 40, gate: { pass: true, violations: [] }, newWorkload }, P)
+    expect(out.switched).toBe(true)
+    expect(out.state.project.snapshotId).toBe('SNAP-2')
+    expect(out.state.reworkSessions[0]!.status).toBe('completed')
+    // code 的 DONE WP 保持归档口径：旧快照引用、delivered 不变
+    const codeWps = out.state.workPackages.filter((wp) => wp.discipline === 'code')
+    expect(
+      codeWps.every((wp) => wp.state === 'DONE' && wp.snapshotId === 'SNAP-1' && wp.deliveredWorkUnits === wp.baselineWorkUnits),
+    ).toBe(true)
+  })
+
+  it('边界②（引擎级，先红后绿）：code 全交付 + W_d(new).code 新增 20 ⇒ 仍抛 UNBALANCED（缺口=20）、状态整体回滚', () => {
+    let s = startRework(create())
+    const codeIds = new Set(
+      s.workPackages.filter((wp) => wp.kind === 'NORMAL' && wp.discipline === 'code').map((wp) => wp.workPackageId),
+    )
+    s = {
+      ...s,
+      workPackages: s.workPackages.map((wp) =>
+        codeIds.has(wp.workPackageId)
+          ? { ...wp, state: 'DONE' as const, deliveredWorkUnits: wp.baselineWorkUnits, remainingWorkUnits: 0, progress: 1 }
+          : wp,
+      ),
+    }
+    const advanced = advanceReworkDone(s)
+    const codeDelivered = advanced.workPackages
+      .filter((wp) => wp.kind === 'NORMAL' && wp.discipline === 'code')
+      .reduce((sum, wp) => sum + wp.deliveredWorkUnits, 0)
+    const newWorkload = openNormalWorkload(advanced)
+    newWorkload.code = codeDelivered + 20 // 有新增：缺口 = 20
+    const before = JSON.parse(JSON.stringify(advanced)) as typeof advanced
+    expect(() =>
+      completeRework(advanced, { day: 40, gate: { pass: true, violations: [] }, newWorkload }, P),
+    ).toThrow(ProjectError)
+    try {
+      completeRework(advanced, { day: 40, gate: { pass: true, violations: [] }, newWorkload }, P)
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.REBASELINE_UNBALANCED)
+      expect((e as Error).message).toContain('gap=20')
+    }
+    // fail-closed 整体回滚语义不变：入参状态逐字段不变、会话仍 active、快照未切
+    expect(JSON.parse(JSON.stringify(advanced)) as typeof advanced).toEqual(before)
+    expect(advanced.project.snapshotId).toBe('SNAP-1')
+    expect(advanced.reworkSessions[0]!.status).toBe('active')
+    expect(advanced.project.reworkSessionId).toBe('RS-1')
+  })
+
+  it('边界③（引擎级）：组合边界——code 已承载（无新增）+ qa 全交付但 W_d 新增 6 ⇒ 整体 fail-closed 抛错（缺口=6）、回滚', () => {
+    let s = startRework(create())
+    const doneIds = new Set(
+      s.workPackages
+        .filter((wp) => wp.kind === 'NORMAL' && (wp.discipline === 'code' || wp.discipline === 'qa'))
+        .map((wp) => wp.workPackageId),
+    )
+    s = {
+      ...s,
+      workPackages: s.workPackages.map((wp) =>
+        doneIds.has(wp.workPackageId)
+          ? { ...wp, state: 'DONE' as const, deliveredWorkUnits: wp.baselineWorkUnits, remainingWorkUnits: 0, progress: 1 }
+          : wp,
+      ),
+    }
+    const advanced = advanceReworkDone(s)
+    const deliveredOf = (d: WorkPackage['discipline']): number =>
+      advanced.workPackages.filter((wp) => wp.kind === 'NORMAL' && wp.discipline === d).reduce((sum, wp) => sum + wp.deliveredWorkUnits, 0)
+    const newWorkload = openNormalWorkload(advanced)
+    newWorkload.code = deliveredOf('code') // 可承载（无新增）
+    newWorkload.qa = deliveredOf('qa') + 6 // 有新增：缺口 = 6
+    const before = JSON.parse(JSON.stringify(advanced)) as typeof advanced
+    expect(() =>
+      completeRework(advanced, { day: 40, gate: { pass: true, violations: [] }, newWorkload }, P),
+    ).toThrow(ProjectError)
+    try {
+      completeRework(advanced, { day: 40, gate: { pass: true, violations: [] }, newWorkload }, P)
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.REBASELINE_UNBALANCED)
+      expect((e as Error).message).toContain('qa')
+      expect((e as Error).message).toContain('gap=6')
+    }
+    expect(JSON.parse(JSON.stringify(advanced)) as typeof advanced).toEqual(before)
+    expect(advanced.project.snapshotId).toBe('SNAP-1')
+    expect(advanced.reworkSessions[0]!.status).toBe('active')
+  })
+})
+
+describe('s-2（ADJ-14 D-2）：planRework changeRef 显式契约', () => {
+  it('affected 项在 changes 中无对齐 change ⇒ 抛 PROJ_REWORK_CHANGE_UNMATCHED（不再按位置回退挂错 change）', () => {
+    const badChanges = [{ changeId: 'CH-OTHER', instanceIds: ['PACK-9'] }]
+    expect(() => planRework(create(), { ...REWORK_INPUT, changes: badChanges }, P)).toThrow(ProjectError)
+    try {
+      planRework(create(), { ...REWORK_INPUT, changes: badChanges }, P)
+    } catch (e) {
+      expect((e as ProjectError).code).toBe(PROJ_ERROR.REWORK_CHANGE_UNMATCHED)
+    }
+  })
+})
+
 describe('R2（P1-1）：切快照必填参数与原子性', () => {
   it('反证①：newWorkload 缺参 ⇒ 抛 PROJ_SNAPSHOT_SWITCH_BLOCKED（类型必填之外的运行时兜底）', () => {
     const s = advanceReworkDone(startRework(create()))
@@ -693,10 +887,15 @@ describe('R2（P1-1）：切快照必填参数与原子性', () => {
     ).toThrow(ProjectError)
   })
 
-  it('fail-closed 干净性：REBASELINE_UNBALANCED 抛出后，project 与全部 WP 与调用前逐字段深比较相等', () => {
+  it('fail-closed 干净性：REBASELINE_UNBALANCED 抛出后，project 与全部 WP 与调用前逐字段深比较相等（m-3 强化：deep-freeze mutation detector）', () => {
+    // m-3（CODE-03-REWORK 审核报告 §七）：原用例仅 JSON 深比较入参前后，而 completeRework 先
+    // cloneState，入参结构上不可能被原地修改——深比较恒真，判别力弱。本用例以 deep-freeze 作为
+    // mutation detector：若实现路径（含嵌套共享对象）试图改写入参，strict mode 下将抛 TypeError
+    // 而非 ProjectError，本用例随即失败；深比较断言则守护"抛错路径不泄漏任何返回态"。
     const s = advanceReworkDone(startRework(create()))
     const before = JSON.parse(JSON.stringify(s)) as typeof s
-    // art 目标压到 1 ⇒ 开工 art WP 的 newBaseline(≈0.33) < 已交付 ⇒ 守恒失败 ⇒ 整体回滚
+    deepFreeze(s)
+    // art 目标压到 1 ⇒ 开工 art WP 的 newBaseline < 已交付 ⇒ 守恒失败 ⇒ 整体回滚
     const badWorkload = workload({ code: 82, design: 34, art: 1, audio: 6, qa: 14 })
     expect(() =>
       completeRework(s, { day: 10, gate: { pass: true, violations: [] }, newWorkload: badWorkload }, P),

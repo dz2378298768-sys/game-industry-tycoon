@@ -26,6 +26,14 @@ export interface RebaselineResult {
    * 其 delivered 属于旧快照口径，不参与 W_d(new) 的守恒式（否则正常切换必然误判失衡）。
    */
   carriedDeliveredWorkUnits: number
+  /**
+   * R3B（ADJ-14 D-1）："已承载"折算量——入参时**无 open WP** 的学科，其 W_d(new) 中已被
+   * 已 DONE NORMAL WP 交付量覆盖的部分（min(W_d(new), Σ doneDelivered)）。
+   * 该交付量属旧快照、已天然入档（与 carriedDelivered 同构口径），守恒式与引擎原子条件③
+   * 同口径扣减，两级判定一致；任何成功的 rebaseline 中该值 = Σ 无 open 学科的 W_d(new)
+   *（预检保证缺口 > 0 即抛错，已承载量 ≤ 交付量，不存在虚增抵扣）。
+   */
+  doneCarriedCreditWorkUnits: number
 }
 
 /**
@@ -44,23 +52,40 @@ export function rebaselineWorkPackages(
   // 学科层：未完成 WP 的旧 baseline 合计（分摊分母）。
   // DONE 与 DEACTIVATED（如已撤销的返工 WP）均不承载新快照，不入分母（否则新 baseline
   // 会被死 WP 稀释，守恒式随之失真）。
+  // R3B（ADJ-14 D-1）：已 DONE **NORMAL** WP 的交付量单独归集——视为已天然承载新快照
+  // 对应份额（该交付量属旧快照、已入档）；DONE REWORK WP 的交付属返工新增工作量，
+  // 不得抵扣 W_d(new)；DEACTIVATED WP 不参与任何口径。
   const openByDiscipline: Record<string, number> = {}
+  const doneDeliveredByDiscipline: Record<string, number> = {}
   let carriedDelivered = 0
   for (const wp of wps) {
-    if (wp.state === 'DONE' || wp.state === 'DEACTIVATED') continue
+    if (wp.state === 'DONE') {
+      if (wp.kind === 'NORMAL') {
+        doneDeliveredByDiscipline[wp.discipline] =
+          (doneDeliveredByDiscipline[wp.discipline] ?? 0) + wp.deliveredWorkUnits
+      }
+      continue
+    }
+    if (wp.state === 'DEACTIVATED') continue
     openByDiscipline[wp.discipline] = (openByDiscipline[wp.discipline] ?? 0) + wp.baselineWorkUnits
     carriedDelivered += wp.deliveredWorkUnits
   }
 
-  // R3（ADJ-06 §3）fail-closed：某学科已无未完成 WP 可承载，但新快照 W_d(new)>0
-  // ⇒ 拒绝切快照（差异量进错误详情），禁止静默丢弃。
+  // R3（ADJ-06 §3）fail-closed 预检 + R3B（ADJ-14 D-1）"已承载"折算（M-1 修复）：
+  // 某学科无未完成 WP 可承载时，W_d(new) 中已被已 DONE NORMAL WP 交付量覆盖的部分视为
+  // 已承载（学科全交付 + 无新增 ⇒ 可切换，不再死锁）；剩余缺口 > 0 才拒绝切快照
+  //（缺口 = 新增量，进错误详情），禁止静默丢弃。
+  let doneCarriedCredit = 0
   for (const d of Object.keys(newWorkload) as Array<keyof DisciplineWorkload>) {
     const target = newWorkload[d] ?? 0
-    const open = openByDiscipline[d] ?? 0
-    if (target > 0 && open <= 0) {
+    if ((openByDiscipline[d] ?? 0) > 0) continue
+    const doneDelivered = doneDeliveredByDiscipline[d] ?? 0
+    doneCarriedCredit += Math.min(target, doneDelivered)
+    const gap = Math.max(0, target - doneDelivered)
+    if (gap > 0) {
       throw new ProjectError(
         PROJ_ERROR.REBASELINE_UNBALANCED,
-        `discipline ${d} has no open WorkPackage to carry W_d(new)=${target}; rebaseline rejected (fail-closed)`,
+        `discipline ${d} has no open WorkPackage to carry W_d(new)=${target}; uncovered gap=${gap} after crediting ${doneDelivered} delivered by DONE NORMAL WPs; rebaseline rejected (fail-closed)`,
       )
     }
   }
@@ -98,13 +123,16 @@ export function rebaselineWorkPackages(
     totalBaselineWorkUnits: live.reduce((s, wp) => s + wp.baselineWorkUnits, 0),
     totalDeliveredWorkUnits: live.reduce((s, wp) => s + wp.deliveredWorkUnits, 0),
     carriedDeliveredWorkUnits: carriedDelivered,
+    doneCarriedCreditWorkUnits: doneCarriedCredit,
   }
 }
 
 /**
  * TC-13 不变量（ADJ-06 §3）：
- *  - 对**传入的 `W_d(new)`** 断言 `Σ remaining == Σ W_d(new) − Σ delivered`（禁止内部自算 totalBaseline 自证）；
- *  - `delivered > baseline` 必须单独失败（P3-4），不得用 `min(delivered, baseline)` 掩盖超交付。
+ *  - 对**传入的 `W_d(new)`** 断言 `Σ remaining == Σ W_d(new) − Σ delivered − 已承载折算量`（禁止内部自算 totalBaseline 自证）；
+ *  - `delivered > baseline` 必须单独失败（P3-4），不得用 `min(delivered, baseline)` 掩盖超交付；
+ *  - 已承载折算量（R3B / ADJ-14 D-1）= 无 open WP 学科中已由 DONE NORMAL WP 交付量覆盖的
+ *    W_d(new) 份额，与预检 / 引擎原子条件③ 同口径扣减（两级判定一致）。
  */
 export function checkRemainingInvariant(
   result: RebaselineResult,
@@ -116,8 +144,14 @@ export function checkRemainingInvariant(
   }
   const sumRemaining = live.reduce((s, wp) => s + wp.remainingWorkUnits, 0)
   // Σdelivered 只取入参时仍承载新快照的 WP（见 RebaselineResult.carriedDeliveredWorkUnits 注）；
-  // 入参时已 DONE 的 WP 不参与 W_d(new) 守恒式。
-  return Math.abs(sumRemaining - (targetTotal(newWorkload) - result.carriedDeliveredWorkUnits)) < 1e-6
+  // 入参时已 DONE 的 WP 不参与 W_d(new) 守恒式。其已交付覆盖的 W_d(new) 份额以
+  // doneCarriedCreditWorkUnits 同口径扣减（R3B / ADJ-14 D-1）。
+  return (
+    Math.abs(
+      sumRemaining -
+        (targetTotal(newWorkload) - result.carriedDeliveredWorkUnits - result.doneCarriedCreditWorkUnits),
+    ) < 1e-6
+  )
 }
 
 function targetTotal(newWorkload: DisciplineWorkload): number {

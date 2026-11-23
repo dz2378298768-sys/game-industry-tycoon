@@ -693,9 +693,17 @@ export function planRework(
     const share = (breakdown.reworkWorkUnits * changePerItem[i]!) / changeSum
     // 分摊后为 0 的学科不生成返工 WP（P3-2）
     if (share <= 0) return
-    const changeRef =
-      input.changes.find((c) => c.instanceIds.includes(item.instanceId)) ?? input.changes[i] ?? null
-    const changeId = changeRef?.changeId ?? deterministicId('chg', input.sessionId, item.discipline, item.instanceId)
+    // s-2（ADJ-14 D-2）：显式契约——affected 必须能对齐到 changes 中的 change；
+    // 旧回退 `?? input.changes[i]` 在 affected 与 changes 未对齐时会把 changeId 挂到
+    // 无关 change（归档口径失真），改为 fail-closed 抛错。
+    const changeRef = input.changes.find((c) => c.instanceIds.includes(item.instanceId))
+    if (changeRef === undefined) {
+      throw new ProjectError(
+        PROJ_ERROR.REWORK_CHANGE_UNMATCHED,
+        `affected item ${item.instanceId} (discipline ${item.discipline}) matches no change in input.changes; positional fallback removed (s-2 explicit contract)`,
+      )
+    }
+    const changeId = changeRef.changeId
     const taskId = deterministicId('rtask', input.sessionId, changeId, item.discipline)
     const wp: WorkPackage = {
       workPackageId: deterministicId('wp', state.project.projectId, 'rework', input.sessionId, item.discipline, item.instanceId),
@@ -850,15 +858,18 @@ export function completeRework(
       'rebaseline invariant violated (Σremaining != ΣW_d(new) − Σdelivered, or delivered > baseline); switch rolled back',
     )
   }
-  // R2 原子条件 ③：开工（未归档）NORMAL WP 的 Σbaseline == ΣW_d(new)
+  // R2 原子条件 ③：开工（未归档）NORMAL WP 的 Σbaseline == Σ W_d(new) − 已承载折算量。
+  // R3B（ADJ-14 D-1，M-1 修复）：无 open WP 学科的 W_d(new) 中已由 DONE NORMAL WP 交付量
+  // 承载的部分不再要求 open WP 承载，与 rebaseline 预检同口径扣减（doneCarriedCreditWorkUnits
+  // 由 rebaseline 单一来源给出，两级判定一致）。
   const openBaseline = reb.workPackages
     .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DONE' && wp.state !== 'DEACTIVATED')
     .reduce((s, wp) => s + wp.baselineWorkUnits, 0)
   const targetTotal = DISCIPLINE_ORDER.reduce((s, d) => s + input.newWorkload[d], 0)
-  if (Math.abs(openBaseline - targetTotal) > 1e-6) {
+  if (Math.abs(openBaseline - (targetTotal - reb.doneCarriedCreditWorkUnits)) > 1e-6) {
     throw new ProjectError(
       PROJ_ERROR.REBASELINE_UNBALANCED,
-      `Σ open NORMAL baseline ${openBaseline} != Σ W_d(new) ${targetTotal}; switch rolled back`,
+      `Σ open NORMAL baseline ${openBaseline} != Σ W_d(new) ${targetTotal} − done-carried credit ${reb.doneCarriedCreditWorkUnits}; switch rolled back`,
     )
   }
   // ——原子提交：以下全部成功才对外返回——

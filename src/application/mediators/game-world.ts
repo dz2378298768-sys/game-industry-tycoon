@@ -453,7 +453,7 @@ export class GameWorld {
           day: this.dayIndex,
           headcountLimit: company.managementCapacity,
         },
-        (d) => this.marketSalaryForCity(company.cityId),
+        () => this.marketSalaryForCity(company.cityId),
       ),
     )
     if (!r.ok || !r.value) {

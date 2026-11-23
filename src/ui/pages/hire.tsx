@@ -2,7 +2,10 @@ import React, { useMemo, useState } from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import type { Candidate } from '@domain/entities/personnel'
 
-interface Props { onNavigate: (route: string) => void }
+interface Props {
+  /** 保留签名兼容（顶栏导航注入）；P-05 候选池流程内无页面跳转 */
+  onNavigate?: (route: string) => void
+}
 
 const DISCIPLINE_LABELS: Record<Candidate['discipline'], string> = {
   design: 'employee.role.designer',
@@ -22,9 +25,9 @@ const DISCIPLINE_LABELS: Record<Candidate['discipline'], string> = {
  *  - 招聘后影响预览：可用现金 前→后、跑道 前→后（同源领域公式，game-world.previewRecruitImpact）。
  *  - 破产 → aria-disabled + finance.bankrupt.blocked.hire（沿用）。
  */
-export const Hire: React.FC<Props> = ({ onNavigate }) => {
+export const Hire: React.FC<Props> = () => {
   const {
-    company, employees, financial,
+    company, employees,
     listCandidates, recruitFromCandidate, previewRecruitImpact,
   } = useGameStore()
   const [selectedId, setSelectedId] = useState<string | null>(null)

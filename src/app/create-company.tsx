@@ -13,7 +13,7 @@ export const CreateCompany: React.FC = () => {
   const { createCompany, init, getHasSave } = useGameStore()
   const [name, setName] = useState('')
   // ADJ-16 R-3：城市选择控件 P1 隐藏；保留 cityId 固定默认值与既有 createCompany 签名（代码保留，恢复时按 ADJ-16 R-3 处理）
-  const [cityId, setCityId] = useState('san_francisco')
+  const [cityId] = useState('san_francisco')
   const [error, setError] = useState('')
   const [overwriteConfirm, setOverwriteConfirm] = useState(false)
   const [checked, setChecked] = useState(false)

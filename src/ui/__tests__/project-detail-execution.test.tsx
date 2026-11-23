@@ -1,7 +1,6 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { NewProject } from '@ui/pages/new-project'
 import { ProjectDetail } from '@ui/pages/project-detail'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'

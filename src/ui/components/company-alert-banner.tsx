@@ -5,7 +5,6 @@ import type { Company } from '@domain/entities/company'
 import type { CrisisReasonCode } from '@domain/entities/finance'
 import {
   ALERT_KEY,
-  BANKRUPT_RECOVERY_HINT_CENTS,
   selectCompanyBanner,
   type CrisisProjection,
 } from './company-alerts'
@@ -62,7 +61,6 @@ export const CompanyAlertBanner: React.FC<Props> = ({ company, crisis, onRestart
 
   const amount = formatMoneyDisplay(banner.amountCents)
   const threshold = formatMoneyDisplay(TUNING.finance.cashWarningThresholdCents)
-  const recovery = formatMoneyDisplay(BANKRUPT_RECOVERY_HINT_CENTS)
   const runway = formatRunway(banner.runwayMonths)
   const committed = banner.committedCents === undefined ? '—' : formatMoneyDisplay(banner.committedCents)
 

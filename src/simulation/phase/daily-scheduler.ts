@@ -1,5 +1,6 @@
 import type { CancellationReason, Discipline, ProjectPhase } from '@domain/enums'
 import type { Employee } from '@domain/entities/employee'
+import type { Employment } from '@domain/entities/personnel'
 import type { Company } from '@domain/entities/company'
 import type { Project } from '@domain/entities/project'
 import type { WorldState } from '@simulation/services/world-state'
@@ -10,6 +11,8 @@ import type { RefundService } from '@simulation/services/refund-service'
 import type { ProductPricingService } from '@simulation/services/product-pricing-service'
 import type { MarketingService } from '@simulation/services/marketing-service'
 import type { ContractService } from '@simulation/services/contract-service'
+import { settleMonthlySalaries } from '@simulation/services/personnel-settlement'
+import { cancelEffectiveMonthFor } from '@domain/value-objects/personnel-salary'
 import { uuid } from '@domain/types'
 import {
   budgetExhaustedEventKey,
@@ -57,6 +60,11 @@ export interface DailySchedulerDeps {
   marketing?: MarketingService
   /** 发行合同（M2-F）；未注入时跳过结算 */
   contracts?: ContractService
+  /**
+   * CODE-06：人事每日 tick（§8.2；ORD-01 人事变更加于月度结算之前）。
+   * 未注入时跳过（旧夹具/直连调度器测试行为不变）。
+   */
+  personnelTick?: (state: WorldState, dayIndex: number) => WorldState
 }
 
 const ZERO_WORK: Record<Discipline, number> = { design: 0, programming: 0, art: 0, qa: 0 }
@@ -104,6 +112,10 @@ export class DailyScheduler {
     }
     state = this.applyProjectWork(state, dayIndex)
     state = this.applyEmployeeDailyUpdate(state, dayIndex)
+    // CODE-06（ORD-01）：人事变更先于月度薪资结算——士气递推/离职判定/试用期/退休每日推进
+    if (this.deps.personnelTick !== undefined) {
+      state = this.deps.personnelTick(state, dayIndex)
+    }
     state = this.applyMonthlySettlement(state, dayIndex)
     // 预算耗尽在当日所有工资分摊/合同付款/直接支出入账后统一判定一次（DESIGN-G05 §6.1）
     state = this.applyBudgetExhaustion(state, dayIndex)
@@ -310,7 +322,7 @@ export class DailyScheduler {
     const g = dayIndexToGregorian(dayIndex)
     if (g.day !== daysInMonth(g.year, g.month)) return state
 
-    // 与既有薪资流水幂等键保持同一格式，确保改造不改变现金结算行为
+    // 与既有薪资分摊幂等键保持同一格式，确保改造不改变分摊行为
     const periodKey = `m${g.year}-${g.month}`
 
     // 分摊幂等键随存档生命周期保留（DESIGN-G05 §7.2）：先收集既有键
@@ -322,38 +334,29 @@ export class DailyScheduler {
     // 仅在真正新增分摊时克隆项目，避免无谓的对象变更
     const updatedProjects = new Map<string, Project>()
 
+    // ===== 月薪：②流水线（FIN 承诺兑现）——唯一产出点（TASK-P1-CODE-06 / D-03 §6.3 / ADJ-09）=====
+    // ①流水线（本函数原裸 postTransaction 的 `salary:${emp.id}:${periodKey}` 薪资分支）已停用删除：
+    // 其判据"结算当日 status"结构上无法表达 ADJ-09"当月任一天在职即计 1 笔"（D03-36/ORD-01）。
+    // 判付唯一入口 = releaseCommitment(effectiveMonth = monthOf(endDay)+1)（PersonnelService 调用）；
+    // 本处只兑现（含 cancelled 承诺的已赚取周期补记），不判定停付（D03-43）。
+    const settlement = settleMonthlySalaries(state, this.deps.finance, dayIndex)
+    let employments = state.employments
+    if (settlement.updatedEmployments.length > 0 && employments !== undefined) {
+      const byId = new Map(settlement.updatedEmployments.map((e) => [e.employmentId, e]))
+      employments = employments.map((e) => byId.get(e.employmentId) ?? e)
+    }
+
     for (const company of state.companies) {
       // 已解散公司不再产生任何固定支出（DECISION-M3-P0-ENDGAME-002 §D2）
       if (company.status === 'dissolved') continue
       // 破产公司仍需继续支付工资和租金（DESIGN-OI-21 §6.3：固定结算不受破产状态影响）
 
-      for (const emp of state.employees) {
-        // 离职员工不参与工资分摊（DESIGN-G05 §3.3 唯一例外）
-        if (emp.companyId !== company.id || emp.status !== 'hired') continue
-
-        // 每个员工月末仅一笔 salary 现金交易（allowNegativeBalance）
-        const posted = this.deps.finance.postTransaction(
-          {
-            idempotencyKey: `salary:${emp.id}:${periodKey}`,
-            companyId: company.id,
-            day: dayIndex,
-            category: 'salary',
-            amountCents: -emp.salaryMonthlyCents,
-            description: `工资：${emp.name} ${g.year}/${g.month}`,
-            referenceId: emp.id,
-          },
-          { allowNegativeBalance: true },
-        )
-        const tx = posted.result
-        if (
-          !posted.success ||
-          !tx ||
-          !Number.isFinite(emp.salaryMonthlyCents) ||
-          !Number.isInteger(emp.salaryMonthlyCents) ||
-          emp.salaryMonthlyCents <= 0
-        ) {
-          continue
-        }
+      // G05 工资成本分摊：对本次兑现的薪资交易做项目归属（承诺兑现交易 → 分摊记录）。
+      for (const entry of settlement.realized) {
+        if (entry.companyId !== company.id || entry.idempotent) continue
+        const emp = employments?.find((e: Employment) => e.employmentId === entry.employmentId)
+        const salaryMonthlyCents = emp?.salaryMonthlyCents ?? entry.amountCents
+        const empName = emp !== undefined ? `员工 ${emp.employmentId}` : `员工 ${entry.employmentId}`
 
         // 有效分配以 TeamAssignment 是否仍存在为准，暂停项目不归零（G05-R6）
         // 终态项目不入账（DESIGN-G05 v1.7 §3.3 / §6.1）：复用 isTerminalProjectPhase 的 active 定义，
@@ -363,21 +366,21 @@ export class DailyScheduler {
           if (p.companyId !== company.id) continue
           if (isTerminalProjectPhase(p.phase)) continue
           for (const a of p.teamAssignments) {
-            if (a.employeeId !== emp.id) continue
+            if (a.employeeId !== entry.employmentId) continue
             assignments.push({ projectId: p.id, allocationRatio: a.allocationRatio })
           }
         }
 
         const { created } = computeSalaryAllocations({
           companyId: company.id,
-          employeeId: emp.id,
-          salaryMonthlyCents: emp.salaryMonthlyCents,
+          employeeId: entry.employmentId,
+          salaryMonthlyCents,
           periodKey,
-          cashTransactionId: tx.id,
+          cashTransactionId: entry.txId,
           day: dayIndex,
           assignments,
           existingIdempotencyKeys: existingKeys,
-          description: `工资分摊：${emp.name} ${g.year}/${g.month}`,
+          description: `工资分摊：${empName} ${g.year}/${g.month}`,
         })
 
         for (const alloc of created) {
@@ -421,11 +424,13 @@ export class DailyScheduler {
       )
     }
 
-    if (updatedProjects.size === 0) return state
-    return {
+    if (updatedProjects.size === 0 && (employments === state.employments)) return state
+    const next: WorldState = {
       ...state,
       projects: state.projects.map((p) => updatedProjects.get(p.id) ?? p),
     }
+    if (employments !== undefined) next.employments = employments
+    return next
   }
 
   // ---------- 预算耗尽判定（G-05 / G05-R8） ----------
@@ -790,8 +795,27 @@ export class DailyScheduler {
         ? { ...e, status: 'fired' as const, version: e.version + 1, updatedAt: dayIndex }
         : e,
     )
+    // CODE-06：清算同步终止 occupying Employment 并停付薪资承诺（不产生遣散、不新增交易——
+    // commit/取消承诺均不改现金，BR-3；当月薪资已由本日月初的②流水线结算）。
+    let employments = state.employments
+    if (employments !== undefined) {
+      const effectiveMonth = cancelEffectiveMonthFor(dayIndex)
+      employments = employments.map((emp) => {
+        if (!doomed.has(emp.companyId) || !emp.occupiesPerson) return emp
+        this.deps.finance.getLedger().releaseCommitment(emp.companyId, emp.salaryCommitmentId, effectiveMonth)
+        return {
+          ...emp,
+          status: 'terminated' as const,
+          occupiesPerson: false,
+          endDay: dayIndex,
+          terminationKind: 'terminated' as const,
+          version: emp.version + 1,
+          updatedAt: dayIndex,
+        }
+      })
+    }
 
-    return {
+    const next: WorldState = {
       ...state,
       companies,
       products,
@@ -801,6 +825,8 @@ export class DailyScheduler {
       marketingCampaigns: campaigns,
       events: [...state.events, ...events],
     }
+    if (employments !== undefined) next.employments = employments
+    return next
   }
 }
 

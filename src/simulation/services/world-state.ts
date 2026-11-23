@@ -8,6 +8,13 @@ import type { PublishingContract } from '@domain/entities/publishing-contract'
 import type { Transaction } from '@domain/entities/transaction'
 import type { DomainEvent } from '@domain/events'
 import type { BudgetCommitment } from '@domain/entities/finance'
+import type {
+  Candidate,
+  Employment,
+  Person,
+  PersonEvent,
+  PersonnelFormulaSnapshot,
+} from '@domain/entities/personnel'
 
 export interface WorldState {
   companies: Company[]
@@ -33,6 +40,18 @@ export interface WorldState {
    * 与 transactions 一同持久化，读档时随 replay 重建。旧档缺省 []（passthrough 不升版本）。
    */
   commitments?: BudgetCommitment[]
+  /**
+   * CODE-06 / D-03（TASK-P1-CODE-06）：人才与组织实体（§3）。
+   * 旧档缺省 undefined（passthrough 不升版本）；restore 时按 §15.3 从 employees 迁移。
+   */
+  persons?: Person[]
+  employments?: Employment[]
+  candidates?: Candidate[]
+  personEvents?: PersonEvent[]
+  /** §11 S7：D-03 存档结构版本（编码时升 3）；旧档缺省 undefined。 */
+  d03SchemaVersion?: number
+  /** §11 S7 / §18.3 C13 必存项：personnelFormulaVersion + 参数快照三元组。 */
+  personnelFormulaSnapshot?: PersonnelFormulaSnapshot
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {

@@ -145,6 +145,11 @@ export interface Employment {
   terminationKind: TerminationKind | null
   /** 当前薪资承诺（FIN §3.3 employment_salary；必填 INV-3）。 */
   salaryCommitmentId: string
+  /**
+   * P1 具体化缓存：连续无活跃分配日数（§6.9 idleDays 标"派生"，但"连续"需逐日历史，
+   * P1 以字段缓存并随存档持久化；语义不变）。
+   */
+  idleDays?: number
   version: number
   createdAt: number
   updatedAt: number

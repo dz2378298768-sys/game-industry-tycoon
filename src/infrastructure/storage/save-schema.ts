@@ -358,6 +358,36 @@ export const worldStateSchema = z
           .passthrough(),
       )
       .default([]),
+    /**
+     * CODE-06 / D-03（TASK-P1-CODE-06）：人才与组织实体。旧档缺省 []，不升存档版本
+     * （d03SchemaVersion 独立管理，§11 S7）。passthrough 以容纳 D-03 后续扩展字段。
+     */
+    persons: z.array(z.object({ personId: z.string().min(1) }).passthrough()).default([]),
+    employments: z
+      .array(
+        z
+          .object({
+            employmentId: z.string().min(1),
+            personId: z.string().min(1),
+            companyId: z.string().min(1),
+            status: z.enum(['probation', 'active', 'resigning', 'terminated', 'contract_ended']),
+            occupiesPerson: z.boolean(),
+            salaryMonthlyCents: z.number().int().positive(),
+            startDay: z.number().int().nonnegative(),
+            salaryCommitmentId: z.string().min(1),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    candidates: z.array(z.object({ candidateId: z.string().min(1), personId: z.string().min(1) }).passthrough()).default([]),
+    personEvents: z.array(z.object({ eventId: z.string().min(1), personId: z.string().min(1), kind: z.string().min(1) }).passthrough()).default([]),
+    /** §11 S7：D-03 存档结构版本（V0.1.1=2，编码时升 3）；旧档缺省 undefined。 */
+    d03SchemaVersion: z.number().int().optional(),
+    /** §11 S7 / §18.3 C13 必存项：参数快照三元组。 */
+    personnelFormulaSnapshot: z
+      .object({ version: z.string().min(1), params: z.record(z.number()), createdAt: z.number().int().nonnegative() })
+      .passthrough()
+      .optional(),
   })
   .passthrough()
 

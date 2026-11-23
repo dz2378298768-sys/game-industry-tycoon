@@ -21,6 +21,9 @@ import { projectMonthlyBurnCents } from '@simulation/ai/ai-runway'
 import { computeMarketingLift } from '@simulation/services/demand-pool'
 import { MARKETING_BUDGET_MAX_CENTS, MARKETING_BUDGET_MIN_CENTS } from '@domain/value-objects/marketing-response'
 import { DailyScheduler } from '@simulation/phase/daily-scheduler'
+import { PersonnelService, D03_SCHEMA_VERSION } from '@simulation/services/personnel-service'
+import { migrateEmployees } from '@domain/value-objects/personnel-migration'
+import { DEFAULT_PERSONNEL_PARAMS, createPersonnelSnapshot } from '@domain/value-objects/personnel-tuning'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
   ProductPricingService,
@@ -44,6 +47,7 @@ import {
   yearOfDay,
 } from '@content/queries'
 import { completionRatio, isQaComplete } from '@simulation/systems/project-progress'
+import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
 import { defectLevelOf } from '@simulation/systems/qa-quality'
 import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
@@ -76,6 +80,8 @@ export class GameWorld {
   public calendar: GameCalendar
   public finance: FinanceService
   public employees: EmployeeService
+  /** CODE-06：D-03 人才与组织服务（Person/Employment 权威；Employee 为派生视图，双轨） */
+  public personnel: PersonnelService
   public projects: ProjectService
   public rng: RandomService
   public sales: MarketSimulationService
@@ -101,6 +107,7 @@ export class GameWorld {
     // A-1：账本唯一——FinanceService 只是它的委托层，二者共享同一实例。
     this.finance = new FinanceService(new UnifiedLedger())
     this.salesInputs = salesInputs
+    this.personnel = new PersonnelService({ finance: this.finance })
     this.employees = new EmployeeService({
       getAssignmentsByCompany: (companyId) => {
         const all: TeamAssignment[] = []
@@ -132,6 +139,7 @@ export class GameWorld {
       pricing: this.pricing,
       marketing: this.marketing,
       contracts: this.contracts,
+      personnelTick: this.personnelTick,
     })
   }
 
@@ -161,6 +169,97 @@ export class GameWorld {
 
   private syncEmployeesFromWorld(): void {
     this.employees.reset(this.world.employees)
+  }
+
+  // ===== CODE-06：D-03 人才层（双轨桥） =====
+
+  /**
+   * 人才层命令作用域：命令前从 WorldState 切片接管，命令后回写（与 withProjects 同构）。
+   * world.employees 保持 legacy 派生视图；world.persons/employments 为 D-03 权威。
+   */
+  private withPersonnel<T>(fn: () => T): T {
+    this.personnel.adopt({
+      persons: this.world.persons ?? [],
+      employments: this.world.employments ?? [],
+      candidates: this.world.candidates ?? [],
+      personEvents: this.world.personEvents ?? [],
+    }, this.world.personnelFormulaSnapshot)
+    try {
+      return fn()
+    } finally {
+      const slice = this.personnel.toSlice()
+      this.world.persons = slice.persons
+      this.world.employments = slice.employments
+      this.world.candidates = slice.candidates
+      this.world.personEvents = slice.personEvents
+      this.world.personnelFormulaSnapshot = slice.snapshot
+      this.world.d03SchemaVersion = slice.d03SchemaVersion
+    }
+  }
+
+  /** 派生 Employee 视图与 Employment 状态对齐（双轨一致性；morale/fatigue 等 legacy 字段不动）。 */
+  private reconcileEmployeeView(): void {
+    this.personnel.adopt({
+      persons: this.world.persons ?? [],
+      employments: this.world.employments ?? [],
+      candidates: this.world.candidates ?? [],
+      personEvents: this.world.personEvents ?? [],
+    }, this.world.personnelFormulaSnapshot)
+    this.world.employees = this.personnel.reconcileEmployeeView(this.world.employees)
+  }
+
+  /** §6.7 市场月薪基准（P1：defaultStartingSalaryCents × 城市系数；P2 接 baseSalary 表）。 */
+  private marketSalaryForCity(cityId: string | undefined): number {
+    return Math.round(
+      TUNING.employee.defaultStartingSalaryCents *
+        citySalaryMultiplier(cityId ?? 'san_francisco'),
+    )
+  }
+
+  /** ORD-01 人事每日 tick（调度器钩子）：候选池刷新（S5-1）→ dailyTick → 派生视图同步。 */
+  private personnelTick = (state: WorldState, dayIndex: number): WorldState => {
+    this.personnel.adopt({
+      persons: state.persons ?? [],
+      employments: state.employments ?? [],
+      candidates: state.candidates ?? [],
+      personEvents: state.personEvents ?? [],
+    }, state.personnelFormulaSnapshot)
+    // S5-1：候选池每游戏日刷新一次（§12）
+    const playerCompany = state.companies.find((c) => c.isPlayer)
+    if (playerCompany !== undefined) {
+      this.personnel.refreshCandidatePool(
+        dayIndex,
+        () => this.marketSalaryForCity(playerCompany.cityId),
+        'default',
+      )
+    }
+    const activeEmploymentIds = new Set<string>()
+    let anyProjectInProduction = false
+    for (const p of state.projects) {
+      if (p.isPaused || isTerminalProjectPhase(p.phase)) continue
+      anyProjectInProduction = true
+      for (const a of p.teamAssignments) activeEmploymentIds.add(a.employeeId)
+    }
+    this.personnel.dailyTick({
+      day: dayIndex,
+      activeEmploymentIds,
+      anyProjectInProduction,
+      marketSalaryOf: (companyId) => {
+        const c = state.companies.find((x) => x.id === companyId)
+        return this.marketSalaryForCity(c?.cityId)
+      },
+    })
+    const slice = this.personnel.toSlice()
+    return {
+      ...state,
+      persons: slice.persons,
+      employments: slice.employments,
+      candidates: slice.candidates,
+      personEvents: slice.personEvents,
+      personnelFormulaSnapshot: slice.snapshot,
+      d03SchemaVersion: slice.d03SchemaVersion,
+      employees: this.personnel.reconcileEmployeeView(state.employees),
+    }
   }
 
   /**
@@ -244,9 +343,10 @@ export class GameWorld {
     if (!('id' in guard)) return guard
     const company = guard as Company
 
-    const activeCount = this.world.employees.filter(
-      (e) => e.companyId === company.id && e.status === 'hired',
-    ).length
+    // CODE-06（R3 口径变更声明）：headcount 判定改用 countOccupyingByCompany（含 probation/resigning，
+    // 防"resigning 不占名额"超招）；迁移日志见实施报告。数值与旧 hired 计数在双轨下等价。
+    this.withPersonnel(() => undefined)
+    const activeCount = this.personnel.countOccupyingByCompany(company.id)
     if (activeCount >= company.managementCapacity) {
       return {
         success: false,
@@ -280,7 +380,9 @@ export class GameWorld {
 
     // 城市工资系数应用于基础薪资
     const effectiveSalary = Math.round(params.salaryMonthlyCents * citySalaryMultiplier(company.cityId))
-    const hireCostCents = Math.round(effectiveSalary * TUNING.employee.hireCostRatio)
+    // 招聘一次性中介费（ADJ-2026-11-22-12 S5-3）：= negotiatedSalary × recruitFeeMonths（初值 ×1，TUNING）。
+    // 经 one_off 承诺在 arrivalDay（=确认日）兑现，category=project_expense（§6.3/§7.2），不直改现金。
+    const hireCostCents = Math.round(effectiveSalary * DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths)
     if (this.finance.getCashBalance(company.id) < hireCostCents) {
       return {
         success: false,
@@ -305,19 +407,26 @@ export class GameWorld {
     }
     const emp = result.result
 
-    const tx = this.finance.postTransaction({
-      idempotencyKey: `hire:${emp.id}:cost`,
-      companyId: company.id,
-      day: this.dayIndex,
-      category: 'project_expense',
-      amountCents: -hireCostCents,
-      description: `入职成本：${emp.name}`,
-      referenceId: emp.id,
-    })
-    if (!tx.success) {
-      // 财务失败则回滚员工：以 world.employees 为准重建 EmployeeService 内部状态
-      this.syncEmployeesFromWorld()
-      return { success: false, errorCode: tx.errorCode, message: tx.errorMessage ?? '入职成本支付失败' }
+    // D-03 双轨：Person + Employment(probation) + 薪资承诺（§7.2）+ 招聘费承诺（one_off，S5-3）。
+    // employmentId = emp.id（旧 id 保留为 employmentId，§15.1 #2）；财务失败则不提交。
+    const hired = this.withPersonnel(() =>
+      this.personnel.hire({
+        companyId: company.id,
+        employmentId: emp.id,
+        name: params.name,
+        role: params.role,
+        skillLevel: Math.max(1, Math.min(5, params.skillLevel)),
+        salaryMonthlyCents: effectiveSalary,
+        day: this.dayIndex,
+        headcountLimit: company.managementCapacity,
+      }),
+    )
+    if (!hired.ok || !hired.value) {
+      return {
+        success: false,
+        errorCode: hired.error?.code ?? 'EMP_HIRE_FAILED',
+        message: hired.error?.message ?? '招聘失败（人才层）',
+      }
     }
 
     this.world.employees.push(emp)
@@ -336,27 +445,15 @@ export class GameWorld {
       return { success: false, errorCode: 'EMP_ALREADY_TERMINATED', message: '该员工已离职，无法重复解雇。' }
     }
 
-    const severanceCents = Math.round(emp.salaryMonthlyCents * TUNING.employee.severanceMonths)
-    const tx = this.finance.postTransaction(
-      {
-        idempotencyKey: `severance:${emp.id}`,
-        companyId: company.id,
-        day: this.dayIndex,
-        category: 'severance',
-        amountCents: -severanceCents,
-        description: `解雇补偿：${emp.name}`,
-        referenceId: emp.id,
-      },
-      { allowNegativeBalance: true },
-    )
-    if (!tx.success) {
-      return { success: false, errorCode: tx.errorCode, message: tx.errorMessage ?? '补偿支付失败' }
-    }
-
-    this.syncEmployeesFromWorld()
-    const fired = this.employees.fire(employeeId)
-    if (!fired.success || !fired.result) {
-      return { success: false, errorCode: fired.errorCode, message: fired.errorMessage ?? '解雇失败' }
+    // D-03（RULE-11）：解雇 = 立即 terminated + cancelCommitment(次月停) + 遣散 one_off 承诺
+    // 当日创建并兑现（§6.4，category=severance）。遣散不再直改现金（R-D03-3）。
+    const fired = this.withPersonnel(() => this.personnel.fire(employeeId, this.dayIndex))
+    if (!fired.ok || !fired.value) {
+      return {
+        success: false,
+        errorCode: fired.error?.code ?? 'EMP_FIRE_FAILED',
+        message: fired.error?.message ?? '解雇失败',
+      }
     }
 
     // 从所有项目中移除
@@ -376,9 +473,14 @@ export class GameWorld {
       }
     })
 
-    this.world.employees = this.employees.listAll()
+    this.world.employees = this.world.employees.map((e) =>
+      e.id === employeeId
+        ? { ...e, status: 'fired' as const, version: e.version + 1, updatedAt: this.dayIndex }
+        : e,
+    )
+    this.syncEmployeesFromWorld()
     this.syncCash(company)
-    return { success: true, result: fired.result }
+    return { success: true, result: { ...emp, status: 'fired' as const } }
   }
 
   // ----- Project -----
@@ -774,6 +876,23 @@ export class GameWorld {
       if (spec !== undefined) staff.push(...createAiStaff(company, spec, dayIndex))
     }
     this.world = { ...this.world, companies, employees: [...this.world.employees, ...staff] }
+    // CODE-06（R15）：AI 公司员工与玩家共用同一迁移路径（Person+Employment+薪资承诺）；
+    // AI 员工不进候选池（RULE-05 按 occupying 过滤已覆盖），不参与玩家人事命令。
+    if (staff.length > 0) {
+      this.withPersonnel(() => {
+        const migration = migrateEmployees({
+          employees: staff,
+          day: dayIndex,
+          params: this.personnel.tuning,
+          regionOf: () => 'default',
+        })
+        this.personnel.mergeMigration(migration)
+        for (const c of migration.salaryCommitments) {
+          this.finance.getLedger().registerCommitment(c)
+        }
+        return undefined
+      })
+    }
   }
 
   /** AI 决策日志（内存态，FIFO 24 个月；A02/A03 审计用） */
@@ -1279,6 +1398,9 @@ export class GameWorld {
     }
     this.projects.reset(this.world.projects)
     this.employees.reset(this.world.employees)
+    // CODE-06：推进结束后把派生 Employee 视图与 Employment 状态对齐（双轨一致性）
+    this.reconcileEmployeeView()
+    this.employees.reset(this.world.employees)
     return { totalDays: days, events }
   }
 
@@ -1489,10 +1611,52 @@ export class GameWorld {
       pricing: this.pricing,
       marketing: this.marketing,
       contracts: this.contracts,
+      personnelTick: this.personnelTick,
     })
 
     this.projects.reset(state.projects)
     this.employees.reset(state.employees)
+
+    // CODE-06：D-03 人才层恢复（§11 S1/S2 + §15.3 四步迁移）。
+    // 新档（d03SchemaVersion=3）：直接采用已持久化切片（承诺已随 state.commitments replay）。
+    // 旧档：employees → Person+Employment 两步迁移 + Step3 承诺注册 + Step4 校验（E4 修复不调 FIN）。
+    if (state.employments !== undefined && state.employments.length > 0) {
+      this.personnel.adopt({
+        persons: state.persons ?? [],
+        employments: state.employments,
+        candidates: state.candidates ?? [],
+        personEvents: state.personEvents ?? [],
+      }, state.personnelFormulaSnapshot)
+    } else if (state.employees.length > 0) {
+      const migration = migrateEmployees({
+        employees: state.employees,
+        day: state.currentDayIndex,
+        params: DEFAULT_PERSONNEL_PARAMS,
+        regionOf: () => 'default',
+      })
+      state.persons = migration.persons
+      state.employments = migration.employments
+      state.personEvents = migration.personEvents
+      state.candidates = []
+      state.d03SchemaVersion = D03_SCHEMA_VERSION
+      state.personnelFormulaSnapshot = createPersonnelSnapshot(state.currentDayIndex)
+      for (const log of migration.logs) {
+        console.info(`[d03-migrate] ${log.legacyId}: ${log.message}`)
+      }
+      for (const repair of migration.repairs) {
+        console.info(`[d03-repair] ${repair.code}: ${repair.message}`)
+      }
+      // Step 3：为每条 occupying Employment 注册薪资承诺（读档后可兑现；历史流水不回算）。
+      for (const c of migration.salaryCommitments) {
+        this.finance.getLedger().registerCommitment(c)
+      }
+      this.personnel.adopt({
+        persons: state.persons,
+        employments: state.employments,
+        candidates: state.candidates,
+        personEvents: state.personEvents,
+      }, state.personnelFormulaSnapshot)
+    }
   }
 
   /** 项目缺陷等级（UI 只读） */

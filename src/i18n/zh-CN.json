@@ -644,5 +644,6 @@
   "project.execution.verdict.feasible": "可行",
   "project.execution.verdict.need_more_budget_or_delay": "需追加预算或延期",
   "project.execution.verdict.need_reduce_scope_or_lower_goal": "需缩减范围或降低目标",
-  "project.discipline.audio": "音频"
+  "project.discipline.audio": "音频",
+  "market.research.success": "市场调研完成，结果卡已生成。"
 }

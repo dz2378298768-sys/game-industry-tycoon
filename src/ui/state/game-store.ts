@@ -188,6 +188,8 @@ interface GameStore {
   createExecutionProject(params: { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
   /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源） */
   getExecutionSummary(projectId: string): import('@application/mediators/game-world').ExecutionSummary | null
+  /** P-02：市场调研（账本 research 交易 + 一次性结果卡数据） */
+  conductMarketResearch(): import('@application/mediators/game-world').CommandOutcome<import('@application/mediators/game-world').MarketResearchResult>
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -654,6 +656,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   getExecutionSummary(projectId) {
     const gw = get().game
     return gw ? gw.getExecutionSummary(projectId) : null
+  },
+
+  conductMarketResearch() {
+    const gw = get().game
+    if (!gw) return { success: false, errorCode: 'NO_COMPANY', message: t('error.noCompany') }
+    const r = gw.conductMarketResearch()
+    get().refresh()
+    if (r.success) get().toast(t('market.research.success'), 'success')
+    else get().toast(localizeError(r.errorCode, r.message), 'error')
+    return r
   },
 }))
 

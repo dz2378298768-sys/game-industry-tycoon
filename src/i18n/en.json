@@ -644,5 +644,6 @@
   "project.execution.verdict.feasible": "Feasible",
   "project.execution.verdict.need_more_budget_or_delay": "Need more budget or delay",
   "project.execution.verdict.need_reduce_scope_or_lower_goal": "Need reduce scope or lower goal",
-  "project.discipline.audio": "Audio"
+  "project.discipline.audio": "Audio",
+  "market.research.success": "Market research complete. Result card generated."
 }

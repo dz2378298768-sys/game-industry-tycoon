@@ -23,7 +23,10 @@ import {
   createCompanyAssetSoldEvent,
   createProductLifecycleChangedEvent,
 } from '@domain/events'
-import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
+import { AI_COMPANIES, createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
+import { P1_UI_TUNING } from '@content/p1-ui-tuning'
+import genreSegmentAffinity from '@content/genre-segment-affinity.json'
+import genresContent from '@content/genres.json'
 import { planAiMonth, suggestedStartBudget, type AiCompanyView, type AiPlan } from '@simulation/ai/ai-planner'
 import { projectMonthlyBurnCents } from '@simulation/ai/ai-runway'
 import { computeMarketingLift } from '@simulation/services/demand-pool'
@@ -100,6 +103,15 @@ export interface RecruitImpactPreview {
   after: GameFinancialOverview
   feeCents: number
   salaryMonthlyCents: number
+}
+
+/** CODE-07B P-02：市场调研结果卡（ADJ-16 R-6 竞品档案条数 + 需求方向标签）。 */
+export interface MarketResearchResult {
+  txId: string
+  costCents: number
+  competitorCount: number
+  /** 方向档仅为内容亲和度的定性换算（数值机会模型 OPEN，P2），不展示数值。 */
+  directionTags: Array<{ genreId: string; displayName: string; band: 'high' | 'medium' | 'low' }>
 }
 
 /** P-04：立项预览（内核同源派生；Cost_est=+∞ 时 costEstCents=null，UI 显示"暂不可估"）。 */
@@ -2140,6 +2152,71 @@ export class GameWorld {
   /** QA 是否完成（UI 只读） */
   isQaDone(project: Project): boolean {
     return isQaComplete(project)
+  }
+
+  /**
+   * CODE-07B P-02（S02）：市场调研动作（ADJ-12 S2-1 / ADJ-16 R-4/R-6）。
+   * 走账本 research 交易（复用 FIN 12 类 marketing，不扩枚举），失败不发结果卡；
+   * 方向标签为内容亲和度的定性档（非数值，数值机会模型 OPEN-P2），竞品数取静态档案。
+   */
+  conductMarketResearch(): CommandOutcome<MarketResearchResult> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const company = guard as Company
+    const costCents = P1_UI_TUNING.market.researchCostCents
+    const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
+    if (availableCashCents < costCents) {
+      return {
+        success: false,
+        errorCode: 'FIN_INSUFFICIENT_CASH',
+        message: `可用现金不足，市场调研需要 $${(costCents / 100).toLocaleString()}。`,
+      }
+    }
+    // 幂等键：同日多次调研按序号递增（一次性结果卡由 UI 持有，不持久化）
+    const prior = this.finance
+      .getTransactionsByCompany(company.id)
+      .filter((tx) => tx.description === '市场调研').length
+    const idempotencyKey = `market-research:${company.id}:${this.dayIndex}:${prior + 1}`
+    const posted = this.finance.postTransaction({
+      idempotencyKey,
+      companyId: company.id,
+      day: this.dayIndex,
+      category: 'marketing',
+      amountCents: -costCents,
+      description: '市场调研',
+    })
+    if (!posted.success || !posted.result) {
+      return { success: false, errorCode: posted.errorCode, message: posted.errorMessage }
+    }
+    this.syncCash(company)
+
+    // 竞品档案条数（ADJ-12 S2-2 静态档案，真实 AI 公司归 P3+）
+    const competitorCount = AI_COMPANIES.length
+    // 方向档：取每个类别跨群体的最大亲和度 → 定性档（阈值 >0.8 高 / ≥0.6 中 / 其余低），不展示数值
+    const maxByGenre = new Map<string, number>()
+    for (const row of genreSegmentAffinity) {
+      maxByGenre.set(row.genreId, Math.max(maxByGenre.get(row.genreId) ?? 0, row.affinity))
+    }
+    const directionTags = genresContent
+      .map((g) => {
+        const max = maxByGenre.get(g.id) ?? 0
+        return {
+          genreId: g.id,
+          displayName: g.displayNameZh,
+          band: (max > 0.8 ? 'high' : max >= 0.6 ? 'medium' : 'low') as 'high' | 'medium' | 'low',
+        }
+      })
+      .sort((a, b) => (maxByGenre.get(b.genreId) ?? 0) - (maxByGenre.get(a.genreId) ?? 0))
+      .slice(0, 3)
+    return {
+      success: true,
+      result: {
+        txId: posted.result.id,
+        costCents,
+        competitorCount,
+        directionTags,
+      },
+    }
   }
 
   /**

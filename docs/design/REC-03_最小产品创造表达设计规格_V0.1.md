@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 |---|---|
 | 编号 | REC-03 / SUP-07（P1 可玩闭环补完） |
-| 状态 | DESIGN_DRAFT，按 V0.1 设计审核意见修订，待独立复审 |
+| 状态 | DESIGN_DRAFT，按 V0.1 与 V0.2 设计复审意见修订，待独立复审 |
 | 目标 | 用少量真实模块替换 `draft-open-modules` 占位，让玩家的设计选择同时改变研发负担、市场画像和交付要求 |
 | 上位依据 | `GAME_INDUSTRY_TYCOON_PROJECT_RECOVERY_AND_ROADMAP.md` §D.4–D.5；`ADJ-2026-11-24-23`；`ADJ-2026-11-24-26` |
 | 既有规格 | D-01 V0.2、D-02 V0.1、Project V0.1.2、G1 UI V0.1 |
@@ -126,10 +126,13 @@ type BlueprintDraftInput =
         optionSelections: Record<string,string>; contentPackId: string|null }>;
       deliveryForm: 'full'|'early_access'|'demo'; hrb: number; budgetCapacityCents: number }
   | { kind: 'snapshotRef'; requestId: string; snapshotId: string; versionId: string;
+      workingTitle: string; genreId: string; plannedLaunchDay: number;
       hrb: number; budgetCapacityCents: number }
 ```
 
-`requestId` 必须非空且同公司唯一。draft 必须恰一 core、恰一 content、support 0–2；instanceId/templateId/slotId 在各自约束内唯一；claims/platforms 通过 D-04 `resolveRefs`；template/pack revision 必须匹配。snapshotRef 只允许引用当前公司已锁定快照，不能混入 draft 字段。固定槽位不得由输入覆盖。
+draft 的定位输入不另增可编辑字段：玩家可编辑 `workingTitle`、`genreId`、`primaryTypeId`、`targetSegmentClaims` 和 `platformTargets`；application 必须补齐以下 REC-03 固定默认定位字段：`secondaryTypeIds=[]`、`settingIds=[]`、`perspectiveId='side_scroll'`、`structureId='linear'`、`sellingPoints=[]`、`commercialPositioning='premium'`、`presetId=null`。这些默认值与玩家编辑字段一起构成完整 `PositioningProfile`，写入锁定快照并参与 `payloadHash`；禁止 UI/API 覆盖默认字段。验收需断言预览与锁定快照字段齐全、固定默认值稳定、改变任一可编辑定位字段会改变 payloadHash，而相同输入重放 hash 不变。
+
+`requestId` 必须非空且同公司唯一。draft 必须恰一 core、恰一 content、support 0–2；instanceId/templateId/slotId 在各自约束内唯一；claims/platforms 通过 D-04 `resolveRefs`；template/pack revision 必须匹配。snapshotRef 只允许引用当前公司已锁定且已关联 legacy Project 的快照，不能混入 draft 字段。调用方必须提供 `workingTitle`、`genreId`、`plannedLaunchDay`，且三者分别与该快照已关联 legacy Project 的 `name`、`genreId`、`plannedLaunchDay` 完全一致；snapshotRef 仅复用该既有项目/执行状态，不得据此创建第二个 legacy Project。快照不存在、无关联 Project 或任一值不一致时返回 `REC03_SNAPSHOT_REF_MISMATCH`。固定槽位不得由输入覆盖。
 
 `previewExecutionProject(input)` 返回 `CommandOutcome<{requestId:string; snapshotId:string; versionId:string; snapshot:DesignVersionSnapshot; decomposition:DecompositionInput; estimates:EstimateBundle; violations:BlueprintViolation[]; budgetCapCents:number; costEstCents:number|null}>`；预览不写 ledger/world，但同 requestId 重放返回逐字段相等结果。`createExecutionProject(input)` 返回 `CommandOutcome<{requestId:string; projectId:string; snapshotId:string; versionId:string; commitmentId:string}>`；同 requestId 重复 create 返回原结果且 `idempotent=true`，不同 payload 返回 `REC03_REQUEST_PAYLOAD_MISMATCH`。
 
@@ -140,13 +143,15 @@ application 必须按固定顺序：
 3. 运行 `checkCompositionRules`、四通道估算和 Project decomposition；
 4. 只有无 E 级违规时才创建 execution project 并登记预算承诺；失败整体回滚。
 
-snapshot 与 decomposition 必须共享同一 snapshotId/versionId。失败返回 `errorCode`、`message` 和 `violations`，并回滚 execution project、legacy Project、ledger commitment 和 request 索引。错误码固定为 `REC03_INPUT_INVALID`、`REC03_TEMPLATE_UNKNOWN`、`REC03_CONTENT_PACK_INVALID`、`REC03_SEGMENT_MAPPING_MISSING`、`REC03_BLUEPRINT_VIOLATION`、`REC03_REQUEST_PAYLOAD_MISMATCH`。legacy `createProject({budgetTotalCapCents,...})` 只保留旧存档/旧测试兼容，新向导禁止调用。
+snapshot 与 decomposition 必须共享同一 snapshotId/versionId。失败返回 `errorCode`、`message` 和 `violations`，并回滚 execution project、legacy Project、ledger commitment 和 request 索引。错误码固定为 `REC03_INPUT_INVALID`、`REC03_TEMPLATE_UNKNOWN`、`REC03_CONTENT_PACK_INVALID`、`REC03_SEGMENT_MAPPING_MISSING`、`REC03_BLUEPRINT_VIOLATION`、`REC03_REQUEST_PAYLOAD_MISMATCH`、`REC03_SNAPSHOT_REF_MISMATCH`。legacy `createProject({budgetTotalCapCents,...})` 只保留旧存档/旧测试兼容，新向导禁止调用。
 
 `ProjectExecutionState.project.snapshotId/versionId/formulaVersion` 指向该快照，`WorkPackage.sourceRef.instanceId` 指向模块实例。现有 legacy `createProject` API 保留给旧存档和测试兼容，不再作为新向导默认路径。`draft-open-modules` 只读迁移标记：新建项目不得生成该值，旧项目读取时按 `read` 模式打开并显示“历史模块数据不可编辑”。
 
 ### 4.4 存档与幂等
 
 快照深拷贝 `positioning/slots/instances/contentPacks`，`payloadHash` 使用既有 `frozenPayloadHash`。同一 `snapshotId` 重放不得生成第二份模块实例或预算承诺；`project_budget` 的幂等键仍由 execution project 使用。模板目录不复制进存档，只保存 `templateRevisionRefs`；读档缺少模板时保留快照并 fail-closed，不按当前模板漂移。
+
+`ContentPack.era` 是向后兼容的可选字段：既有 `RT-PACK-CONTENT` 等非 REC-03 runtime pack 可缺省 era，历史快照读取时将时代视为未知（不参与时代匹配过滤），不得因此拒绝读档；REC-03 内容目录中的 pack（包括 `PACK-EPISODES-P1`）必须提供有效 `era` 并通过 §4.2 加载校验。迁移不得向旧快照对象回填 era；旧快照的 `frozenPayloadHash` 必须按原始字段集合验证并保持不变。仅新建 REC-03 pack 的 hash 纳入 era 字段。验收覆盖缺 era 的 runtime pack 与旧快照可读、旧 payloadHash 不变、缺 era 的 REC-03 pack 被拒绝。
 
 ## 5. UI 与文案
 
@@ -207,9 +212,9 @@ newProject.modules.historyUnavailable
 | R03-01 | 5 个模板候选工作量/亲和数值是否采用 | 影响成本和市场平衡 | 主 AI 设计审核后，REC-05/11 校准 |
 | R03-02 | `MOD-SOCIAL-COOP` 是否在 P1 允许无线上线能力时保留 | 影响 techGate 与可用组合 | 设计审核；若否决改为 `MOD-PUZZLE-MASTERY`，不改接口 |
 | R03-03 | legacy `createProject` 保留旧存档/旧测试兼容；新向导仅走 REC-03 API | 新旧路径隔离 | 本稿已定，编码任务书照此执行 |
-| R03-04 | `PACK-EPISODES-P1` seed 和版本化加载校验 | ContentPack 是 REC-03 编码交付物，不是外部依赖；未交付则任务 BLOCKED，不进入验收 |
+| R03-04 | `PACK-EPISODES-P1` seed 和版本化加载校验 | ContentPack 是 REC-03 编码交付物，不是外部依赖；未交付则任务 BLOCKED，不进入验收；旧 runtime pack/快照可缺省 era |
 | R03-05 | D-04 `SEG-*` 与 consumer-segment 映射 | 映射表是 REC-03 内容交付物；未交付或校验失败则任务 BLOCKED，不进入验收 |
 
 ### 变更说明
 
-V0.1 首次把 REC-03 从占位问题拆成 5 个稳定模板、既有四通道公式、D-02 既有谓词、快照接口和验收证据。V0.1-R1 按独立设计审核修订：SkillDemand 改用现有公式；锁定 slotId/capacity；补 BlueprintDraftInput、preview/create 返回、错误、回滚和幂等契约；把内容包 seed 与 segment map 纳入编码交付及 BLOCKED 闸门；增加删除 progression 的玩家因果反馈验收。未改正式规格正文、冻结锚点或代码；候选数值仍是未平衡初值。
+V0.1 首次把 REC-03 从占位问题拆成 5 个稳定模板、既有四通道公式、D-02 既有谓词、快照接口和验收证据。V0.1-R1 按独立设计审核修订 SkillDemand、固定槽位、输入契约、内容包 seed、受众映射和玩家因果反馈。V0.1-R2 按设计复审补全 PositioningProfile 默认值与快照 hash 验收，限定 snapshotRef 只能复用已关联 Project 并校验项目元数据，明确 ContentPack era 的旧 runtime/快照兼容及历史 hash 不变。未改正式规格正文、冻结锚点或代码；候选数值仍是未平衡初值。

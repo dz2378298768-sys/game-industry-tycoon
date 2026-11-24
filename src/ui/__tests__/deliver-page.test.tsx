@@ -14,6 +14,9 @@ import { Deliver } from '@ui/pages/deliver'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
+import { referencePriceCents } from '@content/c1-content'
+import { TUNING } from '@content/tuning'
+import { citySalaryMultiplier } from '@content/queries'
 import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
 import { baseContext, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
 
@@ -80,36 +83,96 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(container.textContent).not.toMatch(/综合|总评|加权平均|质量上限|qualityScore|finalQualityScore|overall/)
   })
 
-  it('R-5：定价三档 + 营销预算三档来自 TUNING，标 NUMERIC_PENDING_P2，无自定义价格', () => {
+  it('ADJ-26：交付页三档显示真实派生数值，NUMERIC_PENDING 消失', () => {
     const { container } = renderDeliver()
     for (const id of ['low', 'medium', 'high']) {
       expect(screen.getByTestId(`deliver-pricing-${id}`)).toBeTruthy()
       expect(screen.getByTestId(`deliver-budget-${id}`)).toBeTruthy()
     }
-    const pending = (container.textContent?.match(/NUMERIC_PENDING_P2/g) ?? []).length
-    expect(pending).toBeGreaterThanOrEqual(6)
+    // 空组合（createExecutionProject 平台/受众为空）→ 默认参考价 $29.99 × factor
+    expect(container.textContent).toContain('$22.49')
+    expect(container.textContent).toContain('$29.99')
+    expect(container.textContent).toContain('$37.49')
+    expect(container.textContent).toContain('$100')
+    expect(container.textContent).toContain('$500')
+    expect(container.textContent).toContain('$1,500')
+    expect(container.textContent).not.toContain('NUMERIC_PENDING_P2')
+    expect(container.textContent).not.toContain('数值待标定')
+    expect(screen.getByTestId('deliver-pricing-estimated').textContent).toContain('按默认参考价估算')
     expect(screen.queryByTestId('deliver-custom-price')).toBeNull()
   })
 
-  it('W5-C3：三档数值保持 null 硬占位（无权威档位映射，禁止臆造终值），营销预算档同理', () => {
-    // ADJ-2026-11-24-19 §1 C3：referencePriceCents + basePurchaseConversion 无权威三档换算公式，
-    // 既有 TUNING 也无营销 dailyBudget 档位字段；故 fail-closed 保持，登记 OPEN-W5-C3-01。
-    const { pricingTiers, marketingBudgetTiers } = P1_UI_TUNING.delivery
+  it('ADJ-26：三档 TUNING 为真实结构（动态 factor + 固定日预算 cents），无占位状态', () => {
+    const { pricingTiers, marketingBudgetTiers, defaultReferencePriceCents } = P1_UI_TUNING.delivery
+    expect(defaultReferencePriceCents).toBe(2_999)
     expect(pricingTiers.map((t) => t.id)).toEqual(['low', 'medium', 'high'])
+    expect(pricingTiers.map((t) => t.factor)).toEqual([0.75, 1.0, 1.25])
     expect(marketingBudgetTiers.map((t) => t.id)).toEqual(['low', 'medium', 'high'])
-    for (const tier of pricingTiers) {
-      expect(tier.priceCents).toBeNull()
-      expect(tier.status).toBe('NUMERIC_PENDING_P2')
+    expect(marketingBudgetTiers.map((t) => t.dailyBudgetCents)).toEqual([10_000, 50_000, 150_000])
+    for (const tier of [...pricingTiers, ...marketingBudgetTiers]) {
+      expect('status' in tier).toBe(false)
     }
-    for (const tier of marketingBudgetTiers) {
-      expect(tier.dailyBudgetCents).toBeNull()
-      expect(tier.status).toBe('NUMERIC_PENDING_P2')
-    }
-    // UI 逐档显示"数值待标定"，且不渲染任何自定义价格输入框
-    const { container } = renderDeliver()
-    const pendingLabels = container.textContent?.match(/数值待标定/g) ?? []
-    expect(pendingLabels.length).toBeGreaterThanOrEqual(6)
-    expect(screen.queryByTestId('deliver-custom-price')).toBeNull()
+  })
+
+  /** ADJ-26 A6 接线夹具：走真实命令把项目推到可上市态，不手改任何状态字段。 */
+  function launchWithTier(tierId: 'low' | 'high') {
+    const gw = createGameWorld(42)
+    useGameStore.setState({ game: gw } as never)
+    gw.createCompany({ name: 'Wired Co', cityId: 'san_francisco' })
+    const salary = Math.round(TUNING.employee.defaultStartingSalaryCents * citySalaryMultiplier('san_francisco'))
+    const roles = [
+      { name: 'P', role: 'programmer' as const },
+      { name: 'D', role: 'designer' as const },
+      { name: 'A', role: 'artist' as const },
+      { name: 'Q', role: 'qa' as const },
+    ]
+    const hired = roles.map((r) => gw.hireEmployee({ name: r.name, role: r.role, skillLevel: 3, salaryMonthlyCents: salary }))
+    expect(hired.every((h) => h.success)).toBe(true)
+    // $70,000 帽：扫描实测 8/8 不耗尽，避免随机离职造成偶发暂停
+    const created = gw.createProject({
+      name: 'Wired Game', genreId: 'action', budgetTotalCapCents: 7_000_000,
+      plannedLaunchDay: 100, targetPlatformIds: ['arcade_pre_1975'], audienceSegmentIds: ['arcade_enthusiasts'],
+    })
+    expect(created.success).toBe(true)
+    const projectId = created.result!.id
+    expect(gw.advanceProjectPhase(projectId).success).toBe(true)
+    expect(gw.advanceProjectPhase(projectId).success).toBe(true)
+    for (const h of hired) if (h.result) expect(gw.assignEmployeeToProject(h.result.id, projectId, 1, 'generalist').success).toBe(true)
+    for (let day = 0; day < 100; day++) gw.advanceSimulation(1)
+    expect(gw.world.projects.find((p) => p.id === projectId)!.phase).toBe('READY_TO_LAUNCH')
+
+    const factor = P1_UI_TUNING.delivery.pricingTiers.find((t) => t.id === tierId)!.factor
+    const expectedPrice = Math.round(referencePriceCents('action', 'arcade_pre_1975', 'arcade_enthusiasts') * factor)
+    const expectedBudget = P1_UI_TUNING.delivery.marketingBudgetTiers.find((t) => t.id === tierId)!.dailyBudgetCents
+    // 模拟交付页 useEffect 的暂存（真实 UI 由 store.setDeliveryLaunchPlan 写入）
+    useGameStore.getState().setDeliveryLaunchPlan(projectId, { priceCents: expectedPrice, dailyBudgetCents: expectedBudget })
+    useGameStore.getState().refresh()
+    expect(useGameStore.getState().launchProject(projectId).success).toBe(true)
+    return { projectId, expectedPrice, expectedBudget }
+  }
+
+  it('ADJ-26 A6：高价档选择经内核命令写入 Product 定价 + 三渠道预算', () => {
+    const { projectId, expectedPrice, expectedBudget } = launchWithTier('high')
+    const state = useGameStore.getState()
+    const product = state.products.find((p) => p.sourceProjectId === projectId)!
+    expect(product.launchPriceCents).toBe(expectedPrice)
+    expect(product.pricePerUnitCents).toBe(expectedPrice)
+    const campaigns = state.marketingCampaigns.filter((c) => c.productId === product.id)
+    expect(campaigns.map((c) => c.channel).sort()).toEqual(['ads', 'expo', 'social'])
+    expect(campaigns.every((c) => c.dailyBudgetCents === expectedBudget)).toBe(true)
+    expect(state.deliveryLaunchPlans[projectId]).toBeUndefined()
+  })
+
+  it('ADJ-26 A6：低价档产生不同的产品定价（档位选择真实影响内核，非展示假反馈）', () => {
+    const low = launchWithTier('low')
+    const state = useGameStore.getState()
+    const product = state.products.find((p) => p.sourceProjectId === low.projectId)!
+    expect(product.pricePerUnitCents).toBe(low.expectedPrice)
+    // 同参考价下 1.25× 与 0.75× 产生不同定价：档位选择有真实内核后果
+    const ref = referencePriceCents('action', 'arcade_pre_1975', 'arcade_enthusiasts')
+    expect(Math.round(ref * 0.75)).not.toBe(Math.round(ref * 1.25))
+    const budgets = state.marketingCampaigns.filter((c) => c.productId === product.id)
+    expect(budgets.every((c) => c.dailyBudgetCents === low.expectedBudget)).toBe(true)
   })
 
   it('U3 / A-24 / A-25：FAIL 后 reasonCodes 与 eViolations 逐条持久展示 + 计数', () => {
@@ -246,11 +309,17 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(after.builds).toHaveLength(1)
     expect(after.builds[0]!.buildId).toBeTruthy()
 
+    // 真点击交付时已暂存默认中价档方案（空组合 → 默认参考价 $29.99）
+    expect(useGameStore.getState().deliveryLaunchPlans[projectId]).toEqual({ priceCents: 2_999, dailyBudgetCents: 50_000 })
     const legacy = useGameStore.getState().projects[0]!
     legacy.phase = 'READY_TO_LAUNCH'
     legacy.plannedLaunchDay = 0
     expect(useGameStore.getState().launchProject(projectId).success).toBe(true)
     expect(useGameStore.getState().products).toHaveLength(1)
+    // 上市经内核命令写入真实定价与三渠道预算
+    const launchedProduct = useGameStore.getState().products[0]!
+    expect(launchedProduct.pricePerUnitCents).toBe(2_999)
+    expect(useGameStore.getState().marketingCampaigns.filter((c) => c.productId === launchedProduct.id)).toHaveLength(3)
   })
 
   it('SUP-01 真点击 FAIL：真实字段缺失 → 生产求值 FAIL → 失败原因逐条可见、state 保持 READY_TO_DELIVER（R14）', () => {

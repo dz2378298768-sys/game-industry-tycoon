@@ -1,8 +1,9 @@
 import React from 'react'
-import { useGameStore, t, formatDay } from '@ui/state/game-store'
+import { useGameStore, t, formatDay, formatMoney } from '@ui/state/game-store'
 import { DELIVERY_FORM_STANDARDS } from '@domain/value-objects'
 import type { DeliveryForm, ExpectationBandLevel } from '@domain/entities/product-completeness'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
+import { referencePriceCents } from '@content/c1-content'
 import { ModalShell } from '@ui/components/modal-shell'
 
 /**
@@ -17,7 +18,9 @@ import { ModalShell } from '@ui/components/modal-shell'
  *  - 07B REVISION2：交付闸门评估经 mediator 只读查询暴露（evaluateDeliveryGate 真实判定产物），
  *    fail-closed —— 缺评估快照 / 项目非可交付态一律禁用确认按钮并带原因文案；
  *  - 方向档（市场预期 / 退款风险 / 品牌影响）直接消费领域权威标准 DELIVERY_FORM_STANDARDS（非数值）；
- *  - 定价三档 / 营销预算档数值来自 TUNING 且标 NUMERIC_PENDING_P2，不臆造终值（ADJ-16 R-5）；
+ *  - 定价三档按 referencePriceCents(genre, platform, segment) × factor 动态派生，
+ *    空组合兜底默认参考价并明示估算；营销三档为固定单渠道日预算（ADJ-26 A1~A6）；
+ *    玩家选择经 store 暂存，上市时由 launchProject 经内核命令写入 Product；
  *  - demo 形式 UI 不暴露（ADJ-12 S9-3 DEFER，A-26）。
  *  - 交付失败原因逐条持久展示（U3 / A-24 / A-25），数据来自 ExecutionProject.lastDeliveryFailure。
  */
@@ -49,6 +52,21 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const [channel, setChannel] = React.useState<'social' | 'expo' | 'ads'>('social')
   const [disclosureAck, setDisclosureAck] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
+
+  // ADJ-26 A2/A3：按玩家立项组合动态派生参考价；缺平台/受众或未知组合时兜底默认参考价。
+  const deliveryTuning = P1_UI_TUNING.delivery
+  const platformId = project?.targetPlatformIds[0] ?? ''
+  const segmentId = project?.audienceSegmentIds[0] ?? ''
+  const referenceCents = project !== undefined && platformId !== '' && segmentId !== ''
+    ? referencePriceCents(project.genreId, platformId, segmentId)
+    : deliveryTuning.defaultReferencePriceCents
+  const isEstimated = referenceCents === deliveryTuning.defaultReferencePriceCents
+  const priceCentsOf = (id: string): number => {
+    const tier = deliveryTuning.pricingTiers.find((x) => x.id === id) ?? deliveryTuning.pricingTiers[1]!
+    return Math.round(referenceCents * tier.factor)
+  }
+  const budgetCentsOf = (id: string): number =>
+    (deliveryTuning.marketingBudgetTiers.find((x) => x.id === id) ?? deliveryTuning.marketingBudgetTiers[1]!).dailyBudgetCents
 
   // P2 SUP-01：生产路径真实求值 + 登记后只读暴露 D-02 判定；缺快照/非可交付态 fail-closed（pass=false）。
   // 传入玩家显式披露勾选，使闸门资格与 UI 勾选同源（G-9）；勾选后重渲染即重算真实判定。
@@ -87,6 +105,11 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
 
   const handleSubmit = () => {
     if (!canSubmit || gateView === null) return
+    // ADJ-26 A6：交付时把玩家选择的三档派生值暂存，上市经内核命令写入 Product（非纯展示）。
+    store.setDeliveryLaunchPlan(projectId, {
+      priceCents: priceCentsOf(pricingTier),
+      dailyBudgetCents: budgetCentsOf(budgetTier),
+    })
     const outcome = store.submitDeliveryForProject(projectId, gateView.gate, 'full')
     if (outcome.success) setConfirmOpen(false)
   }
@@ -234,7 +257,7 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
         <h2 style={{ marginTop: 0 }}>{t('deliver.section.pricing')}</h2>
         <fieldset style={{ border: '1px solid var(--border)', borderRadius: 4, marginBottom: 12 }}>
           <legend style={{ fontSize: 13, padding: '0 6px' }}>{t('deliver.pricing.title')}</legend>
-          {P1_UI_TUNING.delivery.pricingTiers.map((tier) => (
+          {deliveryTuning.pricingTiers.map((tier) => (
             <label key={tier.id} style={{ display: 'block', fontSize: 13, padding: '4px 0' }} data-testid={`deliver-pricing-${tier.id}`}>
               <input
                 type="radio"
@@ -243,13 +266,13 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
                 checked={pricingTier === tier.id}
                 onChange={() => setPricingTier(tier.id)}
               />{' '}
-              {t(tier.labelKey)} — <span className="muted">{t('deliver.numeric.pending')}</span>
+              {t(tier.labelKey)} — <span className="muted">${(priceCentsOf(tier.id) / 100).toFixed(2)}</span>
             </label>
           ))}
         </fieldset>
         <fieldset style={{ border: '1px solid var(--border)', borderRadius: 4 }}>
           <legend style={{ fontSize: 13, padding: '0 6px' }}>{t('deliver.marketing.title')}</legend>
-          {P1_UI_TUNING.delivery.marketingBudgetTiers.map((tier) => (
+          {deliveryTuning.marketingBudgetTiers.map((tier) => (
             <label key={tier.id} style={{ display: 'block', fontSize: 13, padding: '4px 0' }} data-testid={`deliver-budget-${tier.id}`}>
               <input
                 type="radio"
@@ -258,7 +281,7 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
                 checked={budgetTier === tier.id}
                 onChange={() => setBudgetTier(tier.id)}
               />{' '}
-              {t(tier.labelKey)} — <span className="muted">{t('deliver.numeric.pending')}</span>
+              {t(tier.labelKey)} — <span className="muted">{formatMoney(tier.dailyBudgetCents)}</span>
             </label>
           ))}
           <div className="form-row" style={{ maxWidth: 260, marginTop: 8 }}>
@@ -270,7 +293,7 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
             </select>
           </div>
         </fieldset>
-        <p className="muted" style={{ fontSize: 11 }}>{t('deliver.numeric.hint')}</p>
+        {isEstimated && <p className="muted" style={{ fontSize: 11 }} data-testid="deliver-pricing-estimated">{t('deliver.pricing.estimated')}</p>}
       </div>
 
       {/* 交付确认弹窗：EA 披露声明确认（D-02 §4.2/§10 S5，UI-03）；提交禁用带原因（G-9） */}

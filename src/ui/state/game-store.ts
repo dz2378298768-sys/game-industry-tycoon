@@ -21,6 +21,9 @@ interface Message { id: string; text: string; type: 'info' | 'error' | 'success'
 interface ActionResult { success: boolean; message?: string | undefined }
 interface BudgetActionResult extends ActionResult { errorCode?: string | undefined; idempotent?: boolean | undefined }
 
+/** REC-02 / ADJ-26 A6：交付页选择的三档方案，UI 态暂存，上市成功后经内核命令写入 Product。 */
+interface DeliveryLaunchPlan { priceCents: number; dailyBudgetCents: number }
+
 /** 领域错误码 → i18n 文案键超集（DESIGN-UI-LAYER §3.2 / §9.1，按领域实际字符串逐字匹配） */
 export const ERROR_I18N: Record<string, string> = {
   NO_COMPANY: 'error.noCompany',
@@ -213,6 +216,9 @@ interface GameStore {
   submitDeliveryForProject(projectId: string, gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> }, deliveryForm?: 'full' | 'early_access'): { success: boolean; errorCode?: string | undefined; message?: string | undefined; result?: { completed: boolean; buildId: string | null } | undefined }
   /** 07B REVISION2：交付闸门评估只读投影（fail-closed，供 P-09 确认按钮接线） */
   getDeliveryGateEvaluation(projectId: string, form?: 'full' | 'early_access', disclosureProvided?: boolean): import('@application/mediators/game-world').DeliveryGateEvaluation | null
+  /** REC-02：交付页档位方案（UI 态暂存；真正写入 Product 由 launchProject 经内核命令完成） */
+  deliveryLaunchPlans: Record<string, DeliveryLaunchPlan>
+  setDeliveryLaunchPlan(projectId: string, plan: DeliveryLaunchPlan): void
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -230,6 +236,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   speed: 'paused',
   messages: [],
   locale: 'zh-CN',
+  deliveryLaunchPlans: {},
 
   init(seed = 42) {
     const gw = createGameWorld(seed)
@@ -298,14 +305,35 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const gw = get().game
     if (!gw) return { success: false, message: t('error.noCompany') }
     const result = gw.launchProject(projectId)
-    get().refresh()
     if (!result.success) {
+      get().refresh()
       const message = localizeError(result.errorCode, result.message)
       get().toast(message, 'error')
       return { success: false, message }
     }
+    // REC-02 / ADJ-26 A6：交付页档位选择经内核命令写入上市产品。
+    // 先定价（营销 setBudget 要求 launchPriceCents 非 null），再三渠道同值写入预算。
+    const plan = get().deliveryLaunchPlans[projectId]
+    const productId = result.result?.id
+    if (plan !== undefined && productId !== undefined) {
+      const priced = gw.setProductPrice({ productId, priceCents: plan.priceCents })
+      if (!priced.success) get().toast(localizeError(priced.errorCode, priced.message), 'error')
+      for (const channel of ['social', 'expo', 'ads'] as const) {
+        const budgeted = gw.setMarketingBudget({ productId, channel, dailyBudgetCents: plan.dailyBudgetCents })
+        if (!budgeted.success) get().toast(localizeError(budgeted.errorCode, budgeted.message), 'error')
+      }
+      // 方案按项目一次性消费，避免同项目重复上市时沿用旧档位
+      const nextPlans = { ...get().deliveryLaunchPlans }
+      delete nextPlans[projectId]
+      set({ deliveryLaunchPlans: nextPlans })
+    }
+    get().refresh()
     get().toast(t('project.launch.success'), 'success')
     return { success: true }
+  },
+
+  setDeliveryLaunchPlan(projectId, plan) {
+    set((state) => ({ deliveryLaunchPlans: { ...state.deliveryLaunchPlans, [projectId]: plan } }))
   },
 
   toggleProjectPause(projectId) {

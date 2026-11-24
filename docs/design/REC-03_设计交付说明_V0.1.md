@@ -18,10 +18,11 @@
 - `previewExecutionProject` / `createExecutionProject` 当前构造 `draft-open-modules-*` 快照和空 workload；REC-03 要求两者接收同一 `BlueprintDraftInput` 并在 application 层锁定快照、估算和分解。
 - 当前生产交付评估会从执行项目临时派生 `AUTO-*` 模板。REC-03 规格要求新建项目保存真实 `templateRevisionRefs` 与模块实例，旧项目继续按兼容路径读取，避免旧档漂移。
 - D-02 已有 `slotActive`、`contentTierAtLeast`、`techGatesSatisfied`、`segmentCovered`、`uspBackedBy`、`depthAtLeast` 等谓词，规格没有新增综合评分或谓词。
+- 现有项目同时使用 D-04 `SEG-*` claims 和 legacy consumer-segment ID；规格已明确要求显式映射表，禁止把两套 ID 直接混用。该映射是编码前的待裁定项。
 
 ## 风险与阻塞判断
 
-本稿没有发现必须立即 BLOCKED 的架构冲突，但列出四项编码前必须确认的待裁定：模板候选数值、社交模块是否需要线上能力门槛、legacy API 兼容边界、内容包种子是否可用。若内容目录没有合法 `ContentPack`，必须把任务置为 BLOCKED，不能以空内容包伪造通过。
+本稿没有发现必须立即 BLOCKED 的架构冲突，但列出五项编码前必须确认的待裁定：模板候选数值、社交模块是否需要线上能力门槛、legacy API 兼容边界、内容包种子是否可用、D-04 与 legacy consumer-segment 的显式映射。若内容目录没有合法 `ContentPack` 或受众映射，必须把任务置为 BLOCKED，不能以空内容包或字符串猜测伪造通过。
 
 ## 交接给设计审核
 

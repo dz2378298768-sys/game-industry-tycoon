@@ -85,6 +85,8 @@ PositioningFit = |claimedTags ∩ supportedTags| / |claimedTags ∪ supportedTag
 
 Step 1 在 `NewProject` 加载目录并生成模块草稿：默认选择 `MOD-CORE-ACTION + MOD-CONTENT-EPISODES`，支援模块为空；玩家可加一个或两个 support。锁定前调用 `resolveRefs(..., 'draft')` 与组合校验，显示每个模块的工作量/市场影响预览。
 
+受众 ID 必须分清两套现有数据：D-01 `PositioningProfile.targetSegmentClaims` 使用 D-04 `SEG-*` tagId；legacy `Project.audienceSegmentIds` 和 C1 销量数据使用 `arcade_enthusiasts` 等 consumer-segment ID。REC-03 不允许字符串猜测或直接混用。新增内容数据提供显式、可审计的 `d04TagId ↔ consumerSegmentId` 映射；映射缺失时可保存草稿但锁定 fail-closed，并返回“受众映射不可用”。创建 legacy Project 时由该映射生成 `audienceSegmentIds`，快照始终保留原始 `SEG-*` claims。
+
 Step 2 的 `previewExecutionProject` 与 `createExecutionProject` 增加同一份 `BlueprintDraftInput`（或已锁定 snapshot 引用），由 application 负责：
 
 1. 解析 D-04 引用；
@@ -156,6 +158,7 @@ newProject.modules.historyUnavailable
 | R03-02 | `MOD-SOCIAL-COOP` 是否在 P1 允许无线上线能力时保留 | 影响 techGate 与可用组合 | 设计审核；若否决改为 `MOD-PUZZLE-MASTERY`，不改接口 |
 | R03-03 | 旧 `createExecutionProject` 是否保留为公开兼容 API | 影响旧存档和测试迁移 | 主 AI，编码前落任务书 |
 | R03-04 | 内容包种子是否已满足 1970–2026 时代范围 | 影响内容槽可锁定 | 编码前内容加载检查；缺失则 BLOCKED |
+| R03-05 | D-04 `SEG-*` 与现有 consumer-segment ID 的显式映射表 | 影响销量接线和旧 Project 兼容 | 内容/系统 Agent；缺失则锁定 BLOCKED |
 
 ### 变更说明
 

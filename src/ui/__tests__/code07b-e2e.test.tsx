@@ -15,8 +15,6 @@ import { ProjectDetail } from '@ui/pages/project-detail'
 import { Deliver } from '@ui/pages/deliver'
 import { useGameStore, t } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
-import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
-import { baseContext, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
 
 /** CODE-07B 端到端闭环：UI 页面链路可达 + store 状态链 + A-37 存读档一致性。 */
 describe('CODE-07B 端到端闭环（批次 07B）', () => {
@@ -116,19 +114,10 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     expect(afterRework.project.reworkSessionId).toBe(afterRework.reworkSessions[0]!.sessionId)
     detail.unmount()
 
-    // —— 4. 交付 PASS：真点击 UI 确认按钮（07B REVISION2，不再用 {pass:true} 夹具绕过按钮）——
-    // 夹具：WP 状态机推进到可交付态（返工夹具驱动）；gate 用 domain 真实 evaluateDeliveryGate 判定。
+    // —— 4. 交付 PASS：真点击 UI 确认按钮（P2 SUP-01，生产路径真实求值 + 登记，无 gate 夹具）——
+    // 游戏态推进到可交付态；gate 快照由 Deliver 渲染时的生产路径 evaluateRuntimeDeliveryGate 生成。
     afterRework.project.state = 'READY_TO_DELIVER'
-    const gateResult = evaluateDeliveryGate(baseContext(), p1Templates(), 'full', tuning())
-    expect(gateResult.gate).toBe('PASS')
-    useGameStore.getState().game!.registerDeliveryGateEvaluation(projectId, 'full', {
-      pass: gateResult.gate === 'PASS',
-      violations: gateResult.errorCodes.map((code) => ({ code, severity: 'P1' as const })),
-      reasonCodes: [...gateResult.errorCodes],
-      checkedAt: gateResult.checkedAt,
-      source: 'd02-evaluateDeliveryGate',
-    })
-
+    const registerSpy = vi.spyOn(useGameStore.getState().game!, 'registerDeliveryGateEvaluation')
     const submitSpy = vi.spyOn(useGameStore.getState().game!, 'submitDeliveryForProject')
     const deliverView = render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)
     expect(screen.getByTestId('deliver-title')).toBeTruthy()
@@ -140,6 +129,9 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     // 真点击触发内核命令，且传的是 UI 只读查询返回的真实 gate（非命令级夹具）
     expect(submitSpy).toHaveBeenCalledTimes(1)
     expect(submitSpy.mock.calls[0]![1].pass).toBe(true)
+    // SUP-01：生产路径真实登记快照（测试无任何 registerDeliveryGateEvaluation 注入）
+    expect(registerSpy).toHaveBeenCalled()
+    expect(registerSpy.mock.calls.at(-1)![2].source).toBe('d02-evaluateDeliveryGate')
 
     const afterDelivery = useGameStore.getState().game!.getExecutionProject(projectId)!
     expect(afterDelivery.project.state).toBe('COMPLETED')

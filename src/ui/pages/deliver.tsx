@@ -42,8 +42,6 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const store = useGameStore()
   const project = store.projects.find((p) => p.id === projectId)
   const deliveryStatus = store.getDeliveryStatus(projectId)
-  // 07B REVISION2：只读查询暴露 D-02 判定；缺快照/非可交付态 fail-closed（pass=false）。
-  const gateView = store.getDeliveryGateEvaluation(projectId, 'full')
   const isBankrupt = store.company?.status === 'bankrupt'
 
   const [pricingTier, setPricingTier] = React.useState('medium')
@@ -51,6 +49,10 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
   const [channel, setChannel] = React.useState<'social' | 'expo' | 'ads'>('social')
   const [disclosureAck, setDisclosureAck] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
+
+  // P2 SUP-01：生产路径真实求值 + 登记后只读暴露 D-02 判定；缺快照/非可交付态 fail-closed（pass=false）。
+  // 传入玩家显式披露勾选，使闸门资格与 UI 勾选同源（G-9）；勾选后重渲染即重算真实判定。
+  const gateView = store.getDeliveryGateEvaluation(projectId, 'full', disclosureAck)
 
   if (!project) {
     return (

@@ -12,6 +12,7 @@ import { seedInitialAwareness } from '@content/market-inputs'
 import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway, computeCashForecast } from '@domain/value-objects/finance-formulas'
+import { evaluateRuntimeDeliveryGate } from './delivery-gate-context'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
 import {
@@ -1094,6 +1095,7 @@ export class GameWorld {
   getDeliveryGateEvaluation(
     projectId: string,
     form: import('@domain/entities/project-execution').DeliveryForm = 'full',
+    disclosureProvided = false,
   ): DeliveryGateEvaluation {
     const fail = (unavailableReason: string): DeliveryGateEvaluation => ({
       available: false,
@@ -1110,6 +1112,15 @@ export class GameWorld {
     if (exec.project.state !== 'READY_TO_DELIVER') {
       return fail('项目未处于可交付态（READY_TO_DELIVER）')
     }
+
+    // P2 SUP-01：生产路径真实求值 + 登记（非测试夹具）。项目处于可交付态时，
+    // 每次查询都用真实 ExecutionProject + legacy Project + 已发布目录派生 EvaluationContext，
+    // 交领域纯函数 evaluateDeliveryGate 判定后写入快照 Map；求值任一环节失败一律 fail-closed。
+    try {
+      this.refreshDeliveryGateEvaluation(projectId, form, disclosureProvided)
+    } catch (error) {
+      return fail(`D-02 交付闸门评估不可用：${error instanceof Error ? error.message : String(error)}`)
+    }
     const snapshot = this.deliveryGateEvaluations.get(`${projectId}::${form}`)
     if (snapshot === undefined) return fail('D-02 交付闸门评估快照不可用')
 
@@ -1125,6 +1136,43 @@ export class GameWorld {
       source: snapshot.source ?? 'd02-evaluateDeliveryGate',
       checkedAt: snapshot.checkedAt ?? null,
     }
+  }
+
+  /**
+   * P2 SUP-01：生产路径求值入口（真玩家路径调用，非夹具、非 UI 直接注入）。
+   * 从真实运行状态派生 EvaluationContext，调用领域 evaluateDeliveryGate，把真实判定登记为快照。
+   * 返回值即登记产物，供测试断言"快照由真实内核计算"；不修改内核 submitDelivery 语义。
+   */
+  refreshDeliveryGateEvaluation(
+    projectId: string,
+    form: import('@domain/entities/project-execution').DeliveryForm = 'full',
+    disclosureProvided = false,
+  ): DeliveryGateEvaluationInput {
+    const exec = this.executionProjects.get(projectId)
+    if (exec === undefined) throw new Error('项目未登记 ExecutionProject')
+    // 双索引：projectId 可能是 legacy id，find 时用任一 id 命中真实 Project。
+    const project = this.world.projects.find((p) => p.id === projectId)
+      ?? this.world.projects.find((p) => p.id === exec.project.projectId)
+    if (project === undefined) throw new Error('legacy Project 不存在，无法派生 EvaluationContext')
+
+    const evaluated = evaluateRuntimeDeliveryGate({
+      execution: exec,
+      project,
+      dayIndex: this.dayIndex,
+      disclosureProvided,
+      form,
+    })
+    const { result } = evaluated
+    const input: DeliveryGateEvaluationInput = {
+      pass: result.gate === 'PASS',
+      // FAIL 的五码均为闸门阻断，按 E 级映射，保证 UI pass 与内核 evaluateGate 同语义。
+      violations: result.errorCodes.map((code) => ({ code, severity: 'E' })),
+      reasonCodes: [...result.errorCodes],
+      checkedAt: result.checkedAt,
+      source: 'd02-evaluateDeliveryGate',
+    }
+    this.registerDeliveryGateEvaluation(projectId, form, input)
+    return input
   }
 
   /**

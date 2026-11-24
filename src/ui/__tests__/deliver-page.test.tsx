@@ -15,7 +15,7 @@ import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
 import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
-import { baseContext, baseSnapshot, completeStructure, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
+import { baseContext, p1Templates, tuning } from '../../domain/value-objects/__tests__/product-completeness-fixtures'
 
 /** P-09 交付与上市页验收：A-24/A-25 U3 失败原因持久、A-26 无 demo、R-5 定价三档、A-42 披露确认。 */
 describe('P-09 交付与上市页（批次 07B）', () => {
@@ -206,13 +206,17 @@ describe('P-09 交付与上市页（批次 07B）', () => {
 
   // ===== 07B REVISION2：P-09 真点击链路（核心验收：按钮可用 + 点击闭合，不绕过按钮） =====
 
-  it('07B-REV2 fail-closed：可交付态但无 D-02 评估快照 → 提交禁用带原因，不伪造 pass', () => {
-    readyToDeliver()
+  it('07B-REV2/SUP-01 fail-closed：上下文无法派生 → 提交禁用带原因，不伪造 pass', () => {
+    const projectId = readyToDeliver()
+    // SUP-01：生产路径会真实求值并登记；这里移除 legacy Project 使派生失败，
+    // 验证 fail-closed 仍是诚实降级（不是写死禁用、不伪造 pass）。
+    const gw = useGameStore.getState().game!
+    gw.world.projects = gw.world.projects.filter((p) => p.id !== projectId)
     renderDeliver()
     fireEvent.click(screen.getByTestId('deliver-submit-open'))
     const confirm = screen.getByTestId('deliver-submit-confirm') as HTMLButtonElement
     expect(confirm.disabled).toBe(true)
-    expect(screen.getByTestId('deliver-submit-blocked').textContent).toContain('评估快照不可用')
+    expect(screen.getByTestId('deliver-submit-blocked').textContent).toContain('评估不可用')
     expect(screen.queryByTestId('deliver-gate-reasons')).toBeNull()
   })
 
@@ -249,15 +253,15 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(useGameStore.getState().products).toHaveLength(1)
   })
 
-  it('07B-REV2 真点击 FAIL：真实 gate FAIL → 失败原因逐条可见、state 保持 READY_TO_DELIVER（R14）', () => {
+  it('SUP-01 真点击 FAIL：真实字段缺失 → 生产求值 FAIL → 失败原因逐条可见、state 保持 READY_TO_DELIVER（R14）', () => {
     const projectId = readyToDeliver()
-    // 真实 FAIL：清空蓝图实例 → blocking 项未满足 → evaluateDeliveryGate 产出 D02-MISSING-CORE 等码。
-    const gate = registerRealGate(projectId, {
-      snapshot: baseSnapshot({ structure: completeStructure({ instances: [] }) }),
-      disclosureProvided: false,
-    })
-    expect(gate.gate).toBe('FAIL')
-    expect(gate.errorCodes.length).toBeGreaterThan(0)
+    // 真实 FAIL：玩家把项目正式名清空 → fieldNonEmpty('finalTitle') 未满足 →
+    // 生产路径 evaluateDeliveryGate 真实产出 D02-MISSING-CORE（非夹具注入）。
+    useGameStore.getState().projects[0]!.name = ''
+    const gate = useGameStore.getState().game!.getDeliveryGateEvaluation(projectId, 'full')!
+    expect(gate.available).toBe(true)
+    expect(gate.pass).toBe(false)
+    expect(gate.reasonCodes.length).toBeGreaterThan(0)
 
     renderDeliver()
     fireEvent.click(screen.getByTestId('deliver-submit-open'))
@@ -269,11 +273,11 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     const after = useGameStore.getState().game!.getExecutionProject(projectId)!
     expect(after.project.state).toBe('READY_TO_DELIVER')
     expect(after.project.deliveryFailures).toBe(1)
-    expect(after.project.lastDeliveryFailure!.reasonCodes).toEqual(gate.errorCodes)
+    expect(after.project.lastDeliveryFailure!.reasonCodes).toEqual(gate.reasonCodes)
     expect(after.builds).toHaveLength(0)
     // U3：失败原因逐条可见（真点击后 UI 重渲染，非命令级夹具）
-    expect(screen.getByTestId('deliver-failure-reasons').querySelectorAll('li')).toHaveLength(gate.errorCodes.length)
-    gate.errorCodes.forEach((code, idx) => {
+    expect(screen.getByTestId('deliver-failure-reasons').querySelectorAll('li')).toHaveLength(gate.reasonCodes.length)
+    gate.reasonCodes.forEach((code, idx) => {
       expect(screen.getByTestId(`deliver-failure-reason-${idx}`).textContent).toContain(code)
     })
   })

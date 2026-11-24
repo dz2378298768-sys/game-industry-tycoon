@@ -124,7 +124,7 @@ export interface CreateProjectInput {
   day: number
   hrb?: number
   budgetCapacityCents: number
-  /** FIN AvailableCash at setup；BudgetCapacity 必须 ≤ 它（§5.4-1）。 */
+  /** FIN AvailableCash at setup；承诺额 round(hrb × BudgetCapacity) 必须 ≤ 它（§5.4-1；hrb 缺省 0.5）。 */
   availableCashCents: number
   deliveryFormTarget?: DeliveryForm
   teamRefs?: string[]
@@ -192,7 +192,7 @@ export function isInReworkDisplay(state: ProjectExecutionState): boolean {
 
 /**
  * 立项：SETUP → ACTIVE（§4.3 首行）。
- * 前置：绑定唯一 snapshotId、依赖无环（拆解内校验）、BudgetCapacity ≤ AvailableCash。
+ * 前置：绑定唯一 snapshotId、依赖无环（拆解内校验）、承诺额 round(hrb × BudgetCapacity) ≤ AvailableCash（hrb 缺省 0.5）。
  * 副作用：创建 WPs；建 `project_budget` 承诺（**不改现金**，BR-3）。
  */
 export function createProjectExecution(

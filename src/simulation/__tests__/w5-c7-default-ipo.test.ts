@@ -21,7 +21,7 @@ import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
 
 const DEFAULT_BUDGET_CENTS = TUNING.company.minProjectBudgetCents // 2,000,000 cents = $20,000
-const UI_DEFAULT_CAPACITY_USD = 136_000 // ADJ-30 §3.2 定值（new-project.tsx:55），HRB 保守 0.45 → 承诺 $61,200
+const UI_DEFAULT_CAPACITY_USD = TUNING.project.defaultBudgetCapacityUsd
 const HRB_CONSERVATIVE = TUNING.project.hrbConservativeRatio // 0.45
 const MIN_VIABLE_CAP_CENTS = 6_120_000 // $61,200：B-01b 确定性扫描 N=8 最小可行预算帽（非锚点，实测定值）
 const DEFAULT_SALARY_CENTS = TUNING.employee.defaultStartingSalaryCents // 130,000 cents = $1,300
@@ -57,25 +57,43 @@ interface RunResult {
 }
 
 /** 按天推进 200 天，记录关键节点；不改任何数值。 */
-function runDefaultPlay(budgetCapCents: number): RunResult {
+function runDefaultPlay(budgetCapCents: number, useExecutionWizard = false): RunResult {
   const gw = createGameWorld(42)
   const company = gw.createCompany({ name: 'Default Studio', cityId: 'san_francisco' })
   const initialCashCents = gw.finance.getCashBalance(company.id)
   const salaryCents = Math.round(DEFAULT_SALARY_CENTS * citySalaryMultiplier(company.cityId))
+  let projectId: string
+  if (useExecutionWizard) {
+    const budgetCapacityCents = UI_DEFAULT_CAPACITY_USD * 100
+    const preview = gw.previewExecutionProject({ hrb: HRB_CONSERVATIVE, budgetCapacityCents })
+    expect(preview.success).toBe(true)
+    expect(preview.result?.budgetCapCents).toBe(MIN_VIABLE_CAP_CENTS)
+    const created = gw.createExecutionProject({
+      name: 'Default Pioneer', genreId: 'action', hrb: HRB_CONSERVATIVE, budgetCapacityCents,
+    })
+    expect(created.success).toBe(true)
+    const commitments = gw.finance.getLedger().getCommitments(company.id, { state: 'committed' })
+      .filter((c) => c.sourceType === 'project_budget')
+    expect(commitments).toHaveLength(1)
+    expect(commitments[0]?.amountCents).toBe(MIN_VIABLE_CAP_CENTS)
+    expect(commitments.reduce((sum, c) => sum + c.amountCents, 0)).toBe(6_120_000)
+    projectId = gw.world.projects.find((p) => p.name === 'Default Pioneer')!.id
+  } else {
+    const created = gw.createProject({
+      name: 'Default Pioneer',
+      genreId: 'action',
+      budgetTotalCapCents: budgetCapCents,
+      plannedLaunchDay: HORIZON_DAYS,
+      targetPlatformIds: ['arcade_pre_1975'],
+      audienceSegmentIds: ['arcade_enthusiasts'],
+    })
+    expect(created.success).toBe(true)
+    projectId = created.result!.id
+  }
   const hired = ROLES.map((r) =>
     gw.hireEmployee({ name: r.name, role: r.role, skillLevel: 3, salaryMonthlyCents: salaryCents }),
   )
-  const created = gw.createProject({
-    name: 'Default Pioneer',
-    genreId: 'action',
-    budgetTotalCapCents: budgetCapCents,
-    plannedLaunchDay: HORIZON_DAYS,
-    targetPlatformIds: ['arcade_pre_1975'],
-    audienceSegmentIds: ['arcade_enthusiasts'],
-  })
   expect(hired.every((h) => h.success)).toBe(true)
-  expect(created.success).toBe(true)
-  const projectId = created.result!.id
 
   // CONCEPT → PRE_PRODUCTION → PRODUCTION，全员 100% 分配（默认招聘满配）
   expect(gw.advanceProjectPhase(projectId).success).toBe(true)
@@ -155,7 +173,7 @@ describe('W5-C7 默认配置走上市验证（S4，不臆造数值、不改锚�
   it('路径 B【默认配置成功】：UI 默认 $136,000 × HRB 0.45 = 承诺帽 $61,200 → 上市成功、现金全程为正', () => {
     const cap = Math.round(UI_DEFAULT_CAPACITY_USD * 100 * HRB_CONSERVATIVE)
     expect(cap).toBe(MIN_VIABLE_CAP_CENTS) // 6,120,000 cents = $61,200
-    const r = runDefaultPlay(cap)
+    const r = runDefaultPlay(cap, true)
     logRun('B:default$61.2k', r)
     expect(r.initialCashCents).toBe(12_000_000)
     expect(r.curve.map((c) => c.day)).toEqual([0, 30, 60, 200])

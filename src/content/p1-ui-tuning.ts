@@ -20,31 +20,30 @@ export const P1_UI_TUNING = {
   },
 
   /**
-   * ADJ-12 S9-1 / ADJ-16 R-5 / ADJ-2026-11-24-19 §1 C3：定价三档名称固定，
-   * 数值保持 NUMERIC_PENDING_P2 硬占位，UI fail-closed 显示"数值待标定"。
-   *
-   * W5-C3 派生可行性核查（不臆造终值）：
-   *  - `referencePriceCents(genre, platform, segment)`（c1-content.ts:212）是单一组合的
-   *    权威参考价，用于需求池 value=clamp(ref/price,0.5,1.5)，**没有** low/medium/high
-   *    三档到该参考价的权威映射（ADJ-12 S9-1 仅"引用 p0 §4.3 区间取整"而规格未给区间数值）；
-   *  - `basePurchaseConversion=0.05` 是购买转化率，不是价格倍率，不能据此把参考价换算成三档；
-   *  - 交付页立项的 audienceSegmentIds / targetPlatformIds 可能为空，缺具体组合时按 C3 明示
-   *    保持占位并登记 OPEN。
-   *  - 营销预算档 × 单渠道（S9-2）在既有 TUNING 中无对应 dailyBudgetCents 字段
-   *    （`marketingResponseScaleCents` 是生命周期阶段响应尺度，非预算档，语义不符）。
-   * 结论：本批不派生、不填值，保持 fail-closed + OPEN（OPEN-W5-C3-01），上报主 AI 裁定。
+   * ADJ-2026-11-24-26 A1~A6：定价/营销三档真实口径（解除 NUMERIC_PENDING_P2）。
+   *  - 定价用动态倍率 factor × referencePriceCents(genre, platform, segment)，
+   *    空组合/未知组合兜底 defaultReferencePriceCents = 2,999 cents（$29.99），
+   *    UI 明示"按默认参考价估算"；factor 对齐既有 AI 定价锚点
+   *    （ai-planner.ts:285 质量 0/50/100 分），落在权威夹逼带 [0.5,1.5]×ref 内。
+   *  - 营销用固定绝对 cents（launch scale 50,000 cents = $500/天/渠道的 0.2×/1×/3×），
+   *    三渠道同值（渠道差异由 CHANNEL_FACTOR 体现，不重复计价）；
+   *    全部落在合法域 [1,000, 500,000] cents 内。
+   *  - 任一档位选择必须在上市时经 setProductPrice/setMarketingBudget 写入内核（见 deliver.tsx / game-store.ts）。
    */
   delivery: {
+    /** ADJ-26 A1/A2：相对参考价的动态倍率，不存绝对 priceCents。 */
     pricingTiers: [
-      { id: 'low', labelKey: 'deliver.pricing.low', priceCents: null, status: 'NUMERIC_PENDING_P2' },
-      { id: 'medium', labelKey: 'deliver.pricing.medium', priceCents: null, status: 'NUMERIC_PENDING_P2' },
-      { id: 'high', labelKey: 'deliver.pricing.high', priceCents: null, status: 'NUMERIC_PENDING_P2' },
+      { id: 'low', labelKey: 'deliver.pricing.low', factor: 0.75 },
+      { id: 'medium', labelKey: 'deliver.pricing.medium', factor: 1.0 },
+      { id: 'high', labelKey: 'deliver.pricing.high', factor: 1.25 },
     ],
-    /** ADJ-12 S9-2：营销预算档 × 单渠道；3 档预算数值待标定。 */
+    /** ADJ-26 A3：空组合兜底参考价（= C1_DEFAULT_REFERENCE_PRICE_CENTS）。 */
+    defaultReferencePriceCents: 2_999,
+    /** ADJ-26 A4/A5：单渠道日预算固定绝对 cents，三渠道同值。 */
     marketingBudgetTiers: [
-      { id: 'low', labelKey: 'deliver.marketing.low', dailyBudgetCents: null, status: 'NUMERIC_PENDING_P2' },
-      { id: 'medium', labelKey: 'deliver.marketing.medium', dailyBudgetCents: null, status: 'NUMERIC_PENDING_P2' },
-      { id: 'high', labelKey: 'deliver.marketing.high', dailyBudgetCents: null, status: 'NUMERIC_PENDING_P2' },
+      { id: 'low', labelKey: 'deliver.marketing.low', dailyBudgetCents: 10_000 },
+      { id: 'medium', labelKey: 'deliver.marketing.medium', dailyBudgetCents: 50_000 },
+      { id: 'high', labelKey: 'deliver.marketing.high', dailyBudgetCents: 150_000 },
     ],
   },
 

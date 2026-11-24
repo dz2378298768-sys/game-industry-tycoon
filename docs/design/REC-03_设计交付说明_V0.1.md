@@ -4,9 +4,9 @@
 |---|---|
 | 任务 | REC-03 最小产品创造表达 |
 | 交付物 | `docs/design/REC-03_最小产品创造表达设计规格_V0.1.md` |
-| 状态 | DESIGN_DRAFT，待独立设计审核 |
+| 状态 | DESIGN_DRAFT，按设计审核 V0.1 修订，待独立复审 |
 | 代码 | 未修改 |
-| 规格正文 | 未修改 |
+| 正式冻结规格 | 未修改 |
 
 ## 结论
 
@@ -15,27 +15,41 @@
 ## 已核对的实现边界
 
 - 当前 `NewProject` 只显示 `module-slots-failclosed`，没有提交模块选择。
-- `previewExecutionProject` / `createExecutionProject` 当前构造 `draft-open-modules-*` 快照和空 workload；REC-03 要求两者接收同一 `BlueprintDraftInput` 并在 application 层锁定快照、估算和分解。
+- `previewExecutionProject` / `createExecutionProject` 当前构造 `draft-open-modules-*` 快照和空 workload；修订稿把二者输入固定为 `BlueprintDraftInput` discriminated union，并定义字段约束、返回类型、snapshot/decomposition identity、回滚和 requestId 幂等。
 - 当前生产交付评估会从执行项目临时派生 `AUTO-*` 模板。REC-03 规格要求新建项目保存真实 `templateRevisionRefs` 与模块实例，旧项目继续按兼容路径读取，避免旧档漂移。
 - D-02 已有 `slotActive`、`contentTierAtLeast`、`techGatesSatisfied`、`segmentCovered`、`uspBackedBy`、`depthAtLeast` 等谓词，规格没有新增综合评分或谓词。
-- 现有项目同时使用 D-04 `SEG-*` claims 和 legacy consumer-segment ID；规格已明确要求显式映射表，禁止把两套 ID 直接混用。该映射是编码前的待裁定项。
+- 现有项目同时使用 D-04 `SEG-*` claims 和 legacy consumer-segment ID；修订稿将显式映射、校验、缺失错误、legacy 转换写成 REC-03 内容交付物。
+- 仓库没有 REC-03 ContentPack seed；修订稿把 `PACK-EPISODES-P1`、`ContentPack.era`、非零工作量和加载校验纳入编码交付，明确运行时零工作量 `RT-PACK-CONTENT` 不可替代。
+- `estimateSkillDemand` 实际从 `W_d/kPeakEfficiency[d]` 派生；修订稿采用该现有实现，声明 `ModuleTemplate.skillLoad` 在 P1 未生效，并要求差异验收读取实际 `SkillDemandChannel`。
 
 ## 风险与阻塞判断
 
-本稿没有发现必须立即 BLOCKED 的架构冲突，但列出五项编码前必须确认的待裁定：模板候选数值、社交模块是否需要线上能力门槛、legacy API 兼容边界、内容包种子是否可用、D-04 与 legacy consumer-segment 的显式映射。若内容目录没有合法 `ContentPack` 或受众映射，必须把任务置为 BLOCKED，不能以空内容包或字符串猜测伪造通过。
+修订稿未把缺少的内容 seed 或受众映射当作外部依赖等待：两者明确属于 REC-03 编码交付物。若任一 seed/映射缺失或加载校验失败，REC-03 必须保持 BLOCKED，不得进入实现验收，也不得用零工作量 pack 或猜测 ID 通过。剩余设计裁定项是候选数值采纳与 `MOD-SOCIAL-COOP` 技术语义；它们不改变固定接口，编码任务书须由主 AI 在设计复审通过后明确是否采用。
+
+## 审核问题关闭
+
+| 审核问题 | 修订 |
+|---|---|
+| P1-01 SkillDemand 公式冲突 | 采用 `estimateSkillDemand(W_d, tuning)` 现有公式；`skillLoad` 标注为 P1 未生效候选元数据；验收使用真实输出 |
+| P1-02 BlueprintDraftInput 契约不足 | 补 discriminated union、字段唯一/容量约束、preview/create 返回、错误码、snapshot/decomposition identity、回滚和 requestId 幂等 |
+| P1-03 ContentPack seed 不存在 | 纳入 `PACK-EPISODES-P1`、era、非零工作量校验及测试 fixture；缺失即 BLOCKED |
+| P1-04 SEG 映射不存在 | 纳入版本化映射、加载校验、结构化错误与 legacy 转换；缺失即 BLOCKED |
+| P2-05 玩家因果反馈不足 | 增加删除 progression 前后 work/affinity/UI 文案及 D-02 详情断言 |
+| slot/numeric notes | 固定三个 slotId/capacity/domainAcceptance，并补候选值来源与范围 |
 
 ## 交接给设计审核
 
 请独立检查：
 
-1. 5 个模板是否真的落在 D-01 P1 槽位和 D-04 词表边界内；
-2. 候选数值是否足以产生可解释差异但没有越权宣称平衡完成；
-3. `BlueprintDraftInput → snapshot → execution decomposition` 的接口是否可由当前代码实现；
-4. 旧 `draft-open-modules` 存档和新 REC03 项目是否有清晰兼容行为；
-5. 验收是否能证明真实 UI、四通道差异、D-02 结果和反证，而不是只断言模块数组非空。
+1. 5 个模板与固定槽位是否符合 D-01/D-04 类型边界；
+2. 候选数值来源、范围和未平衡声明是否足够清晰；
+3. 输入合同、ContentPack seed 与 SEG 映射是否可按文本直接编码；
+4. `draft-open-modules` 旧数据兼容和 REC-03 新向导边界是否清楚；
+5. UI 因果示例与真实 `estimateSkillDemand` 验收是否足以证明玩家可理解的差异。
 
 ## 变更记录
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | V0.1 | 2026-11-24 | 首次交付 REC-03 设计稿与实现边界说明 |
+| V0.1-R1 | 2026-11-24 | 按独立设计审核 V0.1 修订：技能公式、输入接口、内容包 seed、受众映射、玩家因果反馈、固定槽位与候选数值来源 |

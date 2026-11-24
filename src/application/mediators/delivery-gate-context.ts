@@ -14,6 +14,7 @@
  *    genre→archetype 映射是确定性的游戏规则，不是随机或手写 pass。
  */
 import { createP1Catalog, loadVocabulary } from '@content/d04-vocabulary'
+import { REC03_MODULES } from '@content/rec03-content'
 import genreSegmentAffinity from '@content/genre-segment-affinity.json'
 import { DEFAULT_COMPLETENESS_TUNING } from '@domain/value-objects/product-completeness-tuning'
 import { buildP1ChecklistTemplates } from '@domain/value-objects/product-completeness-checklists'
@@ -57,6 +58,7 @@ export interface RuntimeGateInput {
   disclosureProvided?: boolean
   /** 交付形式，默认 full。 */
   form?: DeliveryForm
+  snapshot?: DesignVersionSnapshot | undefined
 }
 
 export interface RuntimeGateEvaluation {
@@ -267,7 +269,9 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
   const { execution, project, dayIndex } = input
   const form = input.form ?? 'full'
   const disclosureProvided = input.disclosureProvided === true
-  const { frozen, templatesById } = deriveFrozenBlueprint(input)
+  const { frozen, templatesById } = input.snapshot !== undefined
+    ? { frozen: input.snapshot.frozenBlueprint, templatesById: Object.fromEntries(REC03_MODULES.map((template) => [template.templateId, template])) }
+    : deriveFrozenBlueprint(input)
   const catalog = loadVocabulary(createP1Catalog())
   const marketFitAffinity = marketAffinityForGenre(project.genreId)
 

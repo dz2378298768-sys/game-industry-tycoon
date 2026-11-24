@@ -27,6 +27,11 @@ export interface ExecutionProjectSaveEntry {
   state: ProjectExecutionState
 }
 
+export interface Rec03SaveEntry {
+  key: string
+  value: unknown
+}
+
 export interface WorldState {
   companies: Company[]
   employees: Employee[]
@@ -68,6 +73,8 @@ export interface WorldState {
    * 含交付失败审计 lastDeliveryFailure / reasonCodes；旧档缺省 undefined（不升版本）。
    */
   executionProjects?: ExecutionProjectSaveEntry[]
+  rec03Snapshots?: Rec03SaveEntry[]
+  rec03Requests?: Rec03SaveEntry[]
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {

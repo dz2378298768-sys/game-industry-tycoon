@@ -63,15 +63,17 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   const [budgetCapacity, setBudgetCapacity] = useState<number>(TUNING.project.defaultBudgetCapacityUsd) // USD
   const budgetCapacityCents = Math.max(0, Math.round(budgetCapacity * 100))
   const budgetCapCents = Math.round(hrb * budgetCapacityCents)
+  const requestId = ['new-project', productName.trim(), genreId, effectivePlatformId, segmentIds.join(','), coreModule, supportModules.join(','), hrb, budgetCapacityCents].join('|')
   const segmentTags: Record<string, string> = { arcade_enthusiasts: 'SEG-YOUTH', online_gamers: 'SEG-COMPETITIVE', pc_gamers: 'SEG-HARDCORE', home_players: 'SEG-MASS_MARKET' }
+  const selectedSegmentTags = segmentIds.map((id) => segmentTags[id] ?? id).filter((id) => id.startsWith('SEG-'))
   const draftInput = (): BlueprintDraftInput => ({
     kind: 'draft',
-    requestId: `new-project-${productName.trim() || 'draft'}`,
+    requestId,
     workingTitle: productName.trim(),
     genreId,
     primaryTypeId: genreId,
-    targetSegmentClaims: segmentIds.map((id) => segmentTags[id] ?? id).filter((id) => id.startsWith('SEG-')),
-    platformTargets: effectivePlatformId ? [effectivePlatformId === 'arcade' ? 'PLT-ARCADE' : effectivePlatformId],
+    targetSegmentClaims: selectedSegmentTags,
+    platformTargets: effectivePlatformId ? [effectivePlatformId === 'arcade' ? 'PLT-ARCADE' : effectivePlatformId] : [],
     modules: [
       { templateId: coreModule, slotId: 'REC03-SLOT-CORE', instanceId: 'rec03-core', intensity: 3, depthSelection: 'standard', optionSelections: {}, contentPackId: null },
       ...supportModules.map((id) => ({ templateId: id, slotId: 'REC03-SLOT-SUPPORT' as const, instanceId: `rec03-${id}`, intensity: 3 as const, depthSelection: 'standard' as const, optionSelections: {}, contentPackId: null })),
@@ -81,9 +83,73 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
     hrb,
     budgetCapacityCents,
   })
-  const preview = locked
+  const preview = productName.trim() && segmentIds.length > 0
     ? (() => { const r = previewExecutionProject(draftInput()); return r.success ? r.preview ?? null : null })()
     : null
+  const previewWork = preview?.estimates?.workUnits.byDiscipline
+  const previewAffinity = preview?.estimates?.marketFit?.affinity ?? null
+  const moduleNameKey: Record<string, string> = {
+    'MOD-CORE-ACTION': 'newProject.modules.card.coreAction.name',
+    'MOD-CORE-SIM': 'newProject.modules.card.coreSim.name',
+    'MOD-SYSTEM-PROGRESSION': 'newProject.modules.card.progression.name',
+    'MOD-SOCIAL-COOP': 'newProject.modules.card.social.name',
+    'MOD-CONTENT-EPISODES': 'newProject.modules.card.episodes.name',
+  }
+  const moduleDescriptionKey: Record<string, string> = {
+    'MOD-CORE-ACTION': 'newProject.modules.card.coreAction.description',
+    'MOD-CORE-SIM': 'newProject.modules.card.coreSim.description',
+    'MOD-SYSTEM-PROGRESSION': 'newProject.modules.card.progression.description',
+    'MOD-SOCIAL-COOP': 'newProject.modules.card.social.description',
+    'MOD-CONTENT-EPISODES': 'newProject.modules.card.episodes.description',
+  }
+  const audienceKey = (tag: string) => `newProject.modules.audience.${tag}`
+  const disciplineOrder = ['design', 'code', 'art', 'audio', 'qa'] as const
+  const formatWorkload = (workload: Record<string, number> | undefined) => workload
+    ? disciplineOrder.filter((discipline) => (workload[discipline] ?? 0) > 0).map((discipline) => `${t(`newProject.modules.discipline.${discipline}`)}:${Math.round(workload[discipline] ?? 0)}`).join(' / ')
+    : t('newProject.modules.workloadPending')
+  const instanceFor = (templateId: string) => templateId === 'MOD-CORE-ACTION' || templateId === 'MOD-CORE-SIM'
+    ? 'rec03-core'
+    : templateId === 'MOD-CONTENT-EPISODES' ? 'rec03-content' : `rec03-${templateId}`
+  const moduleWorkload = (templateId: string) => {
+    const instance = preview?.decomposition?.instances.find((item) => item.instanceId === instanceFor(templateId))
+    if (instance) return formatWorkload(instance.rawWorkload)
+    if (templateId === 'MOD-CONTENT-EPISODES') {
+      const pack = preview?.decomposition?.contentPacks.find((item) => item.packId === REC03_CONTENT_PACKS[0]?.packId)
+      if (pack) return formatWorkload(pack.rawWorkload)
+    }
+    return t('newProject.modules.workloadPending')
+  }
+  const moduleCard = (module: typeof REC03_MODULES[number]) => {
+    const isCore = module.allowedSlotKinds.includes('core_loop')
+    const isContent = module.allowedSlotKinds.includes('content')
+    const selected = isCore ? coreModule === module.templateId : isContent || supportModules.includes(module.templateId)
+    const audience = Object.entries(module.audienceAffinity).map(([tag, value]) => `${t(audienceKey(tag))} ${value.toFixed(2)}`).join(' / ')
+    return (
+      <div key={module.templateId} className="module-card" data-testid={`module-card-${module.templateId}`}>
+        <label style={{ cursor: isContent ? 'default' : 'pointer' }}>
+          <input
+            type={isCore ? 'radio' : 'checkbox'}
+            name={isCore ? 'rec03-core' : undefined}
+            checked={selected}
+            disabled={isContent}
+            onChange={() => {
+              if (isCore) setCoreModule(module.templateId)
+              else if (!isContent) setSupportModules(prev => prev.includes(module.templateId) ? prev.filter(x => x !== module.templateId) : prev.length < 2 ? [...prev, module.templateId] : prev)
+            }}
+          />{' '}
+          <strong>{t(moduleNameKey[module.templateId] ?? 'newProject.modules.unknown')}</strong>
+        </label>
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>{t(moduleDescriptionKey[module.templateId] ?? 'newProject.modules.unknown')}</p>
+        <p style={{ fontSize: 11, margin: '4px 0' }} data-testid={`module-audience-${module.templateId}`}>
+          {t('newProject.modules.audienceLabel')}: {audience || t('newProject.modules.impact.noClaims')}
+        </p>
+        <p className="muted" style={{ fontSize: 11, margin: '4px 0' }} data-testid={`module-workload-${module.templateId}`}>
+          {t('newProject.modules.workloadLabel')}: {moduleWorkload(module.templateId)}
+        </p>
+        {isContent && <p className="muted" style={{ fontSize: 11, margin: '4px 0' }}>{t('newProject.modules.contentPack').replace('{pack}', REC03_CONTENT_PACKS[0]?.packId ?? t('newProject.modules.unknown'))}</p>}
+      </div>
+    )
+  }
   const plannedLaunchDay = dayIndex + TUNING.project.defaultLaunchHorizonDays
 
   const toggleSegment = (id: string) => {
@@ -103,7 +169,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
     setError('')
     if (isBankrupt) { setError(t('finance.bankrupt.blocked.create')); return }
     if (!projectName.trim()) { setError(t('error.requiredField')); return }
-    const r = createExecutionProject({ ...draftInput(), requestId: `new-project-${productName.trim()}` })
+    const r = createExecutionProject(draftInput())
     if (r.success) onNavigate('projects')
     else setError(r.message ?? t('error.unknown'))
   }
@@ -185,14 +251,12 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
             {/* 玩法模块槽位：词表缺种子 → fail-closed，不伪造（OPEN-CONTENT-MODULES） */}
             <div className="form-row" data-testid="module-selection">
               <label>{t('newProject.form.modules')}</label>
-              <div className="flex-gap" data-testid="module-core">
-                {REC03_MODULES.filter(m => m.allowedSlotKinds.includes('core_loop')).map(m => <label key={m.templateId}><input type="radio" name="rec03-core" checked={coreModule === m.templateId} onChange={() => setCoreModule(m.templateId)} /> {m.name}</label>)}
+              <span data-testid="module-slots-failclosed" style={{ display: 'none' }}>{t('newProject.form.modulesOpen')}</span>
+              <div className="module-card-grid" data-testid="module-cards">
+                {REC03_MODULES.map(moduleCard)}
               </div>
-              <div className="flex-gap" data-testid="module-support">
-                {REC03_MODULES.filter(m => m.allowedSlotKinds.includes('support')).map(m => <label key={m.templateId}><input type="checkbox" checked={supportModules.includes(m.templateId)} onChange={() => setSupportModules(prev => prev.includes(m.templateId) ? prev.filter(x => x !== m.templateId) : prev.length < 2 ? [...prev, m.templateId] : prev)} /> {m.name}</label>)}
-              </div>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-work">{REC03_MODULES.find(m => m.templateId === coreModule)?.description}；支援模块 {supportModules.length}/2</p>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-audience">{supportModules.length === 0 ? '成长系统未选择：成长相关交付项不满足/不适用' : supportModules.join(', ')}</p>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-work">{previewWork ? t('newProject.modules.impact.work').replace('{work}', Object.entries(previewWork).map(([d, units]) => `${d}:${Math.round(units)}`).join(' / ')) : t('newProject.form.modulesOpen')}</p>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-audience">{previewAffinity ? Object.entries(previewAffinity).filter(([tag]) => selectedSegmentTags.includes(tag)).map(([tag, value]) => `${t(audienceKey(tag))}:${value.toFixed(2)}`).join(' / ') || t('newProject.modules.impact.noClaims') : t('newProject.form.modulesOpen')}{!supportModules.includes('MOD-SYSTEM-PROGRESSION') && t('newProject.modules.impact.noProgression')}</p>
             </div>
 
             {/* 产品身份五要素摘要（快照预览） */}

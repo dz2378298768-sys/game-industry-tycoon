@@ -29,6 +29,7 @@ describe('P-03/P-04 立项两步向导', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks()
+    useGameStore.getState().setLocale('zh-CN')
   })
 
   function goStep2() {
@@ -38,6 +39,11 @@ describe('P-03/P-04 立项两步向导', () => {
     fireEvent.click(screen.getByTestId('segment-multiselect').querySelector('input')!)
     fireEvent.click(screen.getByTestId('lock-snapshot'))
     expect(screen.getByTestId('wizard-step').textContent).toContain('2')
+  }
+
+  function enablePcAudience() {
+    const inputs = screen.getByTestId('segment-multiselect').querySelectorAll('input')
+    fireEvent.click(inputs[2]!)
   }
 
   it('P-03：HRB 两档 radio（0.45 默认 / 0.6），锁定生成快照（A-40）', () => {
@@ -135,5 +141,48 @@ describe('P-03/P-04 立项两步向导', () => {
     const lock = screen.getByTestId('lock-snapshot') as HTMLButtonElement
     expect(lock.disabled).toBe(true)
     expect(lock.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('REC-03：内容模块卡可见，并显示内核分解工作量与内容包', () => {
+    boot()
+    useGameStore.setState({ dayIndex: 6000 })
+    render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'Module Showcase' } })
+    enablePcAudience()
+
+    const contentCard = screen.getByTestId('module-card-MOD-CONTENT-EPISODES')
+    expect(contentCard.textContent).toContain('章节内容')
+    expect(contentCard.textContent).toContain('提供可交付的章节内容')
+    expect(contentCard.textContent).toContain('PACK-EPISODES-P1')
+    expect(screen.getByTestId('module-workload-MOD-CONTENT-EPISODES').textContent).toContain('设计:')
+    expect(screen.getByTestId('module-audience-MOD-CORE-ACTION').textContent).toContain('核心玩家')
+  })
+
+  it('REC-03：选择成长模块会改变四学科派生工作量和核心玩家亲和度', () => {
+    boot()
+    useGameStore.setState({ dayIndex: 6000 })
+    render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'Progression Check' } })
+    enablePcAudience()
+
+    const workBefore = screen.getByTestId('module-impact-work').textContent ?? ''
+    const audienceBefore = screen.getByTestId('module-impact-audience').textContent ?? ''
+    fireEvent.click(screen.getByTestId('module-card-MOD-SYSTEM-PROGRESSION').querySelector('input')!)
+    const workAfter = screen.getByTestId('module-impact-work').textContent ?? ''
+    const audienceAfter = screen.getByTestId('module-impact-audience').textContent ?? ''
+
+    expect(workAfter).not.toBe(workBefore)
+    expect(audienceAfter).not.toBe(audienceBefore)
+    expect(screen.getByTestId('module-impact-audience').textContent).not.toContain('未选择成长支援模块')
+    expect(screen.getByTestId('module-workload-MOD-SYSTEM-PROGRESSION').textContent).toContain('设计:')
+  })
+
+  it('REC-03：英文模块区域不包含裸中文文案', () => {
+    boot()
+    useGameStore.getState().setLocale('en')
+    const { unmount } = render(<NewProject onNavigate={vi.fn()} />)
+    expect(screen.getByTestId('module-selection').textContent).not.toMatch(/[\u4e00-\u9fff]/)
+    unmount()
+    useGameStore.getState().setLocale('zh-CN')
   })
 })

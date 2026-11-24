@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>G1 阶段关闭 · Owner 核对清单</title>
+<style>
+:root{
+  --bg:#0c1119; --bg2:#111826; --card:#151d2c; --card2:#1a2436;
+  --line:#26334a; --line2:#31415f;
+  --txt:#e6edf7; --txt2:#aab8cf; --txt3:#7286a3;
+  --cyan:#38bdf8; --cyan2:#0ea5e9;
+  --green:#34d399; --amber:#fbbf24; --red:#f87171; --violet:#a78bfa;
+  --shadow:0 8px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+  background:radial-gradient(1200px 600px at 15% -10%,#16233b 0%,transparent 55%),
+             radial-gradient(900px 500px at 100% 0%,#122a33 0%,transparent 50%),var(--bg);
+  color:var(--txt);line-height:1.65;padding-bottom:80px;min-height:100vh;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+
+/* header */
+header{padding:38px 0 26px;border-bottom:1px solid var(--line);margin-bottom:26px}
+.kicker{color:var(--cyan);font-size:12px;letter-spacing:2px;font-weight:700;text-transform:uppercase}
+h1{font-size:30px;margin:8px 0 12px;letter-spacing:.5px}
+.sub{color:var(--txt2);font-size:14px;max-width:760px}
+.meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:12.5px;color:var(--txt2)}
+.chip b{color:var(--txt);font-weight:600}
+.chip.state{border-color:#7c5c1f;background:rgba(251,191,36,.08);color:var(--amber)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--amber);margin-right:7px;vertical-align:middle}
+
+/* progress bar */
+.progress-box{margin-top:22px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.progress-top{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--txt2);margin-bottom:10px}
+.progress-top b{color:var(--cyan);font-size:15px}
+.bar{height:8px;background:#0b1220;border-radius:999px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan2),var(--cyan));border-radius:999px;transition:width .35s ease}
+.hint{font-size:12px;color:var(--txt3);margin-top:9px}
+
+/* section */
+section{margin:30px 0}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.sec-num{font-size:12px;font-weight:800;color:var(--bg);background:var(--cyan);border-radius:6px;padding:2px 8px;letter-spacing:1px}
+.sec-head h2{font-size:19px;font-weight:700}
+.sec-head .note{font-size:12.5px;color:var(--txt3);margin-left:auto}
+.lead{font-size:13px;color:var(--txt2);background:var(--bg2);border-left:3px solid var(--cyan);padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:14px}
+
+/* item card */
+.item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:9px 0;transition:border-color .2s}
+.item:hover{border-color:var(--line2)}
+.item-head{display:flex;gap:11px;align-items:flex-start}
+.idx{flex:0 0 auto;width:25px;height:25px;border-radius:7px;background:var(--card2);border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--txt2)}
+.item-title{font-weight:650;font-size:14.5px;flex:1}
+.fact{color:var(--txt2);font-size:13px;margin:9px 0 9px 36px}
+.evid{color:var(--txt3);font-size:11.5px;margin-left:36px;font-family:ui-monospace,Menlo,monospace}
+.vote{display:flex;gap:7px;margin:12px 0 0 36px;flex-wrap:wrap}
+.vote button{
+  cursor:pointer;border:1px solid var(--line2);background:var(--bg2);color:var(--txt2);
+  border-radius:8px;padding:6px 12px;font-size:12.5px;transition:all .18s;font-family:inherit;
+}
+.vote button:hover{border-color:var(--cyan);color:var(--txt)}
+.vote button.on[data-v="ok"]{background:rgba(52,211,153,.16);border-color:var(--green);color:var(--green)}
+.vote button.on[data-v="no"]{background:rgba(248,113,113,.16);border-color:var(--red);color:var(--red)}
+.vote button.on[data-v="need"]{background:rgba(251,191,36,.16);border-color:var(--amber);color:var(--amber)}
+.remark{margin:9px 0 0 36px;width:calc(100% - 36px);background:var(--bg2);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:8px 11px;font-size:12.5px;font-family:inherit;resize:vertical;min-height:34px;display:none}
+.remark.show{display:block}
+.remark::placeholder{color:var(--txt3)}
+
+/* decision highlight */
+.decision{background:linear-gradient(135deg,var(--card2),var(--card));border:1px solid var(--violet);border-radius:13px;padding:17px 18px;margin:12px 0}
+.decision .tag{font-size:11px;font-weight:700;color:var(--violet);letter-spacing:1px}
+.decision h3{font-size:16px;margin:6px 0 9px}
+.decision .fact{margin-left:0}
+.choice{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.choice button{
+  cursor:pointer;border:1px solid var(--line2);background:var(--bg2);color:var(--txt2);
+  border-radius:999px;padding:7px 14px;font-size:12.5px;transition:all .18s;font-family:inherit;
+}
+.choice button:hover{border-color:var(--violet);color:var(--txt)}
+.choice button.on{background:rgba(167,139,250,.18);border-color:var(--violet);color:#c4b5fd}
+
+/* disclosure */
+.disc{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin:9px 0}
+.disc .n{flex:0 0 26px;height:26px;border-radius:50%;background:rgba(56,189,248,.12);border:1px solid var(--cyan);color:var(--cyan);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.disc .body{flex:1}
+.disc .t{font-size:13.5px;color:var(--txt)}
+.disc .vote{margin:10px 0 0 0}
+
+/* conclusion */
+.final{background:var(--card);border:1px solid var(--line2);border-radius:14px;padding:20px;margin-top:10px}
+.status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0 18px}
+.status-card{cursor:pointer;border:1px solid var(--line2);background:var(--bg2);border-radius:11px;padding:14px;text-align:center;transition:all .2s}
+.status-card:hover{border-color:var(--cyan)}
+.status-card.on{border-color:var(--green);background:rgba(52,211,153,.1)}
+.status-card.on.rej{border-color:var(--red);background:rgba(248,113,113,.1)}
+.status-card.on.blk{border-color:var(--amber);background:rgba(251,191,36,.1)}
+.status-card .ic{font-size:22px;display:block;margin-bottom:6px}
+.status-card .tt{font-weight:700;font-size:14px}
+.status-card .ds{font-size:11.5px;color:var(--txt3);margin-top:3px}
+.sign-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+.sign-row input{background:var(--bg2);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:10px 12px;font-size:13px;font-family:inherit}
+.sign-row input::placeholder{color:var(--txt3)}
+
+/* export */
+.export-bar{position:fixed;bottom:0;left:0;right:0;background:rgba(12,17,25,.92);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:12px 0;z-index:20}
+.export-bar .wrap{display:flex;gap:12px;align-items:center}
+.export-bar .msg{font-size:12.5px;color:var(--txt2);flex:1}
+.btn{cursor:pointer;border:0;border-radius:9px;padding:10px 18px;font-size:13px;font-weight:650;font-family:inherit;transition:transform .15s,filter .15s}
+.btn:hover{filter:brightness(1.1)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:linear-gradient(135deg,var(--cyan2),var(--cyan));color:#04121e}
+.btn.ghost{background:var(--card2);color:var(--txt2);border:1px solid var(--line2)}
+
+/* output modal */
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:40;align-items:center;justify-content:center;padding:20px}
+.modal.show{display:flex}
+.modal-box{background:var(--card);border:1px solid var(--line2);border-radius:16px;width:100%;max-width:760px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow)}
+.modal-head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.modal-head h3{font-size:16px}
+.modal-head button{cursor:pointer;background:none;border:0;color:var(--txt2);font-size:22px;line-height:1}
+.modal-body{padding:18px 20px;overflow:auto}
+.modal-body textarea{width:100%;min-height:380px;background:var(--bg);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:14px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.7;resize:vertical}
+.modal-foot{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
+.footer-note{font-size:12px;color:var(--txt3);text-align:center;margin-top:34px;padding-top:18px;border-top:1px solid var(--line)}
+@media(max-width:640px){.status-grid{grid-template-columns:1fr}.sign-row{grid-template-columns:1fr}h1{font-size:24px}.sec-head .note{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Game Industry Tycoon · 阶段关闭核对</div>
+  <h1>G1 阶段关闭 — Owner 核对清单</h1>
+  <p class="sub">这份清单把「事实」和「判断」分开：左侧是主 AI 核验到的客观事实与证据位置，右侧由你逐项勾选。主 AI 不预填任何结论，也不代你签名。</p>
+  <div class="meta">
+    <span class="chip state"><span class="dot"></span>当前状态 <b>WAIT_OWNER_CLOSE</b>（待核对，不是 CLOSED）</span>
+    <span class="chip">代码基线 <b>abacd25</b></span>
+    <span class="chip">测试基线 <b>1219 全绿</b></span>
+    <span class="chip">四命令 <b>EXIT:0</b></span>
+    <span class="chip">编码任务 <b>11/11 CLOSED</b></span>
+  </div>
+  <div class="progress-box">
+    <div class="progress-top"><span>核对进度</span><span><b id="pct">0%</b> · <span id="cnt">0</span> 项已勾选</span></div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="hint">共 <b id="total">0</b> 个核对点。勾选后进度自动更新；带备注框的项，「不确认 / 需补证」会展开输入框。</div>
+  </div>
+</header>
+
+<!-- Section 1 -->
+<section>
+  <div class="sec-head"><span class="sec-num">一</span><h2>V2.2 §11.3 阶段关闭九项条件</h2><span class="note">规范原文 → 事实 → 你的判断</span></div>
+  <div class="lead">下列九项是规范规定的阶段关闭最低条件。事实由主 AI 提供，但「是否满足」完全由你判断，不由主 AI 代判。</div>
+  <div id="sec1"></div>
+</section>
+
+<!-- Section 2 -->
+<section>
+  <div class="sec-head"><span class="sec-num">二</span><h2>附录阶段验收清单（10 项）</h2><span class="note">V2.2 附录核对表</span></div>
+  <div id="sec2"></div>
+  <div class="lead" style="border-left-color:var(--violet);margin-top:16px">
+    <b style="color:var(--violet)">三类评估 Agent 均未正式启动</b>，主 AI 已补档不启动原因与替代验证：<br>
+    · <b>A 美术/UI 总监</b>：无独立美术资产线 → 以 U1~U6 口径、W4 走查、W5 DOM 复核替代<br>
+    · <b>B 试玩测试</b>：W5 试玩代理实质等价执行，但未正式命名；主观体验维度未系统覆盖<br>
+    · <b>C 数值平衡</b>：W5 数值标定专项替代，无独立建模需求
+    <div class="vote" id="sec2b" style="margin-left:0"></div>
+  </div>
+</section>
+
+<!-- Section 3 -->
+<section>
+  <div class="sec-head"><span class="sec-num">三</span><h2>需要你特别裁决的四个点</h2><span class="note">真正的分歧所在</span></div>
+  <div class="lead">这四点主 AI 不替你决定。请逐项选择。</div>
+  <div id="sec3"></div>
+</section>
+
+<!-- Section 4 -->
+<section>
+  <div class="sec-head"><span class="sec-num">四</span><h2>五条强制披露 — 逐条确认</h2><span class="note">若关闭，须随结论生效</span></div>
+  <div class="lead">这些是 G1 交付版本的真实边界。若决定关闭，须确认逐条生效，不得省略或淡化。</div>
+  <div id="sec4"></div>
+</section>
+
+<!-- Section 5 -->
+<section>
+  <div class="sec-head"><span class="sec-num">五</span><h2>核对结论</h2><span class="note">由 Owner 填写</span></div>
+  <div class="final">
+    <div style="font-size:13px;color:var(--txt2);margin-bottom:4px">阶段状态（三选一）</div>
+    <div class="status-grid" id="statusGrid">
+      <div class="status-card" data-st="accepted"><span class="ic">✅</span><div class="tt">STAGE_ACCEPTED</div><div class="ds">G1 正式关闭，披露生效</div></div>
+      <div class="status-card rej" data-st="fix"><span class="ic">🔧</span><div class="tt">STAGE_FIX</div><div class="ds">退回整改，需补做</div></div>
+      <div class="status-card blk" data-st="blocked"><span class="ic">⛔</span><div class="tt">STAGE_BLOCKED</div><div class="ds">暂停，阻塞待解</div></div>
+    </div>
+    <div class="sign-row">
+      <input id="signName" placeholder="Owner 签名">
+      <input id="signDate" placeholder="日期（如 2026-11-24）">
+    </div>
+    <div class="lead" style="margin:16px 0 0;border-left-color:var(--amber)">
+      若选 <b>STAGE_ACCEPTED</b>，请一并确认三项生效条件：<br>
+      <div class="choice" id="effects"></div>
+    </div>
+  </div>
+</section>
+
+<div class="footer-note">
+  本页为核对可视化产物，仅呈现事实与提供勾选交互。<b>不会修改任何项目状态文件，也不会自动关闭 G1。</b><br>
+  核对完成后点击右下角「导出核对结论」，将结果交给主 AI 执行。
+</div>
+
+</div>
+
+<div class="export-bar">
+  <div class="wrap">
+    <div class="msg" id="exportMsg">勾选任意核对项后即可导出结论</div>
+    <button class="btn ghost" onclick="resetAll()">清空重填</button>
+    <button class="btn primary" onclick="openExport()">导出核对结论 →</button>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <div class="modal-head"><h3>核对结论（可复制）</h3><button onclick="closeExport()">×</button></div>
+    <div class="modal-body"><textarea id="outText" readonly></textarea></div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="copyOut()">复制文本</button>
+      <button class="btn primary" onclick="closeExport()">完成</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- data ----------
+const S1 = [
+ {t:"阶段核心任务完成",f:"11 个编码任务（CODE-01~08、07A、07B、07B REVISION2）全部 CLOSED，均经独立审核。",e:"主AI整体验收报告_P1.md §1"},
+ {t:"核心功能通过相应审核",f:"双闸门全程有效：07B V0.1 判 FAIL（四条 P1）→ 整改 → V0.2 PWC；REVISION2 独立复审 PWC。",e:"CODE-07B_编码审核报告_V0.1/V0.2、REVISION2_编码审核报告_V0.1"},
+ {t:"系统集成检查通过",f:"W4 批次集成检查 PASS_WITH_NOTES（1201 全绿，存读档 3/3）；主 AI 复跑 1219 全绿。",e:"W4_批次集成检查报告_V0.1.md"},
+ {t:"阻断问题已经解决",f:"P0 阻断 OPEN-F3′（跑道双重扣减）已由 ADJ-11 / cf75c68 解除；但 P-09 交付按钮缺口未解，定性见裁决点 1。",e:"主AI整体验收报告_P1.md §1、§4"},
+ {t:"必要的专项评估已经完成",f:"三个阶段性评估 Agent 均未正式启动；替代验证与不启动原因已补档。",e:"G1_阶段评估启动判断记录.md"},
+ {t:"重要整改已经完成或获得延期批准",f:"07B 四条 P1 全关；RISK-01 失效后 07B 重开 REVISION2 修复 UI 接线。D-02 内核缺口按「P2 首位任务」延期交接。",e:"ADJ-21、ADJ-22 §4"},
+ {t:"文档和版本记录已经更新",f:"各编码/审核/裁定/试玩/整体验收报告齐备；P1 清单、STATUS、DOCS-INDEX 已更新；仓库整理已提交。",e:"docs/；提交 e07a535、abacd25"},
+ {t:"相关 ADJ 已落实或有明确延期裁定",f:"ADJ-18~22 已落档；C7/C3/OPEN-S12-1/PT-OBS-1/2 均有 P2 延期去向。",e:"docs/decisions/；主AI整体验收报告_P1.md §8"},
+ {t:"主 AI 正式批准阶段关闭",f:"主 AI 验收判定为 PASS_WITH_NOTES（附条件）。但按 V2.2 §9.1「最终项目确认」属 Owner 专属——本项由你填写，主 AI 不代签。",e:"主AI整体验收报告_P1.md §7；V2.2 §9.1/§9.2"}
+];
+const S2 = [
+ ["必要的设计审核完成","D-01~D-04、FIN、Project 六份规格均有审核结论（D-03 V0.1.7 定稿 PASS）。"],
+ ["必要的编码审核完成","11 个编码任务均有独立审核结论。"],
+ ["系统集成验证完成","W4 批次集成检查 PWC；跨批次无回归。"],
+ ["阻断问题解决","见第一部分第 4 项：P0 已解、P-09 未解。"],
+ ["必要的专项评估完成","三类评估 Agent 均未正式启动，有替代验证，见上方说明。"],
+ ["重要整改完成或延期批准","见第一部分第 6 项。"],
+ ["相关 ADJ 已回填","ADJ-18~22 已落档并回填任务卡。"],
+ ["项目文档更新","见第一部分第 7 项。"],
+ ["版本记录更新","main 与 p1-code-baseline 同步于 abacd25。"],
+ ["测试基线已核对","1219 全绿 / 109 文件 / 四命令 EXIT:0（08:18 主 AI 亲验）。"]
+];
+const DEC = [
+ {h:"真实玩家交付闭环 — 是否接受带缺口关闭？",f:"REVISION2 让交付按钮「有真实评估快照则可点」，但生产路径从不产出快照（registerDeliveryGateEvaluation 仅 2 处调用，都在测试文件）。真实玩家在界面上无法完成交付→上市。命令级与真点击测试链路可达；真实玩家路径标 NOT_VERIFIED。缺口为 D-02 评估内核链（07B-11，D 类），修复属新内核工程。",c:["接受带缺口附条件关闭","不接受，先补 D-02 内核工程","需补证"]},
+ {h:"P1 §六否决项第 1 条 — 是否构成否决？",f:"原文「存在'测试通过但功能不存在'的路径 ⇒ P1 不通过」。真点击用例证明 UI 接线正确，但真实玩家因缺快照拿不到可点击按钮，触及该条精神。按 §四字面，P1 严格判定为不通过。",c:["视为例外，附条件通过","认定构成否决，P1 不通过","需补证"]},
+ {h:"阶段关闭权归属 — 确认由你独占",f:"V2.2 §9.1 将「最终项目确认」列为 Owner 专属；§9.2 禁止 Agent「以 Owner 名义作最终确认」；ADJ-22 亦写明「未经 Owner 确认不得宣称 G1 完成」。主 AI 于 08:03 将「选项方向授权」误当作「关闭最终确认」，单方面改 CLOSED 并写「Owner 签名」，属越界。本清单为纠正动作。",c:["确认你独占，此前 CLOSED 宣告无效","其他"]},
+ {h:"P2 首位任务 — D-02 内核链是否立项？",f:"D-02 内核链已写入 P2 交接清单首位；其余为 C7 默认预算、C3 定价档、OPEN-S12-1 口碑、PT-OBS-1/2。",c:["确认按此优先级","调整顺序","P2 暂不启动"]}
+];
+const DISC = [
+ "真实玩家当前不能从 UI 完成交付→上市；命令级/测试夹具链路可达，真实玩家路径 NOT_VERIFIED。",
+ "UI 全链真点击未走通；RISK-01 已失效，REVISION2 仅修复接线层，未闭合完整链路。",
+ "定价三档 / 营销预算档仍为 NUMERIC_PENDING_P2 占位（OPEN-W5-C3-01）。",
+ "口碑档（OPEN-S12-1）无法回填，G1 不建 BrandMemory，UI 恒显「暂无评价」。",
+ "上市能力已验证（PATH-A：$11.47M / 90 笔销售），但默认配置走不上巿（C7，P2）；收入量级不认作平衡性结论。"
+];
+const EFFECTS=["同意 D-02 内核链列 P2 首位","同意 5 条披露随阶段结论生效","同意 P2 在核对完成后方可启动"];
+
+// ---------- render ----------
+let uid=0;
+function voteHTML(){
+  return `<div class="vote" data-vote="${uid}"><button data-v="ok">✓ 确认</button><button data-v="no">✗ 不确认</button><button data-v="need">? 需补证</button></div><textarea class="remark" placeholder="请填写原因或需要补的证据…"></textarea>`;
+}
+function render(){
+  document.getElementById('sec1').innerHTML = S1.map((x,i)=>`
+    <div class="item" data-id="s1-${i}"><div class="item-head"><div class="idx">${i+1}</div><div class="item-title">${x.t}</div></div>
+    <div class="fact">${x.f}</div><div class="evid">证据：${x.e}</div>${voteHTML()}</div>`).join('');
+  document.getElementById('sec2').innerHTML = S2.map((x,i)=>`
+    <div class="item" data-id="s2-${i}"><div class="item-head"><div class="idx">${i+1}</div><div class="item-title">${x[0]}</div></div>
+    <div class="fact">${x[1]}</div>${voteHTML()}</div>`).join('');
+  document.getElementById('sec2b').innerHTML = `<span style="font-size:12.5px;color:var(--txt2)">对三类评估不启动的判断：</span>`+
+    ["全部认可","部分认可（见备注）","要求补做（见备注）"].map(c=>`<button data-v="ok">✓ ${c}</button>`).join('');
+  document.getElementById('sec2b').dataset.vote=uid;
+  document.getElementById('sec2b').insertAdjacentHTML('afterend','<textarea class="remark" data-for="sec2b" placeholder="若部分认可或要求补做，请写明哪一类…"></textarea>');
+  uid++;
+  document.getElementById('sec3').innerHTML = DEC.map((d,i)=>`
+    <div class="decision"><div class="tag">裁决点 ${i+1}</div><h3>${d.h}</h3><div class="fact">${d.f}</div>
+    <div class="choice" data-vote="${uid}">${d.c.map(c=>`<button data-v="ok">${c}</button>`).join('')}</div>
+    <textarea class="remark" placeholder="补充说明（可选）…"></textarea></div>`).join('');
+  uid++;
+  document.getElementById('sec4').innerHTML = DISC.map((d,i)=>`
+    <div class="disc"><div class="n">${i+1}</div><div class="body"><div class="t">${d}</div>
+    <div class="vote" data-vote="${uid}"><button data-v="ok">✓ 接受</button><button data-v="no">✗ 不接受</button><button data-v="need">? 需修改</button></div>
+    <textarea class="remark" placeholder="若不接受或需修改，请写明…"></textarea></div></div>`).join('');
+  uid++;
+  document.getElementById('effects').innerHTML = EFFECTS.map(e=>`<button data-v="ok">✓ ${e}</button>`).join('');
+  document.getElementById('effects').dataset.vote=uid;
+  // count total vote groups
+  const total=document.querySelectorAll('[data-vote]').length;
+  document.getElementById('total').textContent=total;
+}
+render();
+
+// ---------- interaction ----------
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-vote] button');
+  if(!b) return;
+  const grp=b.closest('[data-vote]');
+  const multi=grp.classList.contains('choice')||grp.id==='sec2b'||grp.id==='effects';
+  if(!multi){grp.querySelectorAll('button').forEach(x=>x.classList.remove('on'));}
+  else if(b.classList.contains('on')){b.classList.remove('on');}
+  if(!b.classList.contains('on')) b.classList.add('on');
+  const rem=grp.parentElement.querySelector('.remark')||grp.nextElementSibling?.classList?.contains('remark')?grp.nextElementSibling:null;
+  if(rem && (b.dataset.v==='no'||b.dataset.v==='need'||multi)) rem.classList.add('show');
+  updateProgress();
+});
+document.querySelectorAll('.status-card').forEach(c=>c.addEventListener('click',()=>{
+  document.querySelectorAll('.status-card').forEach(x=>x.classList.remove('on'));
+  c.classList.add('on');updateProgress();
+}));
+function updateProgress(){
+  const groups=[...document.querySelectorAll('[data-vote]')];
+  const done=groups.filter(g=>g.querySelector('button.on')).length + (document.querySelector('.status-card.on')?1:0);
+  const total=groups.length+1;
+  const pct=Math.round(done/total*100);
+  document.getElementById('pct').textContent=pct+'%';
+  document.getElementById('cnt').textContent=done;
+  document.getElementById('bar').style.width=pct+'%';
+  document.getElementById('exportMsg').textContent = done===0?'勾选任意核对项后即可导出结论':`已勾选 ${done}/${total} 项，可随时导出结论`;
+}
+function collect(){
+  const out=[];
+  out.push('# G1 阶段关闭 — Owner 核对结论');
+  out.push('导出时间：'+new Date().toLocaleString('zh-CN'));
+  out.push('');
+  const sec=(title,sel)=>{
+    out.push('## '+title);
+    document.querySelectorAll(sel).forEach((g,i)=>{
+      const on=g.querySelector('button.on');
+      const rem=g.parentElement.querySelector('.remark')||g.nextElementSibling?.classList?.contains('remark')?g.nextElementSibling:null;
+      const val=on?on.textContent.trim():'（未勾选）';
+      out.push(`${i+1}. ${val}`+(rem&&rem.value.trim()?` — ${rem.value.trim()}`:''));
+    });
+    out.push('');
+  };
+  out.push('> 代码基线 abacd25 ｜ 1219 全绿 ｜ 四命令 EXIT:0 ｜ 11/11 编码 CLOSED');
+  out.push('');
+  sec('一、§11.3 九项关闭条件','#sec1 [data-vote]');
+  sec('二、附录十项核对','#sec2 [data-vote]');
+  const s2b=document.getElementById('sec2b');
+  out.push('## 二b、三类评估不启动判断');
+  out.push((s2b.querySelector('button.on')||{textContent:'（未勾选）'}).textContent.trim());
+  const r2b=document.querySelector('[data-for="sec2b"]');
+  if(r2b&&r2b.value.trim())out.push('备注：'+r2b.value.trim());
+  out.push('');
+  sec('三、四个裁决点','#sec3 [data-vote]');
+  sec('四、五条强制披露','#sec4 [data-vote]');
+  const st=document.querySelector('.status-card.on');
+  out.push('## 五、核对结论');
+  out.push('阶段状态：'+(st?st.querySelector('.tt').textContent.trim():'（未选择）'));
+  out.push('Owner 签名：'+(document.getElementById('signName').value.trim()||'（空）'));
+  out.push('日期：'+(document.getElementById('signDate').value.trim()||'（空）'));
+  const eff=[...document.querySelectorAll('#effects button.on')].map(b=>b.textContent.trim());
+  out.push('生效条件：'+(eff.length?eff.join('；'):'（未勾选）'));
+  out.push('');
+  out.push('---');
+  out.push('注：本结论由 Owner 核对产生。主 AI 收到后按此执行，不自行宣布阶段关闭。');
+  return out.join('\n');
+}
+function openExport(){document.getElementById('outText').value=collect();document.getElementById('modal').classList.add('show');}
+function closeExport(){document.getElementById('modal').classList.remove('show');}
+function copyOut(){
+  const t=document.getElementById('outText');t.select();
+  try{document.execCommand('copy');alert('已复制到剪贴板');}catch(e){alert('请手动复制文本框内容');}
+}
+function resetAll(){
+  if(!confirm('确定清空所有勾选与备注？'))return;
+  document.querySelectorAll('[data-vote] button,.status-card').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.remark').forEach(x=>{x.value='';x.classList.remove('show')});
+  document.getElementById('signName').value='';document.getElementById('signDate').value='';
+  updateProgress();
+}
+updateProgress();
+</script>
+</body>
+</html>

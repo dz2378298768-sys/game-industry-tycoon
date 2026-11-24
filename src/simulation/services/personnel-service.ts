@@ -97,6 +97,8 @@ export interface RecruitFromPoolCommand {
   playerOfferCents: number
   day: number
   headcountLimit?: number
+  /** B-01a：由调用方传入的确定性 employmentId（同 seed + 序号）。 */
+  employmentId?: string
 }
 
 /** role → 默认主学科（§3.2：role 仅影响默认学科提示）。 */
@@ -118,10 +120,22 @@ export class PersonnelService {
   private snapshot: PersonnelFormulaSnapshot = createPersonnelSnapshot(0)
   private finance: FinanceService
   private params: PersonnelParams
+  /** B-01a：由调用方注入的确定性 employmentId 生成器（seed + 递增序号）。 */
+  private readonly nextEmploymentIdFactory: (() => string) | undefined
 
-  constructor(deps: { finance: FinanceService; params?: PersonnelParams }) {
+  constructor(deps: {
+    finance: FinanceService
+    params?: PersonnelParams
+    nextEmploymentId?: () => string
+  }) {
     this.finance = deps.finance
     this.params = deps.params ?? DEFAULT_PERSONNEL_PARAMS
+    this.nextEmploymentIdFactory = deps.nextEmploymentId
+  }
+
+  /** 内部 employmentId 兜底（池招聘/跳槽）：注入时用确定性序列，独立单测未注入时保留 uuid()。 */
+  private nextEmploymentId(): string {
+    return this.nextEmploymentIdFactory?.() ?? uuid()
   }
 
   get tuning(): PersonnelParams {
@@ -213,7 +227,7 @@ export class PersonnelService {
     if (cmd.headcountLimit !== undefined && this.countOccupyingByCompany(cmd.companyId) >= cmd.headcountLimit) {
       return d03Fail(D03_ERROR.HEADCOUNT_FULL, `管理容量已满（${cmd.headcountLimit} 人）`)
     }
-    const employmentId = cmd.employmentId ?? uuid()
+    const employmentId = cmd.employmentId ?? this.nextEmploymentId()
     const personId = `d03-per-${employmentId}`
     const discipline = cmd.primaryDiscipline ?? defaultDisciplineOfRole(cmd.role)
     const termMonths = cmd.initialTermMonths ?? this.params.p1DefaultTermMonths
@@ -332,6 +346,7 @@ export class PersonnelService {
     const level = person.skills.level[candidate.discipline] ?? candidate.skillLevel
     const hire = this.hire({
       companyId: cmd.companyId,
+      ...(cmd.employmentId !== undefined ? { employmentId: cmd.employmentId } : {}),
       name: person.displayName,
       role: candidate.discipline === 'code' ? 'programmer' : candidate.discipline === 'design' ? 'designer' : candidate.discipline === 'art' ? 'artist' : 'qa',
       skillLevel: Math.max(1, Math.min(5, level)),
@@ -431,7 +446,7 @@ export class PersonnelService {
     this.replaceEmployment(closed.value)
     const person = this.getPerson(personId)
     if (person === undefined) return d03Fail(D03_ERROR.PERSON_NOT_FOUND, 'Person 不存在')
-    const employmentId = uuid()
+    const employmentId = this.nextEmploymentId()
     const next: Employment = {
       employmentId,
       personId,

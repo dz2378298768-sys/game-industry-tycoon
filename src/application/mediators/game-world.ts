@@ -241,6 +241,13 @@ export class GameWorld {
   /** AI 竞争开关：默认关闭，M3-A2 决策器接入后由生产工厂显式开启（避免既有 Tests 世界被 AI 公司污染） */
   private readonly aiCompetitionEnabled: boolean
 
+  /**
+   * B-01a：参与模拟判定（hash01 离职判定）的实体 ID 生成器。
+   * 由 seed + 递增序号派生，同 seed 同操作序列必得同 ID；读档时按存档中已有的
+   * `emp-<seed>-<seq>` 还原序号，避免续跑后 ID 碰撞。事件/会话/展示 ID 仍用 uuid()。
+   */
+  private employmentSeq = 0
+
   constructor(
     seed = 42,
     salesInputs: MarketInputProvider = NULL_MARKET_INPUT_PROVIDER,
@@ -253,7 +260,10 @@ export class GameWorld {
     // A-1：账本唯一——FinanceService 只是它的委托层，二者共享同一实例。
     this.finance = new FinanceService(new UnifiedLedger())
     this.salesInputs = salesInputs
-    this.personnel = new PersonnelService({ finance: this.finance })
+    this.personnel = new PersonnelService({
+      finance: this.finance,
+      nextEmploymentId: () => this.nextEmploymentId(),
+    })
     this.employees = new EmployeeService({
       getAssignmentsByCompany: (companyId) => {
         const all: TeamAssignment[] = []
@@ -287,6 +297,29 @@ export class GameWorld {
       contracts: this.contracts,
       personnelTick: this.personnelTick,
     })
+  }
+
+  /**
+   * B-01a：下一个确定性 employmentId = `emp-<saveSeed>-<seq>`。
+   * 同 seed + 同招聘操作序列 ⇒ 同 ID ⇒ hash01(employmentId, day) 离职判定可复现（R9 / DP-3）。
+   */
+  private nextEmploymentId(): string {
+    this.employmentSeq += 1
+    return `emp-${this.world.saveSeed}-${this.employmentSeq}`
+  }
+
+  /** B-01a：读档后从已有实体 ID 还原递增序号，避免续跑新招员工与存档 ID 碰撞。 */
+  private restoreEmploymentSeq(state: WorldState): void {
+    const marker = `emp-${state.saveSeed}-`
+    let max = 0
+    const consider = (id: string | undefined): void => {
+      if (!id?.startsWith(marker)) return
+      const seq = Number(id.slice(marker.length))
+      if (Number.isInteger(seq) && seq > max) max = seq
+    }
+    for (const e of state.employees ?? []) consider(e.id)
+    for (const e of state.employments ?? []) consider(e.employmentId)
+    this.employmentSeq = max
   }
 
   private createRefundService(): RefundService {
@@ -546,6 +579,7 @@ export class GameWorld {
           playerOfferCents: candidate.askingSalaryCents,
           day: this.dayIndex,
           headcountLimit: company.managementCapacity,
+          employmentId: this.nextEmploymentId(),
         },
         () => this.marketSalaryForCity(company.cityId),
       ),
@@ -1254,8 +1288,12 @@ export class GameWorld {
       }
     }
 
+    // B-01a：employmentId 必须由 seed + 递增序号确定性派生（R9 同 seed 可复现）。
+    // 该 ID 同时作为 Employee.id 与 PersonnelService 的 employmentId，参与 hash01 离职判定。
+    const empId = this.nextEmploymentId()
     this.syncEmployeesFromWorld()
     const result = this.employees.hire({
+      id: empId,
       companyId: company.id,
       name: params.name,
       role: params.role,
@@ -1271,11 +1309,11 @@ export class GameWorld {
     const emp = result.result
 
     // D-03 双轨：Person + Employment(probation) + 薪资承诺（§7.2）+ 招聘费承诺（one_off，S5-3）。
-    // employmentId = emp.id（旧 id 保留为 employmentId，§15.1 #2）；财务失败则不提交。
+    // employmentId = emp.id（emp.id 即上面确定性派生的 empId，§15.1 #2）；财务失败则不提交。
     const hired = this.withPersonnel(() =>
       this.personnel.hire({
         companyId: company.id,
-        employmentId: emp.id,
+        employmentId: empId,
         name: params.name,
         role: params.role,
         skillLevel: Math.max(1, Math.min(5, params.skillLevel)),
@@ -2441,6 +2479,8 @@ export class GameWorld {
       }
     }
     this.world = state
+    // B-01a：从存档已有 emp-<seed>-<seq> 还原招聘序号，保证读档续跑的新 ID 仍唯一且确定性。
+    this.restoreEmploymentSeq(state)
     // CODE-07B REVISION / U3（A-25）：先清空旧内存态再按存档重建双索引，
     // 避免同一 GameWorld 上 load() 残留旧档 ExecutionProject（含交付失败审计）。
     this.executionProjects.clear()
@@ -2470,7 +2510,10 @@ export class GameWorld {
     // 重建销售服务与 scheduler（finance/rng 实例已替换）；解释缓存随新实例清空
     // CODE-06：PersonnelService 同样持有 finance 引用（承诺注册/停付/遣散兑现），
     // 必须与账本一起重建，否则读档后人事命令会写到构造时的旧账本（silent fail）。
-    this.personnel = new PersonnelService({ finance: this.finance })
+    this.personnel = new PersonnelService({
+      finance: this.finance,
+      nextEmploymentId: () => this.nextEmploymentId(),
+    })
     this.sales = new MarketSimulationService({
       finance: this.finance,
       rng: this.rng,

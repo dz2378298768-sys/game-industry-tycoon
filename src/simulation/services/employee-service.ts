@@ -13,6 +13,11 @@ export interface EmployeeServiceDeps {
 
 export interface HireCmd {
   companyId: string
+  /**
+   * 显式员工 ID（可选）。B-01a：参与模拟判定的实体 ID 必须由调用方
+   * 以 seed + 递增序号确定性派生；缺省时保留 uuid() 仅供独立单测兼容。
+   */
+  id?: string
   name: string
   role: EmployeeRole
   primarySkill: string
@@ -46,7 +51,7 @@ export class EmployeeService {
       return fail('EMP_INVALID_SALARY', 'salaryMonthlyCents must be a positive integer')
     }
     const e: Employee = {
-      id: uuid(),
+      id: cmd.id ?? uuid(),
       companyId: cmd.companyId,
       name: cmd.name,
       role: cmd.role,

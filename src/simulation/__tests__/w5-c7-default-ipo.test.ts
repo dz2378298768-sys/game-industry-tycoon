@@ -1,20 +1,19 @@
 /**
  * W5-C7 默认配置走上市验证（ADJ-2026-11-24-19 §1 C7 / 场景 S4 / OI-19~24）。
  *
- * 目标：在不改任何 ADJ 锚定数值的前提下，实测
- *   「默认 $120,000 起始 + 默认预算 + 默认招聘」→ 30/60/200 天现金曲线 → 能否走到上市。
+ * B-01c（ADJ-2026-11-24-30 §3.3）裁定后定稿：
+ *   - 路径 B = 默认配置成功上市：UI 默认容量 $136,000 × 默认 HRB 0.45 = 承诺帽 $61,200（最小可行帽）；
+ *   - 路径 A（$20,000）/ 旧默认 B'（$9,000）= 低预算承诺不足 → 可解释失败对照（DP-2/DP-3）；
+ *   - 容量守卫反证：承诺额 > 可用现金仍被 PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 拒绝（纪律不放宽）。
  *
  * 默认口径（单位双写）：
  *   - 起始资金：$120,000 = 12,000,000 cents（ADJ-12 S1-1，单一源 TUNING.company.startingCashCents）
- *   - 默认预算：$20,000 = 2,000,000 cents（ADJ-12 S4-2 锚定 minProjectBudgetCents；
- *     亦为 UI 立项向导默认 budgetCapacity 20_000 USD）
- *   - 默认招聘：基准薪资 $1,300 = 130,000 cents/月 × 城市系数（旧金山 1.4 → $1,820 = 182,000 cents/月）
+ *   - 默认招聘：4 人满配（P/D/A/Q，生产三学科 + QA 缺一不可）；基准薪资 $1,300 = 130,000 cents/月
+ *     × 城市系数（旧金山 1.4 → $1,820 = 182,000 cents/月）——薪资锚点未动
  *   - 默认上市周期：200 天（ADJ-12 S4-2 defaultLaunchHorizonDays）
+ *   - 冻结锚点全部未改；仅 UI 默认预算容量由 $20,000 调为 $136,000（ADJ-30 §3.2 定值，非锚点）
  *
- * 历史对照（OI-20）：旧默认 $30,000 预算在 Day 130 耗尽、追加后 Day 180 上市累计 $48,000，
- * 初始 $50,000 时上市现金 −$7,600。当前默认已上调起始资金并下调基准薪资，须实测复核。
- *
- * 本测试只验证事实、不改数值；若发现耗尽/走不通，如实输出现金曲线供主 AI 登记 P1 OPEN。
+ * 本测试锁定事实：默认开局成功 + 低预算失败对照 + 守卫反证，三者并存。
  */
 import { describe, it, expect } from 'vitest'
 import { createGameWorld } from '@application/factories/create-game-world'
@@ -22,8 +21,9 @@ import { TUNING } from '@content/tuning'
 import { citySalaryMultiplier } from '@content/queries'
 
 const DEFAULT_BUDGET_CENTS = TUNING.company.minProjectBudgetCents // 2,000,000 cents = $20,000
-const UI_DEFAULT_CAPACITY_USD = 20_000 // UI 向导默认（new-project.tsx:55），HRB 保守 0.45 → cap $9,000
+const UI_DEFAULT_CAPACITY_USD = 136_000 // ADJ-30 §3.2 定值（new-project.tsx:55），HRB 保守 0.45 → 承诺 $61,200
 const HRB_CONSERVATIVE = TUNING.project.hrbConservativeRatio // 0.45
+const MIN_VIABLE_CAP_CENTS = 6_120_000 // $61,200：B-01b 确定性扫描 N=8 最小可行预算帽（非锚点，实测定值）
 const DEFAULT_SALARY_CENTS = TUNING.employee.defaultStartingSalaryCents // 130,000 cents = $1,300
 const HORIZON_DAYS = TUNING.project.defaultLaunchHorizonDays // 200
 
@@ -53,6 +53,7 @@ interface RunResult {
   readyDay: number | null
   cancelledDay: number | null
   launched: { success: boolean; errorCode?: string | undefined }
+  cashAfterLaunchCents: number
 }
 
 /** 按天推进 200 天，记录关键节点；不改任何数值。 */
@@ -111,6 +112,7 @@ function runDefaultPlay(budgetCapCents: number): RunResult {
     if (checkpoints.has(day)) curve.push(s)
   }
   const launched = gw.launchProject(projectId)
+  const cashAfterLaunchCents = gw.finance.getCashBalance(company.id)
   return {
     initialCashCents,
     salaryCents,
@@ -120,6 +122,7 @@ function runDefaultPlay(budgetCapCents: number): RunResult {
     readyDay,
     cancelledDay,
     launched: { success: launched.success, errorCode: launched.errorCode },
+    cashAfterLaunchCents,
   }
 }
 
@@ -134,49 +137,88 @@ function logRun(label: string, r: RunResult) {
     )
   }
   console.log(`[W5-C7] ${label} 首次耗尽Day=${r.exhaustedDay}, 首次READY Day=${r.readyDay}, 取消Day=${r.cancelledDay}`)
-  console.log(`[W5-C7] ${label} launch@Day200: ${JSON.stringify(r.launched)}`)
+  console.log(`[W5-C7] ${label} launch@Day200: ${JSON.stringify(r.launched)}; 上市后现金=${r.cashAfterLaunchCents} cents ($${(r.cashAfterLaunchCents / 100).toFixed(2)})`)
 }
 
 describe('W5-C7 默认配置走上市验证（S4，不臆造数值、不改锚点）', () => {
-  it('锚点复核：起始 $120,000 / 默认预算 $20,000 / 基准薪资 $1,300 / 周期 200 天', () => {
+  it('锚点复核：起始 $120,000 / minProjectBudget $20,000 / 基准薪资 $1,300 / 周期 200 天 / HRB 0.45·0.6 均未改', () => {
     expect(TUNING.company.startingCashCents).toBe(12_000_000)
     expect(DEFAULT_BUDGET_CENTS).toBe(2_000_000)
     expect(DEFAULT_SALARY_CENTS).toBe(130_000)
     expect(HORIZON_DAYS).toBe(200)
     expect(HRB_CONSERVATIVE).toBe(0.45)
+    expect(TUNING.project.hrbStandardRatio).toBe(0.6)
+    // B-01c 定值：UI 默认容量 $136,000 × HRB 0.45 = 承诺 $61,200；仅改 UI 默认值，非冻结锚点。
+    expect(Math.round(UI_DEFAULT_CAPACITY_USD * 100 * HRB_CONSERVATIVE)).toBe(MIN_VIABLE_CAP_CENTS)
   })
 
-  it('路径 A：$20,000 预算帽（minProjectBudget 锚点）30/60/200 天现金曲线 + 上市结论', () => {
-    const r = runDefaultPlay(DEFAULT_BUDGET_CENTS)
-    logRun('A:cap$20k', r)
-    // 事实断言：初始现金必须为 $120,000；曲线逐点记录且 day 单调
+  it('路径 B【默认配置成功】：UI 默认 $136,000 × HRB 0.45 = 承诺帽 $61,200 → 上市成功、现金全程为正', () => {
+    const cap = Math.round(UI_DEFAULT_CAPACITY_USD * 100 * HRB_CONSERVATIVE)
+    expect(cap).toBe(MIN_VIABLE_CAP_CENTS) // 6,120,000 cents = $61,200
+    const r = runDefaultPlay(cap)
+    logRun('B:default$61.2k', r)
     expect(r.initialCashCents).toBe(12_000_000)
     expect(r.curve.map((c) => c.day)).toEqual([0, 30, 60, 200])
-    // 实测结论锁定（P1 OPEN-W5-C7-01 的可复现证据，非对现状的认可）：
-    // 公司现金全程为正（未耗尽），但项目预算耗尽 → 暂停 60 天超时 → Day118 自动取消 → Day200 无法上市。
+    // 实测锁定（B-01b 确定性扫描 N=8 + B-01c 复核）：无耗尽、Day97 READY、无取消、Day200 上市成功。
+    expect(r.readyDay).not.toBeNull()
+    expect(r.readyDay!).toBeLessThanOrEqual(HORIZON_DAYS)
+    expect(r.exhaustedDay).toBeNull()
+    expect(r.cancelledDay).toBeNull()
+    expect(r.launched.success).toBe(true)
+    expect(r.launched.errorCode).toBeUndefined()
+    expect(r.curve.every((c) => c.cashCents > 0)).toBe(true)
+    expect(r.cashAfterLaunchCents).toBeGreaterThan(0)
+  })
+
+  it('低预算对照 A：$20,000 预算帽（minProjectBudget 锚点）→ 耗尽超时取消，PRJ_NOT_READY（DP-2/DP-3）', () => {
+    const r = runDefaultPlay(DEFAULT_BUDGET_CENTS)
+    logRun('A:cap$20k', r)
+    expect(r.initialCashCents).toBe(12_000_000)
+    expect(r.curve.map((c) => c.day)).toEqual([0, 30, 60, 200])
     expect(r.curve.every((c) => c.cashCents > 0)).toBe(true)
     expect(r.readyDay).not.toBeNull() // 能力上能到 READY_TO_LAUNCH
     expect(r.exhaustedDay).not.toBeNull()
     expect(r.cancelledDay).not.toBeNull()
-    expect(r.cancelledDay!).toBeLessThan(HORIZON_DAYS) // 在计划上市日前即被取消
+    expect(r.cancelledDay!).toBeLessThan(HORIZON_DAYS)
     expect(r.launched.success).toBe(false)
     expect(r.launched.errorCode).toBe('PRJ_NOT_READY')
   })
 
-  it('路径 B：UI 向导默认 HRB 0.45 × $20,000 容量 = $9,000 预算帽（真实玩家默认路径）', () => {
-    const cap = Math.round(UI_DEFAULT_CAPACITY_USD * 100 * HRB_CONSERVATIVE)
-    expect(cap).toBe(900_000) // $9,000 = 900,000 cents
-    const r = runDefaultPlay(cap)
-    logRun('B:cap$9k', r)
+  it('低预算对照 B\'：旧默认 $9,000 预算帽（HRB 0.45 × 旧容量 $20,000）→ 更早耗尽取消，PRJ_NOT_READY（DP-2/DP-3）', () => {
+    const oldCap = Math.round(20_000 * 100 * HRB_CONSERVATIVE)
+    expect(oldCap).toBe(900_000) // $9,000 = 900,000 cents
+    const r = runDefaultPlay(oldCap)
+    logRun("B':oldCap$9k", r)
     expect(r.initialCashCents).toBe(12_000_000)
     expect(r.curve.map((c) => c.day)).toEqual([0, 30, 60, 200])
-    // 实测结论锁定（P1 OPEN-W5-C7-01）：UI 默认 HRB 0.45 下 $9,000 预算帽更早耗尽，
-    // Day90 即暂停超时取消，Day200 上市失败；公司现金仍全程为正。
     expect(r.curve.every((c) => c.cashCents > 0)).toBe(true)
     expect(r.exhaustedDay).not.toBeNull()
     expect(r.cancelledDay).not.toBeNull()
     expect(r.cancelledDay!).toBeLessThan(HORIZON_DAYS)
     expect(r.launched.success).toBe(false)
     expect(r.launched.errorCode).toBe('PRJ_NOT_READY')
+  })
+
+  it('容量守卫反证：4 人满配后 availableCash $48,656，承诺 $61,200 > 可用现金 ⇒ 仍拒（ADJ-30 §3.1 纪律不放宽）', () => {
+    const gw = createGameWorld(42)
+    gw.createCompany({ name: 'Default Studio', cityId: 'san_francisco' })
+    const salaryCents = Math.round(DEFAULT_SALARY_CENTS * citySalaryMultiplier('san_francisco'))
+    for (const r of ROLES) {
+      const h = gw.hireEmployee({ name: r.name, role: r.role, skillLevel: 3, salaryMonthlyCents: salaryCents })
+      expect(h.success).toBe(true)
+    }
+    const availableCashCents = gw.getFinancialOverview()!.availableCashCents
+    expect(availableCashCents).toBe(4_865_600) // $48,656：6 月薪资承诺预留（口径未改）
+    const commitmentCents = Math.round(HRB_CONSERVATIVE * UI_DEFAULT_CAPACITY_USD * 100)
+    expect(commitmentCents).toBe(MIN_VIABLE_CAP_CENTS) // $61,200
+    expect(commitmentCents).toBeGreaterThan(availableCashCents)
+    // 失败原因必须指向守卫本身（非环境/过滤问题）：错误码 + 消息双锁。
+    const created = gw.createExecutionProject({
+      name: 'Guard Refutation', genreId: 'action', hrb: HRB_CONSERVATIVE,
+      budgetCapacityCents: UI_DEFAULT_CAPACITY_USD * 100,
+    })
+    expect(created.success).toBe(false)
+    expect(created.errorCode).toBe('PROJ_BUDGET_CAPACITY_EXCEEDS_CASH')
+    expect(created.message).toContain('预算承诺额')
   })
 })

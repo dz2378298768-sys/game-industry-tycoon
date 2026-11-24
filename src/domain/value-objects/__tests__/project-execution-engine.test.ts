@@ -99,10 +99,12 @@ function ledgerCommitmentsSum(
 }
 
 describe('立项（SETUP→ACTIVE）', () => {
-  it('绑定唯一快照；BudgetCapacity > AvailableCash ⇒ 拒绝（§5.4-1）', () => {
+  it('绑定唯一快照；承诺额(hrb × BudgetCapacity) > AvailableCash ⇒ 拒绝（ADJ-30 §3.1）', () => {
     const s = create()
     expect(s.project.state).toBe('ACTIVE')
     expect(s.project.snapshotId).toBe('SNAP-1')
+    // ADJ-2026-11-24-30 §3.1：守卫校验对象由"整笔容量"改为"承诺额"（hrb × 容量）。
+    // 承诺 0.8 × 3,000,000 = 2,400,000 > 可用现金 2,000,000 ⇒ 拒绝；纪律"承诺≤现金"不放宽。
     expect(() =>
       createProjectExecution(
         {
@@ -113,6 +115,7 @@ describe('立项（SETUP→ACTIVE）', () => {
           snapshotId: 'SNAP-2',
           formulaVersion: 'D01-FORMULA-v0.1',
           day: 0,
+          hrb: 0.8,
           budgetCapacityCents: 3_000_000,
           availableCashCents: 2_000_000,
           decomposition: tc02Decomposition(),
@@ -120,6 +123,21 @@ describe('立项（SETUP→ACTIVE）', () => {
         P,
       ),
     ).toThrow(ProjectError)
+  })
+
+  it('容量 > 可用现金但承诺额 ≤ 可用现金 ⇒ 放行（ADJ-30 §3.1 语义修正，纪律不放宽）', () => {
+    // 容量 3,000,000 > 现金 2,000,000（旧口径拒绝），但承诺 0.5 × 3,000,000 = 1,500,000 ≤ 2,000,000。
+    const s = createProjectExecution(
+      {
+        projectId: 'P2b', companyId: 'C1', studioId: 'ST1', versionId: 'V2b',
+        snapshotId: 'SNAP-2b', formulaVersion: 'D01-FORMULA-v0.1', day: 0,
+        hrb: 0.5, budgetCapacityCents: 3_000_000, availableCashCents: 2_000_000,
+        decomposition: tc02Decomposition(),
+      },
+      P,
+    )
+    expect(s.project.state).toBe('ACTIVE')
+    expect(s.project.budgetCapCents).toBe(1_500_000)
   })
 
   it('Budget_cap = hrb × BudgetCapacity（整数美分），Cost_est 由 W_d 导出', () => {

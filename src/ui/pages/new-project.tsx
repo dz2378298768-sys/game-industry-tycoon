@@ -52,7 +52,11 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
 
   // ===== 第 2 步（P-04）字段 =====
   const [projectName, setProjectName] = useState('')
-  const [budgetCapacity, setBudgetCapacity] = useState(20_000) // USD
+  // ADJ-2026-11-24-30 §3.2 默认配置组合定值：默认容量 $136,000 × 默认 HRB 0.45 = 承诺 $61,200。
+  // $61,200 是确定性扫描（B-01b，N=8）得出的最小可行预算帽；不改任何冻结锚点（HRB 两值/起始现金/薪资/horizon 均未动）。
+  // 先立项（无薪资承诺 → availableCash $120,000 ≥ 承诺 $61,200）后招聘为默认自洽路径；若先招满 4 人，
+  // availableCash 降至 $48,656，守卫会按"承诺额 ≤ 可用现金"拒绝并提示玩家（纪律不放宽）。
+  const [budgetCapacity, setBudgetCapacity] = useState(136_000) // USD
   const budgetCapacityCents = Math.max(0, Math.round(budgetCapacity * 100))
   const budgetCapCents = Math.round(hrb * budgetCapacityCents)
   const preview = locked

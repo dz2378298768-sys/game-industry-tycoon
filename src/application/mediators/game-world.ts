@@ -720,11 +720,15 @@ export class GameWorld {
     if (!('id' in guard)) return guard
     const company = guard as Company
     const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
-    if (params.budgetCapacityCents > availableCashCents) {
+    // ADJ-2026-11-24-30 §3.1：守卫校验对象是"承诺额"（hrb × 预算容量），不是整笔容量。
+    // HRB 语义 = 玩家承诺现金的比例（new-project.tsx:57 budgetCapCents = round(hrb × capacity)），
+    // 真正占用现金的是承诺额；纪律"承诺额 ≤ 可用现金"不变，只是对齐语义（非 weaken）。
+    const commitmentCents = Math.round(params.hrb * params.budgetCapacityCents)
+    if (commitmentCents > availableCashCents) {
       return {
         success: false,
         errorCode: 'PROJ_BUDGET_CAPACITY_EXCEEDS_CASH',
-        message: `预算容量 $${(params.budgetCapacityCents / 100).toLocaleString()} 超出可用现金 $${(availableCashCents / 100).toLocaleString()}（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
+        message: `预算承诺额 $${(commitmentCents / 100).toLocaleString()} 超出可用现金 $${(availableCashCents / 100).toLocaleString()}（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
       }
     }
     try {
@@ -783,7 +787,7 @@ export class GameWorld {
   }
 
   /**
-   * 立项确认（P-04）：预算容量 ≤ AvailableCash（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）；
+   * 立项确认（P-04）：预算承诺额（round(hrb × 预算容量)）≤ AvailableCash（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH，ADJ-30 §3.1）；
    * 承诺登记 = one_off project_budget, amount = Budget_cap（内核 setupBudgetCommitment，C2/A-8）；
    * 失败整体回滚不留半成品（原子性）。ExecutionProject 状态入内存 Map（持久化 OPEN-PROJ-EXEC-PERSIST）。
    */
@@ -797,11 +801,13 @@ export class GameWorld {
     if (!('id' in guard)) return guard
     const company = guard as Company
     const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
-    if (params.budgetCapacityCents > availableCashCents) {
+    // ADJ-2026-11-24-30 §3.1：校验承诺额（hrb × 预算容量）≤ 可用现金，非整笔容量；纪律不放宽。
+    const commitmentCents = Math.round(params.hrb * params.budgetCapacityCents)
+    if (commitmentCents > availableCashCents) {
       return {
         success: false,
         errorCode: 'PROJ_BUDGET_CAPACITY_EXCEEDS_CASH',
-        message: `预算容量超出可用现金（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
+        message: `预算承诺额 $${(commitmentCents / 100).toLocaleString()} 超出可用现金 $${(availableCashCents / 100).toLocaleString()}（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH）。`,
       }
     }
     // 立项 = 立约承诺登记（不改现金，A-7 红线）：承诺先行，失败即整体拒绝；

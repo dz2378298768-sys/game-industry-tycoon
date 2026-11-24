@@ -180,3 +180,60 @@ describe('R-004 疲劳只按实际可执行的工作计算', () => {
     expect(byId.get('prog-2')!.fatigue).toBe(20.5)
   })
 })
+
+/**
+ * ADJ-2026-11-24-30 §3.1 容量守卫校验对象修正：
+ * 从"整笔预算容量 > 可用现金"改为"承诺额(hrb × 容量) > 可用现金"。
+ * 纪律"承诺额 ≤ 可用现金"不放宽；两个方向都要锁：该拒的拒、该放的放。
+ */
+describe('PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 校验对象 = 承诺额（ADJ-30 §3.1）', () => {
+  function studio(seed: number, hires: number) {
+    const gw = new GameWorld(seed)
+    gw.createCompany({ name: 'Cap Guard', cityId: 'san_francisco' })
+    const roles = ['programmer', 'designer', 'artist', 'qa'] as const
+    for (let i = 0; i < hires; i++) {
+      gw.hireEmployee({ name: `E${i}`, role: roles[i]!, skillLevel: 3, salaryMonthlyCents: 182_000 })
+    }
+    return { gw, availableCashCents: gw.getFinancialOverview()!.availableCashCents }
+  }
+
+  it('正面：容量 > 可用现金但承诺额 ≤ 可用现金 ⇒ 预览与立项均放行', () => {
+    const { gw, availableCashCents } = studio(101, 0)
+    expect(availableCashCents).toBe(12_000_000) // $120,000，无薪资承诺
+    const capacity = 136_000 * 100 // $136,000 > $120,000（旧口径会拒绝）
+    const commitment = Math.round(0.45 * capacity) // $61,200 ≤ $120,000
+    expect(commitment).toBeLessThanOrEqual(availableCashCents)
+    const preview = gw.previewExecutionProject({ hrb: 0.45, budgetCapacityCents: capacity })
+    expect(preview.success).toBe(true)
+    const created = gw.createExecutionProject({ name: 'OK', genreId: 'action', hrb: 0.45, budgetCapacityCents: capacity })
+    expect(created.success).toBe(true)
+    expect(gw.getExecutionSummary(created.result!.projectId)?.budgetCapCents).toBe(commitment)
+  })
+
+  it('反面：承诺额 > 可用现金 ⇒ 预览与立项均以 PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 拒绝', () => {
+    const { gw, availableCashCents } = studio(102, 4)
+    expect(availableCashCents).toBe(4_865_600) // $48,656：4 人 6 月薪资承诺预留后
+    // 默认忠实玩家：hrb 0.45 × capacity $136,000 = 承诺 $61,200 > $48,656 ⇒ 拒绝（纪律仍成立）
+    const capacity = 136_000 * 100
+    expect(Math.round(0.45 * capacity)).toBe(6_120_000)
+    expect(Math.round(0.45 * capacity)).toBeGreaterThan(availableCashCents)
+    const preview = gw.previewExecutionProject({ hrb: 0.45, budgetCapacityCents: capacity })
+    expect(preview.success).toBe(false)
+    expect(preview.errorCode).toBe('PROJ_BUDGET_CAPACITY_EXCEEDS_CASH')
+    const created = gw.createExecutionProject({ name: 'BAD', genreId: 'action', hrb: 0.45, budgetCapacityCents: capacity })
+    expect(created.success).toBe(false)
+    expect(created.errorCode).toBe('PROJ_BUDGET_CAPACITY_EXCEEDS_CASH')
+    expect(created.message).toContain('预算承诺额') // message 同步对齐新校验对象
+  })
+
+  it('无招聘开局（先立项后招聘）：默认容量 $136,000 / HRB 0.45 合法登记承诺 $61,200', () => {
+    const { gw } = studio(103, 0)
+    const created = gw.createExecutionProject({ name: 'First', genreId: 'action', hrb: 0.45, budgetCapacityCents: 136_000 * 100 })
+    expect(created.success).toBe(true)
+    const companyId = gw.getPlayerCompany()!.id
+    const sum = gw.finance.getLedger().getCommitments(companyId)
+      .filter((c) => c.sourceType === 'project_budget')
+      .reduce((s, c) => s + c.amountCents, 0)
+    expect(sum).toBe(6_120_000)
+  })
+})

@@ -199,10 +199,14 @@ export function createProjectExecution(
   input: CreateProjectInput,
   params: ProjectFormulaParams,
 ): ProjectExecutionState {
-  if (input.budgetCapacityCents > input.availableCashCents) {
+  // ADJ-2026-11-24-30 §3.1：守卫校验对象是"承诺额"（hrb × budgetCapacityCents），不是整笔容量。
+  // 与 game-world.ts 的 preview/createExecutionProject 同源；纪律"承诺额 ≤ AvailableCash"不放宽。
+  const hrbForGuard = input.hrb ?? 0.5
+  const commitmentCents = Math.round(hrbForGuard * input.budgetCapacityCents)
+  if (commitmentCents > input.availableCashCents) {
     throw new ProjectError(
       PROJ_ERROR.BUDGET_CAPACITY_EXCEEDS_CASH,
-      `budgetCapacityCents ${input.budgetCapacityCents} > AvailableCash ${input.availableCashCents}`,
+      `commitmentCents(hrb × budgetCapacityCents) ${commitmentCents} > AvailableCash ${input.availableCashCents}`,
     )
   }
   if (input.snapshotId === '') {

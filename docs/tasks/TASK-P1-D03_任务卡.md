@@ -38,4 +38,4 @@
 - [ ] 通过独立设计审核。
 
 ## 5. 交付物
-`docs/design/06_D03人才与组织设计规格_V0.1.md`
+`docs/archive/design-specs-old/06_D03人才与组织设计规格_V0.1.md`

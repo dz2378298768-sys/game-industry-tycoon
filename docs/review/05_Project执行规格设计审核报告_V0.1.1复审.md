@@ -5,7 +5,7 @@
 | Task ID | TASK-P1-PROJ-01 |
 | 审核对象 | Project / WorkPackage 执行规格 V0.1.1（DESIGN-PROJ-V0.1.1，状态 `DESIGN_DRAFT`） |
 | 审核轮次 | **复审轮**（V0.1 判定 FAIL：1 CRITICAL + 5 MAJOR 后的整改复审） |
-| 提交文件 | `/workspace/GameIndustryTycoon/docs/design/05_Project与WorkPackage执行规格_V0.1.1.md` |
+| 提交文件 | `/workspace/GameIndustryTycoon/docs/archive/design-specs-old/05_Project与WorkPackage执行规格_V0.1.1.md` |
 | 审核人 | 设计审核 Agent（独立设计审查员） |
 | 审核日期 | 2026-11-22 |
 | 报告版本 | V0.1.1 复审 |

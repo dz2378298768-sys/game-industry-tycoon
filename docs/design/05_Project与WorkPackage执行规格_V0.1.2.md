@@ -9,9 +9,9 @@
 | 状态 | DESIGN_DRAFT |
 | 基线关系 | V0.1 / V0.1.1 原文保留不改。**V0.1.2 修订（ADJ-2026-11-22-08）**：①§4.3 交付 FAIL 行的触发条件加"玩家主动发起设计变更"；②§5.6-3 由斜杠并列表述改为"FAIL 期间保持 `READY_TO_DELIVER`"+`lastDeliveryFailure`+不自动建会话；③新增 §6.5.1 返工 WP 学科归集（未知则 fail-closed）。三项均为**规格自身缺陷**（§4.3 与 §5.6-3 原表述互相矛盾；返工学科从未定义），由编码审核在 CODE-03 独立发现 |
 | 阶段 | P1 前置硬阻塞最后一项（P0-B §5 优先级 2） |
-| 上游权威 | `docs/design/01_产品蓝图与玩法模块体系设计规格_V0.2.md`（D-01，DONE，§6/§7/§15/§16）；`docs/design/03_D02产品完整度与交付标准设计规格_V0.1.md`（D-02，§3.9/§7.2/§7.3）；`docs/design/04_财务与统一账本设计规格_V0.2.md`（FIN，§3.3/§5/§8）；`docs/design/02_D04前置词表包设计规格_V0.2.md`（§5.2/§7.3）；`docs/p0/02_核心实体关系与首批可玩场景_V0.1.md`（P0-B，§2.5/§3/§4/§5）；`docs/p0/01_V2.1.7工程现状与迁移影响分析_V0.1.md`（§2.9–2.11/§3.2/§3.5） |
+| 上游权威 | `docs/design/01_产品蓝图与玩法模块体系设计规格_V0.2.md`（D-01，DONE，§6/§7/§15/§16）；`docs/design/03_D02产品完整度与交付标准设计规格_V0.1.md`（D-02，§3.9/§7.2/§7.3）；`docs/design/04_财务与统一账本设计规格_V0.2.md`（FIN，§3.3/§5/§8）；`docs/design/02_D04前置词表包设计规格_V0.2.md`（§5.2/§7.3）；`docs/p0/02_核心实体关系与首批可玩场景_V0.1.md`（P0-B，§2.5/§3/§4/§5）；`docs/archive/legacy/01_V2.1.7工程现状与迁移影响分析_V0.1.md`（§2.9–2.11/§3.2/§3.5） |
 | 本文不涉及 | D-01 蓝图内部公式/状态机/返工档位定义；D-02 清单与三质量内部公式；FIN 账本与危机内部公式；D-03 人才深模型；QA 缺陷分类终值；代码与像素级 UI |
-| 交付物 | 本文件（`docs/design/05_Project与WorkPackage执行规格_V0.1.1.md`） |
+| 交付物 | 本文件（`docs/archive/design-specs-old/05_Project与WorkPackage执行规格_V0.1.1.md`） |
 
 **状态标记**（沿用 `docs/baseline/README.md`）：
 `CONFIRMED` 用户已确认；`DESIGN_BASELINE` 总设计师默认裁定，可经证据推翻；`TUNING` 结构确定、参数待校准；`OPEN` 需后续专项设计；`DEFERRED` 明确后置；`REJECTED` 当前不做。
@@ -872,7 +872,7 @@ actualCents = Σ_{推进日,wp∈REWORK} out_wp × costPerUnit_d        // 逐�
 |---|---|
 | Task ID | TASK-P1-PROJ-01 |
 | 设计规格版本 | V0.1.1（V0.1 审核 FAIL 后整改版；只做设计，不写代码） |
-| 提交文件 | `/workspace/GameIndustryTycoon/docs/design/05_Project与WorkPackage执行规格_V0.1.1.md` |
+| 提交文件 | `/workspace/GameIndustryTycoon/docs/archive/design-specs-old/05_Project与WorkPackage执行规格_V0.1.1.md` |
 | 上游基线 | D-01 V0.2（§6/§7/§15）、D-02 V0.1（§3.9/§7.2）、FIN V0.2（§3.3/§5）、D-04 词表 V0.2（§5.2）、P0-B（§2.5/§3/§4）、V2.1.7 迁移分析（§2.9–2.11/§3.2）——均未修改 |
 | 覆盖要求 | 协作规范 2.3B 18 项全覆盖（§13.3）；状态机无无法退出状态（§4.4） |
 

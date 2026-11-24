@@ -33,7 +33,7 @@
 | CODE-04-PATCH2 实现 | `138e5d3`：A3 反证用例、幂等摘要重建（rebuildItemSummary）、TC-19 标注、报告核对表、M-07 用例；907 全绿 | 编码 Agent | 交付上报 3 事项已裁定（docs 收编 / R8 建卡 / P2-02 并入 03-REWORK） |
 | CODE-04-PATCH2 独立审核 | `review/CODE-04-PATCH2_编码审核报告_V0.1.md`：**PASS**，零断言放松 | 编码审核 Agent | **CODE-04 合并验收 CLOSED** |
 | V3.1-DRAFT-02 修订稿 | `design/V3.1修订/` 修订稿（2414 行）+ 变更说明，11 处编辑 | 设计 Agent | — |
-| DRAFT-02 独立审核 | `review/V3.1-DRAFT-02_设计审核报告_V0.1.md`：PASS WITH CONDITIONS，P-1~P-4 | 设计审核 Agent | P-1/P-2/P-3 已修，升级 DESIGN_BASELINE 候选 |
+| DRAFT-02 独立审核 | `archive/drafts/V3.1-DRAFT-02_设计审核报告_V0.1.md`：PASS WITH CONDITIONS，P-1~P-4 | 设计审核 Agent | P-1/P-2/P-3 已修，升级 DESIGN_BASELINE 候选 |
 | R8 任务卡 | `tasks/TASK-P1-CODE-08_任务卡.md`（READY） | — | 归 CODE-06 前 |
 
 ## 三、任务总台账（V2.1 统一记录，精简）

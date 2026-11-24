@@ -7,7 +7,7 @@
 | Task ID | TASK-P1-CODE-03 |
 | 阶段 | P1（单工作室可玩闭环）前置编码 · 第 3 个编码任务 |
 | 实施角色 | 编码 Agent（general-purpose-1） |
-| 规格版本 | `docs/design/05_Project与WorkPackage执行规格_V0.1.1.md`（含 C1–C8 / N-01~N-04 澄清） |
+| 规格版本 | `docs/archive/design-specs-old/05_Project与WorkPackage执行规格_V0.1.1.md`（含 C1–C8 / N-01~N-04 澄清） |
 | 上游权威 | D-01 产品蓝图 V0.2（§6/§7/§15）、FIN 统一账本 V0.2（§3.3/§5/BR-3）、D-04 词表 V0.2 |
 | 代码基线 | worktree `/workspace/GameIndustryTycoon/code/worktree`，基线 commit `e03448f`（含 CODE-01/CODE-02；**实测** 84 文件 / 793 用例全绿） |
 | 实施 commit | `517d8b9`（本地，未推送、未执行任何远程操作） |

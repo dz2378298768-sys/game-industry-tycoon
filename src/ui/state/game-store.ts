@@ -187,9 +187,9 @@ interface GameStore {
   /** P-05：月薪承诺合计（KPI） */
   monthlySalaryCommitmentCents(): number
   /** P-04：立项预览（内核同源派生 Budget_cap/Cost_est/ratio/verdict/WP） */
-  previewExecutionProject(params: { hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined } & { preview?: import('@application/mediators/game-world').ExecutionProjectPreview }
+  previewExecutionProject(params: import('@application/mediators/game-world').BlueprintDraftInput | { hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined } & { preview?: import('@application/mediators/game-world').ExecutionProjectPreview }
   /** P-04：立项确认（PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 校验 + project_budget 承诺，原子） */
-  createExecutionProject(params: { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
+  createExecutionProject(params: import('@application/mediators/game-world').BlueprintDraftInput | { name: string; genreId: string; hrb: number; budgetCapacityCents: number }): { success: boolean; errorCode?: string | undefined; message?: string | undefined }
   /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源） */
   getExecutionSummary(projectId: string): import('@application/mediators/game-world').ExecutionSummary | null
   /** P-11：现金流预测只读投影（FIN §6.1/§6.3 → netCashByMonth）。 */

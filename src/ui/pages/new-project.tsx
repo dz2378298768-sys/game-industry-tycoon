@@ -3,6 +3,8 @@ import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
 import { availablePlatforms, availableSegments, yearOfDay } from '@content/queries'
 import { TUNING } from '@content/tuning'
+import { REC03_MODULES, REC03_CONTENT_PACKS } from '@content/rec03-content'
+import type { BlueprintDraftInput } from '@application/mediators/game-world'
 
 interface Props {
   onNavigate: (route: string) => void
@@ -34,6 +36,8 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   const [platformId, setPlatformId] = useState('')
   const [segmentIds, setSegmentIds] = useState<string[]>([])
   const [hrb, setHrb] = useState<number>(TUNING.project.hrbConservativeRatio)
+  const [coreModule, setCoreModule] = useState('MOD-CORE-ACTION')
+  const [supportModules, setSupportModules] = useState<string[]>([])
 
   const year = yearOfDay(dayIndex)
   const platforms = availablePlatforms(dayIndex)
@@ -45,7 +49,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
     { label: t('newProject.elements.name'), value: productName || t('newProject.elements.missing') },
     { label: t('newProject.elements.positioning'), value: content.genres.find(g => g.id === genreId)?.displayNameZh ?? genreId },
     { label: t('newProject.elements.segments'), value: segmentIds.length === 0 ? t('newProject.elements.missing') : segmentIds.map(id => segments.find(s => s.id === id)?.displayNameZh ?? id).join('、') },
-    { label: t('newProject.elements.modules'), value: t('newProject.elements.modulesOpen') },
+    { label: t('newProject.elements.modules'), value: [coreModule, ...supportModules, 'MOD-CONTENT-EPISODES'].join(' / ') },
     { label: t('newProject.elements.plan'), value: `HRB ${Math.round(hrb * 100)}%` },
   ]
   const canLock = productName.trim().length > 0 && segmentIds.length > 0
@@ -59,8 +63,26 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   const [budgetCapacity, setBudgetCapacity] = useState<number>(TUNING.project.defaultBudgetCapacityUsd) // USD
   const budgetCapacityCents = Math.max(0, Math.round(budgetCapacity * 100))
   const budgetCapCents = Math.round(hrb * budgetCapacityCents)
+  const segmentTags: Record<string, string> = { arcade_enthusiasts: 'SEG-YOUTH', online_gamers: 'SEG-COMPETITIVE', pc_gamers: 'SEG-HARDCORE', home_players: 'SEG-MASS_MARKET' }
+  const draftInput = (): BlueprintDraftInput => ({
+    kind: 'draft',
+    requestId: `new-project-${productName.trim() || 'draft'}`,
+    workingTitle: productName.trim(),
+    genreId,
+    primaryTypeId: genreId,
+    targetSegmentClaims: segmentIds.map((id) => segmentTags[id] ?? id).filter((id) => id.startsWith('SEG-')),
+    platformTargets: effectivePlatformId ? [effectivePlatformId === 'arcade' ? 'PLT-ARCADE' : effectivePlatformId],
+    modules: [
+      { templateId: coreModule, slotId: 'REC03-SLOT-CORE', instanceId: 'rec03-core', intensity: 3, depthSelection: 'standard', optionSelections: {}, contentPackId: null },
+      ...supportModules.map((id) => ({ templateId: id, slotId: 'REC03-SLOT-SUPPORT' as const, instanceId: `rec03-${id}`, intensity: 3 as const, depthSelection: 'standard' as const, optionSelections: {}, contentPackId: null })),
+      { templateId: 'MOD-CONTENT-EPISODES', slotId: 'REC03-SLOT-CONTENT', instanceId: 'rec03-content', intensity: 3, depthSelection: 'standard', optionSelections: {}, contentPackId: REC03_CONTENT_PACKS[0]?.packId ?? null },
+    ],
+    deliveryForm: 'full',
+    hrb,
+    budgetCapacityCents,
+  })
   const preview = locked
-    ? (() => { const r = previewExecutionProject({ hrb, budgetCapacityCents }); return r.success ? r.preview ?? null : null })()
+    ? (() => { const r = previewExecutionProject(draftInput()); return r.success ? r.preview ?? null : null })()
     : null
   const plannedLaunchDay = dayIndex + TUNING.project.defaultLaunchHorizonDays
 
@@ -81,12 +103,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
     setError('')
     if (isBankrupt) { setError(t('finance.bankrupt.blocked.create')); return }
     if (!projectName.trim()) { setError(t('error.requiredField')); return }
-    const r = createExecutionProject({
-      name: projectName.trim(),
-      genreId,
-      hrb,
-      budgetCapacityCents,
-    })
+    const r = createExecutionProject({ ...draftInput(), requestId: `new-project-${productName.trim()}` })
     if (r.success) onNavigate('projects')
     else setError(r.message ?? t('error.unknown'))
   }
@@ -166,11 +183,16 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
               </label>
             </div>
             {/* 玩法模块槽位：词表缺种子 → fail-closed，不伪造（OPEN-CONTENT-MODULES） */}
-            <div className="form-row" data-testid="module-slots-failclosed">
+            <div className="form-row" data-testid="module-selection">
               <label>{t('newProject.form.modules')}</label>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-                {t('newProject.form.modulesOpen')}
-              </p>
+              <div className="flex-gap" data-testid="module-core">
+                {REC03_MODULES.filter(m => m.allowedSlotKinds.includes('core_loop')).map(m => <label key={m.templateId}><input type="radio" name="rec03-core" checked={coreModule === m.templateId} onChange={() => setCoreModule(m.templateId)} /> {m.name}</label>)}
+              </div>
+              <div className="flex-gap" data-testid="module-support">
+                {REC03_MODULES.filter(m => m.allowedSlotKinds.includes('support')).map(m => <label key={m.templateId}><input type="checkbox" checked={supportModules.includes(m.templateId)} onChange={() => setSupportModules(prev => prev.includes(m.templateId) ? prev.filter(x => x !== m.templateId) : prev.length < 2 ? [...prev, m.templateId] : prev)} /> {m.name}</label>)}
+              </div>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-work">{REC03_MODULES.find(m => m.templateId === coreModule)?.description}；支援模块 {supportModules.length}/2</p>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-audience">{supportModules.length === 0 ? '成长系统未选择：成长相关交付项不满足/不适用' : supportModules.join(', ')}</p>
             </div>
 
             {/* 产品身份五要素摘要（快照预览） */}

@@ -187,6 +187,8 @@ export interface ContentPack {
   tier: number
   workUnitsPerTier: Record<BlueprintDiscipline, number>
   audienceVolumeWeight: number
+  /** REC-03 era is optional for legacy runtime packs and historical snapshots. */
+  era?: { fromYear: number; toYear: number }
 }
 
 /** §4.5 ModuleInstance。state 锁定后只能 active→deactivated，不可逆（T3）。 */

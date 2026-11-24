@@ -83,6 +83,14 @@ import type { DomainEvent } from '@domain/events'
 import type { EmployeeRole, Discipline, ProjectRole } from '@domain/enums'
 import type { TeamAssignment } from '@domain/value-objects'
 import { topUpIdempotencyKey, createTopUpChangeLogEntry } from '@domain/value-objects'
+import { REC03_CONTENT_PACKS, REC03_FORMULA_VERSION, REC03_MODULES, REC03_SEGMENT_MAP, REC03_SLOTS, validateRec03Catalog } from '@content/rec03-content'
+import { createP1Catalog } from '@content/d04-vocabulary'
+import { estimateFourChannels } from '@domain/value-objects/product-blueprint-estimation'
+import { checkCompositionRules, type CompositionRules } from '@domain/value-objects/product-blueprint-composition'
+import { DEFAULT_BLUEPRINT_TUNING } from '@domain/value-objects/product-blueprint-tuning'
+import { lockVersion, transitionVersion } from '@domain/value-objects/product-blueprint-lifecycle'
+import type { BlueprintVersion, DesignVersionSnapshot, FrozenBlueprint, ModuleInstance, PositioningProfile, ReleaseForm } from '@domain/entities/product-blueprint'
+import { decomposeWorkPackages, type DecompositionInput } from '@domain/value-objects/project-execution-decomposition'
 
 export interface CommandOutcome<T = undefined> {
   success: boolean
@@ -138,7 +146,18 @@ export interface ExecutionProjectPreview {
   verdict: import('@domain/entities/project-execution').HrbVerdict
   reasoning: string[]
   workPackages: Array<{ workPackageId: string; discipline: string; baselineWorkUnits: number; dependsOn: readonly string[] }>
+  requestId?: string
+  snapshotId?: string
+  versionId?: string
+  snapshot?: DesignVersionSnapshot
+  decomposition?: DecompositionInput
+  estimates?: import('@domain/entities/product-blueprint').EstimateBundle
+  violations?: import('@domain/entities/product-blueprint').BlueprintViolation[]
 }
+
+export type BlueprintDraftInput =
+  | { kind: 'draft'; requestId: string; workingTitle: string; genreId: string; primaryTypeId: string; targetSegmentClaims: string[]; platformTargets: string[]; modules: Array<{ templateId: string; slotId: string; instanceId: string; intensity: 1 | 2 | 3 | 4 | 5; depthSelection: import('@domain/entities/product-blueprint').DepthSelection; optionSelections: Record<string, string>; contentPackId: string | null }>; deliveryForm: ReleaseForm; hrb: number; budgetCapacityCents: number }
+  | { kind: 'snapshotRef'; requestId: string; snapshotId: string; versionId: string; workingTitle: string; genreId: string; plannedLaunchDay: number; hrb: number; budgetCapacityCents: number }
 
 /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源派生）。 */
 export interface ExecutionSummary {
@@ -232,6 +251,8 @@ export class GameWorld {
   private readonly salesInputs: MarketInputProvider
   /** P-03/P-04：ExecutionProject 状态（内存暂存；存档序列化未包含 → OPEN-PROJ-EXEC-PERSIST） */
   private readonly executionProjects = new Map<string, ProjectExecutionState>()
+  private readonly rec03Snapshots = new Map<string, { snapshot: DesignVersionSnapshot; decomposition: DecompositionInput; projectId?: string; name: string; genreId: string; plannedLaunchDay: number }>()
+  private readonly rec03Requests = new Map<string, { hash: string; preview?: ExecutionProjectPreview; result?: { projectId: string; snapshotId: string; versionId: string; commitmentId: string } }>()
   /**
    * 07B REVISION2：D-02 交付闸门评估判定快照（key=projectId::form）。
    * 仅供只读视图消费；不参与 submitDeliveryForProject / evaluateGate 判定，内核提交语义零改动。
@@ -715,7 +736,8 @@ export class GameWorld {
    * 零负载 + 空团队 → Cost_est=+∞（UI 显示"暂不可估"，禁止显示 Infinity）；
    * 模块词表缺种子（OPEN-CONTENT-MODULES）→ workload 全零 fail-closed。
    */
-  previewExecutionProject(params: { hrb: number; budgetCapacityCents: number }): CommandOutcome<ExecutionProjectPreview> {
+  previewExecutionProject(params: BlueprintDraftInput | { hrb: number; budgetCapacityCents: number }): CommandOutcome<ExecutionProjectPreview> {
+    if ('kind' in params) return this.previewRec03(params)
     const guard = this.assertCompanyActive()
     if (!('id' in guard)) return guard
     const company = guard as Company
@@ -791,12 +813,13 @@ export class GameWorld {
    * 承诺登记 = one_off project_budget, amount = Budget_cap（内核 setupBudgetCommitment，C2/A-8）；
    * 失败整体回滚不留半成品（原子性）。ExecutionProject 状态入内存 Map（持久化 OPEN-PROJ-EXEC-PERSIST）。
    */
-  createExecutionProject(params: {
+  createExecutionProject(params: BlueprintDraftInput | {
     name: string
     genreId: string
     hrb: number
     budgetCapacityCents: number
   }): CommandOutcome<{ projectId: string }> {
+    if ('kind' in params) return this.createRec03(params)
     const guard = this.assertCompanyActive()
     if (!('id' in guard)) return guard
     const company = guard as Company
@@ -875,6 +898,78 @@ export class GameWorld {
   }
 
   /** ExecutionProject 只读（P-06 后续接线；内存暂存）。 */
+  private rec03Draft(params: BlueprintDraftInput): { snapshot: DesignVersionSnapshot; decomposition: DecompositionInput; estimates: import('@domain/entities/product-blueprint').EstimateBundle; violations: import('@domain/entities/product-blueprint').BlueprintViolation[]; name: string; genreId: string; plannedLaunchDay: number } | CommandOutcome<ExecutionProjectPreview> {
+    validateRec03Catalog()
+    if (!params.requestId.trim()) return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'requestId required' }
+    if (params.kind === 'snapshotRef') {
+      const saved = this.rec03Snapshots.get(params.snapshotId)
+      if (saved === undefined || saved.snapshot.versionId !== params.versionId || saved.name !== params.workingTitle || saved.genreId !== params.genreId || saved.plannedLaunchDay !== params.plannedLaunchDay || saved.projectId === undefined) return { success: false, errorCode: 'REC03_SNAPSHOT_REF_MISMATCH', message: 'snapshotRef does not match an associated project' }
+      return { snapshot: saved.snapshot, decomposition: saved.decomposition, estimates: saved.snapshot.estimates ?? estimateFourChannels({ structure: saved.snapshot.frozenBlueprint, templatesById: Object.fromEntries(REC03_MODULES.map((m) => [m.templateId, m])), archetype: null, capabilities: {}, platformTechStandards: [], synergyPenaltySum: 0 }, DEFAULT_BLUEPRINT_TUNING), violations: [], name: saved.name, genreId: saved.genreId, plannedLaunchDay: saved.plannedLaunchDay }
+    }
+    const targetTags = [...new Set(params.targetSegmentClaims)]
+    const catalog = createP1Catalog()
+    const tags = new Set(catalog.vocabulary.tags.map((x) => x.tagId))
+    const platforms = new Set(catalog.platforms.map((x) => x.platformId))
+    const violations: import('@domain/entities/product-blueprint').BlueprintViolation[] = []
+    if (!params.workingTitle.trim() || !params.genreId || !tags.size || targetTags.some((x) => !tags.has(x)) || params.platformTargets.some((x) => !platforms.has(x))) return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'invalid title, genre, segment, or platform' }
+    const modules = params.modules
+    const core = modules.filter((m) => m.slotId === 'REC03-SLOT-CORE')
+    const content = modules.filter((m) => m.slotId === 'REC03-SLOT-CONTENT')
+    const support = modules.filter((m) => m.slotId === 'REC03-SLOT-SUPPORT')
+    if (core.length !== 1 || content.length !== 1 || support.length > 2 || new Set(modules.map((m) => m.instanceId)).size !== modules.length) return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'REC03 requires one core, one content, and at most two support modules' }
+    const templatesById = Object.fromEntries(REC03_MODULES.map((m) => [m.templateId, m]))
+    if (modules.some((m) => templatesById[m.templateId] === undefined)) return { success: false, errorCode: 'REC03_TEMPLATE_UNKNOWN', message: 'unknown REC03 module template' }
+    const instances: ModuleInstance[] = modules.map((m) => { const t = templatesById[m.templateId]; if (t === undefined || !t.allowedSlotKinds.includes(m.slotId as never)) throw new Error('REC03_TEMPLATE_UNKNOWN'); return { instanceId: m.instanceId, templateId: m.templateId, slotId: m.slotId, displayLabel: t.name, domain: t.domain, intensity: m.intensity, depthSelection: m.depthSelection, optionSelections: { ...m.optionSelections }, contentPackId: m.contentPackId, state: 'active', sourceOrigin: 'player' } })
+    const packs = modules.filter((m) => m.contentPackId !== null).map((m) => REC03_CONTENT_PACKS.find((p) => p.packId === m.contentPackId)).filter((p): p is typeof REC03_CONTENT_PACKS[number] => p !== undefined)
+    if (packs.length !== content.length) return { success: false, errorCode: 'REC03_CONTENT_PACK_INVALID', message: 'content module requires a valid REC03 content pack' }
+    const positioning: PositioningProfile = { primaryTypeId: params.primaryTypeId, secondaryTypeIds: [], settingIds: [], perspectiveId: 'side_scroll', structureId: 'linear', targetSegmentClaims: targetTags, sellingPoints: [], platformTargets: [...params.platformTargets], commercialPositioning: 'premium', presetId: null }
+    const slots = REC03_SLOTS.map((s) => ({ ...s, domainAcceptance: [...s.domainAcceptance], bindings: instances.filter((i) => i.slotId === s.slotId).map((i) => i.instanceId), outsourcingEligible: false }))
+    const frozen: FrozenBlueprint = { positioning, slots, instances, contentPacks: packs.map((p) => ({ ...p, workUnitsPerTier: { ...p.workUnitsPerTier } })) }
+    const composition = checkCompositionRules(frozen, templatesById, { combineRules: [], requireRules: [], conflictRules: [] } as CompositionRules, DEFAULT_BLUEPRINT_TUNING)
+    violations.push(...composition.violations)
+    const estimates = estimateFourChannels({ structure: frozen, templatesById, archetype: catalog.archetypes.find((a) => a.archetypeId === params.primaryTypeId) ?? null, capabilities: {}, platformTechStandards: [], synergyPenaltySum: composition.penaltySum }, DEFAULT_BLUEPRINT_TUNING)
+    const projectId = `preview-${params.requestId}`
+    const decomposition: DecompositionInput = { projectId, snapshotId: `rec03-${params.requestId}`, workload: estimates.workUnits.byDiscipline, instances: instances.map((i) => ({ instanceId: i.instanceId, displayLabel: i.displayLabel, rawWorkload: estimates.workUnits.raw })), contentPacks: packs.map((p) => ({ packId: p.packId, rawWorkload: p.workUnitsPerTier })), requireRules: [] }
+    const version: BlueprintVersion = { versionId: `rec03-version-${params.requestId}`, blueprintId: `rec03-blueprint-${params.requestId}`, versionNo: 0, state: 'IN_REVIEW', positioning, slots, instances, contentPacks: packs.map((p) => ({ ...p })), lockTargetReleaseForm: params.kind === 'draft' ? params.deliveryForm : 'full', lockedAt: null, lockedBy: null, changeHistory: [], supersedesVersionId: null, birthState: 'LOCKED' }
+    const locked = lockVersion(version, decomposition.snapshotId, templatesById, this.dayIndex, 'player', estimates)
+    return { snapshot: locked.snapshot, decomposition, estimates, violations, name: params.workingTitle, genreId: params.genreId, plannedLaunchDay: this.dayIndex + TUNING.project.defaultLaunchHorizonDays }
+  }
+
+  private previewRec03(params: BlueprintDraftInput): CommandOutcome<ExecutionProjectPreview> {
+    const payloadHash = JSON.stringify(params)
+    const prior = this.rec03Requests.get(params.requestId)
+    if (prior !== undefined) { if (prior.hash !== payloadHash) return { success: false, errorCode: 'REC03_REQUEST_PAYLOAD_MISMATCH', message: 'requestId payload mismatch' }; if (prior.preview !== undefined) return { success: true, result: prior.preview, idempotent: true } }
+    const built = this.rec03Draft(params)
+    if ('success' in built) return { success: false, errorCode: built.errorCode, message: built.message }
+    const state = createProjectExecution({ projectId: built.decomposition.projectId, companyId: this.getPlayerCompany()!.id, studioId: this.getPlayerCompany()!.id, versionId: built.snapshot.versionId, snapshotId: built.snapshot.snapshotId, formulaVersion: REC03_FORMULA_VERSION, day: this.dayIndex, hrb: params.hrb, budgetCapacityCents: params.budgetCapacityCents, availableCashCents: this.getFinancialOverview()?.availableCashCents ?? 0, plannedLaunchDay: built.plannedLaunchDay, deliveryFormTarget: params.kind === 'draft' ? params.deliveryForm : 'full', decomposition: built.decomposition }, DEFAULT_PROJECT_FORMULA_PARAMS)
+    const result: ExecutionProjectPreview = { requestId: params.requestId, snapshotId: built.snapshot.snapshotId, versionId: built.snapshot.versionId, snapshot: built.snapshot, decomposition: built.decomposition, estimates: built.estimates, violations: built.violations, budgetCapCents: state.project.budgetCapCents, costEstCents: null, costEstInfinite: true, ratio: 0, verdict: 'need_more_budget_or_delay', reasoning: ['REC-03 preview'], workPackages: state.workPackages.map((wp) => ({ workPackageId: wp.workPackageId, discipline: wp.discipline, baselineWorkUnits: wp.baselineWorkUnits, dependsOn: wp.sourceRef.instanceId ? [wp.sourceRef.instanceId] : [] })) }
+    this.rec03Requests.set(params.requestId, { hash: payloadHash, preview: result })
+    return { success: true, result }
+  }
+
+  private createRec03(params: BlueprintDraftInput): CommandOutcome<{ projectId: string }> {
+    const payloadHash = JSON.stringify(params)
+    const prior = this.rec03Requests.get(params.requestId)
+    if (prior !== undefined && prior.hash !== payloadHash) return { success: false, errorCode: 'REC03_REQUEST_PAYLOAD_MISMATCH', message: 'requestId payload mismatch' }
+    const built = this.rec03Draft(params)
+    if ('success' in built) return { success: false, errorCode: built.errorCode, message: built.message }
+    if (built.violations.some((v) => v.severity === 'E')) return { success: false, errorCode: 'REC03_BLUEPRINT_VIOLATION', message: built.violations.map((v) => v.message).join('; '), result: undefined }
+    const company = this.getPlayerCompany(); if (company === undefined) return { success: false, errorCode: 'COMPANY_NOT_FOUND', message: 'company unavailable' }
+    const projectId = uuid()
+    let execution = createProjectExecution({ projectId, companyId: company.id, studioId: company.id, versionId: built.snapshot.versionId, snapshotId: built.snapshot.snapshotId, formulaVersion: REC03_FORMULA_VERSION, day: this.dayIndex, hrb: params.hrb, budgetCapacityCents: params.budgetCapacityCents, availableCashCents: this.getFinancialOverview()?.availableCashCents ?? 0, plannedLaunchDay: built.plannedLaunchDay, deliveryFormTarget: params.kind === 'draft' ? params.deliveryForm : 'full', decomposition: { ...built.decomposition, projectId } }, DEFAULT_PROJECT_FORMULA_PARAMS)
+    execution = setupBudgetCommitment(execution, { ledger: this.finance.getLedger(), day: this.dayIndex })
+    const legacy = this.createProject({ name: built.name, genreId: built.genreId, budgetTotalCapCents: execution.project.budgetCapCents, plannedLaunchDay: built.plannedLaunchDay, targetPlatformIds: params.kind === 'draft' ? params.platformTargets : [], audienceSegmentIds: params.kind === 'draft' ? [...new Set(params.targetSegmentClaims.map((x) => REC03_SEGMENT_MAP[x]).filter((x): x is string => x !== undefined))] : [] })
+    if (!legacy.success || legacy.result === undefined) {
+      for (const cid of execution.project.commitmentIds) this.finance.getLedger().releaseCommitment(company.id, cid, monthKeyFromOffsetForRunway(dayIndexToGregorian(this.dayIndex)))
+      return { success: false, errorCode: legacy.errorCode, message: legacy.message }
+    }
+    this.executionProjects.set(projectId, execution); this.executionProjects.set(legacy.result.id, execution)
+    this.rec03Snapshots.set(built.snapshot.snapshotId, { snapshot: built.snapshot, decomposition: { ...built.decomposition, projectId }, projectId: legacy.result.id, name: built.name, genreId: built.genreId, plannedLaunchDay: built.plannedLaunchDay })
+    const commitmentId = execution.project.commitmentIds[0] ?? ''
+    this.rec03Requests.set(params.requestId, { hash: payloadHash, result: { projectId, snapshotId: built.snapshot.snapshotId, versionId: built.snapshot.versionId, commitmentId } })
+    return { success: true, result: { projectId }, idempotent: prior !== undefined }
+  }
+
   getExecutionProject(projectId: string): ProjectExecutionState | undefined {
     return this.executionProjects.get(projectId)
   }

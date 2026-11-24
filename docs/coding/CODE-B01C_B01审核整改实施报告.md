@@ -12,6 +12,7 @@
 - W5-C7 默认成功路径先调用 `previewExecutionProject`，再调用 `createExecutionProject`，从账本断言一笔 `project_budget` 承诺为 `6,120,000` cents（`$61,200`），然后招聘满配团队、推进 200 天并验证上市成功及现金曲线全程为正。
 - 保留低预算失败对照与容量守卫反证；未改冻结锚点或 `computeAvailableCash`。
 - 更新 `project-execution-engine.ts` 的输入和函数注释，使其描述“承诺额 `round(hrb × BudgetCapacity)` ≤ `AvailableCash`”。
+- 根据独立复审补强现金曲线证据：默认成功路径在每日推进时累计 `minCashCents`，并断言 200 天内最低现金仍大于零；采样日曲线保留用于诊断。
 
 ## 验证
 
@@ -21,6 +22,6 @@
 npx vitest run src/simulation/__tests__/w5-c7-default-ipo.test.ts src/ui/__tests__/new-project-wizard.test.tsx src/domain/value-objects/__tests__/project-execution-engine.test.ts
 ```
 
-结果：3 files、75 tests passed。
+结果：目标测试通过；默认路径额外验证每日最低现金 `minCashCents > 0`。
 
 本报告不替代独立编码复审，也不宣称 B-01c 已验收通过。

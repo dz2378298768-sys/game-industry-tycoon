@@ -54,6 +54,7 @@ interface RunResult {
   cancelledDay: number | null
   launched: { success: boolean; errorCode?: string | undefined }
   cashAfterLaunchCents: number
+  minCashCents: number
 }
 
 /** 按天推进 200 天，记录关键节点；不改任何数值。 */
@@ -104,6 +105,7 @@ function runDefaultPlay(budgetCapCents: number, useExecutionWizard = false): Run
 
   const checkpoints = new Set([0, 30, 60, HORIZON_DAYS])
   const curve: Checkpoint[] = []
+  let minCashCents = gw.finance.getCashBalance(company.id)
   let exhaustedDay: number | null = null
   let readyDay: number | null = null
   let cancelledDay: number | null = null
@@ -124,6 +126,7 @@ function runDefaultPlay(budgetCapCents: number, useExecutionWizard = false): Run
   for (let day = 1; day <= HORIZON_DAYS; day++) {
     gw.advanceSimulation(1)
     const s = snap(day)
+    minCashCents = Math.min(minCashCents, s.cashCents)
     if (s.budgetExhausted && exhaustedDay === null) exhaustedDay = day
     if (s.projectPhase === 'READY_TO_LAUNCH' && readyDay === null) readyDay = day
     if (s.projectPhase === 'CANCELLED' && cancelledDay === null) cancelledDay = day
@@ -141,6 +144,7 @@ function runDefaultPlay(budgetCapCents: number, useExecutionWizard = false): Run
     cancelledDay,
     launched: { success: launched.success, errorCode: launched.errorCode },
     cashAfterLaunchCents,
+    minCashCents,
   }
 }
 
@@ -185,6 +189,7 @@ describe('W5-C7 默认配置走上市验证（S4，不臆造数值、不改锚�
     expect(r.launched.success).toBe(true)
     expect(r.launched.errorCode).toBeUndefined()
     expect(r.curve.every((c) => c.cashCents > 0)).toBe(true)
+    expect(r.minCashCents).toBeGreaterThan(0)
     expect(r.cashAfterLaunchCents).toBeGreaterThan(0)
   })
 

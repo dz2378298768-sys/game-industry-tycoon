@@ -1,11 +1,11 @@
 # Game Industry Tycoon — 项目级 AI 协作规则
 
 > 本文件是本项目的**常驻协作规则**，供**主 AI（项目总负责人）与四个子代理**（设计 / 设计审核 / 编码 / 编码审核）共同遵守。
-> 规则来源：`docs/PROJECT-DEVELOPMENT-WORKFLOW-001.md`（状态 PROPOSED，待项目负责人确认）。
+> 规则来源：`docs/collaboration/PROJECT-DEVELOPMENT-WORKFLOW-001.md`（状态 PROPOSED，待项目负责人确认）。
 > 生效说明：正式 APPROVED 需项目负责人确认，确认前不对外宣称"已批准强制规则"。
 >
 > **架构说明（2026-11-19 起）**：不再采用"设计 / 审核 / 编码由不同主 AI 分别负责"的模式。现为**一个主 AI 统筹 + 四个子代理执行**，子代理无项目管理权。
-> 详见 `docs/AI-TEAM-ARCHITECTURE.md`（集权与独立性如何保证）、`docs/AI-DEVELOPMENT-WORKFLOW.md`（五阶段循环）、`docs/AI-AGENT-PROMPTS.md`（五套提示词）。
+> 详见 `docs/collaboration/AI-TEAM-ARCHITECTURE.md`（集权与独立性如何保证）、`docs/collaboration/AI-DEVELOPMENT-WORKFLOW.md`（五阶段循环）、`docs/collaboration/AI-AGENT-PROMPTS.md`（五套提示词）。
 > **本文中"设计负责人""编码者""审核者""GDR"等旧称谓保留原义，按 §3.0 映射到新角色。**
 
 ---
@@ -17,17 +17,17 @@
 - 工程基线（实测 2026-11-19，**真实退出码核验、无管道假象**：`cmd > /tmp/x.log 2>&1; echo EXIT:$?`，不依赖 `cmd | tail` 的退出码）：**32 测试文件 / 230 用例通过、0 skip、0 failed**，typecheck / `lint:check` / build 全绿（注意：本项目**没有** `npm run lint`，实际脚本是 `lint:check`）。
 - 已闭环编码任务（全部经独立审核 PASS 或 PASS_WITH_NOTES 并 CLOSED）：**M1.1 14 项**（001-A、D01-001、CANCEL-FIX、001-B、001-C、001-D、TERMINAL-CLEANUP、001-E、E-FIX、UI-001、UI-001-FIX、UI-001-FIX2、UI-001-FIX3、TERMINAL-RELEASE-001）+ **M1.2 首批 4 项**（OI-20 TUNING、OI-21 BANKRUPTCY、C-01 DESCOPE、C-02 DELAY-LAUNCH）+ **M1.2 第二批 1 项**（UI-LAYER：破产现金横幅 / descope & delay 弹窗 / game-store 守卫 / 错误码→toast 映射）= **19 项** `TASK-` 编码任务 + 1 项元数据任务。
 - **M1.2 首批已 CLOSED**：设计闸门 PASS_WITH_NOTES（阻塞条件已补）→ READY 闸门 → 编码（首轮 0 新测试 → REVISE_REQUIRED → 补 3 测试文件）→ 编码审核第二轮 **PASS**（5/5 反证锁住、14 条精准变红、存档兼容 11/11）。实现：tuning.ts 6 项调参 + 新增 finance 2 阈值、daily-scheduler 破产检查 + 12 命令守卫、descope 3 档位 + 50% 上限 + QA 重置、delayLaunch 3 档位 + brand penalty。UI 层（overview 横幅、project-detail 弹窗、game-store、错误码→toast 映射）由 M1.2 第二批实现并全绿（见下条）。
-- **端到端走查已执行**（`docs/UI-WALKTHROUGH-M1.1.md` v1.2，`b98c9af` + `9e474de` 各自隔离 worktree）：A~E 44 项 + F 终态 10 项 = **54 项断言全通过**、25 张引用截图；脚本归档 `docs/evidence/scripts/`（可复跑）。
-- **阶段审核已出**（`docs/REVIEW-STAGE-M1.1.md`）：技术面 **PASS_WITH_NOTES**（六维度 A~E 通过，5/5 集成场景）、体验面 **NOT_VERIFIED**——不构成阶段关闭依据。审核发现 S-1（**P1**：终态项目仍分摊工资且员工被永久占用，第二款游戏无法组队）已由 `TASK-M1.1-TERMINAL-RELEASE-001`（`9e474de`）整改并经独立复审 PASS_WITH_NOTES、**S-1 已关闭**。
-- **M1.1 已关闭**（2026-11-19，Owner 授权跳过真人试玩）：14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（终态解绑）由 `TERMINAL-RELEASE-001`（`9e474de`）修复并复审 PASS_WITH_NOTES；九项核查 **9/9 满足**（`STAGE-CHECK-M1.1.md` v1.0）。**书面决策**：Owner 原话"真人体验方面暂时不做，待后续内容较完整后体验，我授权当前阶段可关闭"，留档 `docs/DECISION-M1.1-CLOSE.md`。体验验证推迟到 M1.2 首批交付后（OI-20/OI-21 落地，玩家默认配置能走到上市）。
+- **端到端走查已执行**（`docs/archive/milestones/execution/UI-WALKTHROUGH-M1.1.md` v1.2，`b98c9af` + `9e474de` 各自隔离 worktree）：A~E 44 项 + F 终态 10 项 = **54 项断言全通过**、25 张引用截图；脚本归档 `docs/evidence/scripts/`（可复跑）。
+- **阶段审核已出**（`docs/archive/milestones/reports/REVIEW-STAGE-M1.1.md`）：技术面 **PASS_WITH_NOTES**（六维度 A~E 通过，5/5 集成场景）、体验面 **NOT_VERIFIED**——不构成阶段关闭依据。审核发现 S-1（**P1**：终态项目仍分摊工资且员工被永久占用，第二款游戏无法组队）已由 `TASK-M1.1-TERMINAL-RELEASE-001`（`9e474de`）整改并经独立复审 PASS_WITH_NOTES、**S-1 已关闭**。
+- **M1.1 已关闭**（2026-11-19，Owner 授权跳过真人试玩）：14 项编码任务 + 1 项元数据任务全 CLOSED；S-1（终态解绑）由 `TERMINAL-RELEASE-001`（`9e474de`）修复并复审 PASS_WITH_NOTES；九项核查 **9/9 满足**（`STAGE-CHECK-M1.1.md` v1.0）。**书面决策**：Owner 原话"真人体验方面暂时不做，待后续内容较完整后体验，我授权当前阶段可关闭"，留档 `docs/archive/milestones/decisions/DECISION-M1.1-CLOSE.md`。体验验证推迟到 M1.2 首批交付后（OI-20/OI-21 落地，玩家默认配置能走到上市）。
 - **M1.2 首批已 CLOSED**（2026-11-19，设计闸门 PASS_WITH_NOTES + 编码审核第二轮 PASS）：4 编码任务 + 5 设计规格全 CLOSED。
 - **M1.2 第二批（UI 层）已 CLOSED**（2026-11-19）：设计规格 `DESIGN-M1.2-UI-LAYER-v1.md` v1.1（设计审核 R-01..R-13 已裁定）+ 编码任务 `TASK-M1.2-UI-LAYER` 实现：破产现金横幅、descope/delay 弹窗与预览纯函数、game-store 破产态 `refresh` 兜底、错误码→toast 映射、hire/new-project/project-detail 破产 `aria-disabled`。本轮按 §13 补强补测：新增 `project-actions.test.ts`（7）、`i18n-parity.test.ts`（2），修正 `company-alert-banner.test.tsx` 边界（spec §2.1：`cash === 400_000` 为 SAFE，实现 `<` 正确、测例原边界值错误）。V11/V12/V13 UI 级覆盖待补（`TASK-M1.2-UI-COVERAGE-FOLLOWUP`，PLANNED / P2）。
-- **走查发现的产品/数值问题**（不阻断 M1.1，已登记 `docs/OPEN-ISSUES-M1.1.md` OI-19~OI-24）：概念阶段不产出但提示误导、默认 $30,000 预算 Day 130 耗尽（上市共需 $48,000）、现金可为负且无阻断、M1.1 无收入系统（属 M2）。
+- **走查发现的产品/数值问题**（不阻断 M1.1，已登记 `docs/archive/milestones/execution/OPEN-ISSUES-M1.1.md` OI-19~OI-24）：概念阶段不产出但提示误导、默认 $30,000 预算 Day 130 耗尽（上市共需 $48,000）、现金可为负且无阻断、M1.1 无收入系统（属 M2）。
 - **五个角色（2026-11-19 起）**：主 AI（统筹与最终内部决策）+ 设计代理 + 设计审核代理（旧称 GDR）+ 编码代理 + 编码审核代理（旧称独立审核 AI）。子代理由主 AI 调度，无项目管理权，不能自行关闭任务或宣布阶段完成。
 - **主 AI 独占**：任务置 READY / CLOSED、设计是否送审、审核结论是否采纳、是否派发编码、阶段完成判断（最终仍须 Owner 确认）。
 - **Owner 不变**：改冻结规格 `spec/` 正文、阶段最终关闭、安全操作（SEC-01）、真实试玩组织、绕过强制验收的风险接受，仍须 Owner 本人；主 AI 的权力不因架构调整而扩大。
 - 完整设计包在 `spec/`（只读，任何任务不得覆盖）。
-- 关键文档索引见 `docs/`，进度台账见 `docs/PROJECT_PROGRESS_LEDGER.md`。
+- 关键文档索引见 `docs/`，进度台账见 `docs/archive/milestones/execution/PROJECT_PROGRESS_LEDGER.md`。
 
 ## 1. 核心流程（循环，不得跳步）
 
@@ -146,7 +146,7 @@
 
 ## 11. 阶段冻结（当前有效）
 
-- **M1.1：已关闭**（2026-11-19，Owner 授权跳过真人试玩）。九项核查 9/9 满足（`STAGE-CHECK-M1.1.md` v1.0），书面决策 `docs/DECISION-M1.1-CLOSE.md`。14 项编码任务 + 1 项元数据任务全 CLOSED，S-1 已闭环，工程面交付完成。体验验证推迟到 M1.2 首批交付后。
+- **M1.1：已关闭**（2026-11-19，Owner 授权跳过真人试玩）。九项核查 9/9 满足（`STAGE-CHECK-M1.1.md` v1.0），书面决策 `docs/archive/milestones/decisions/DECISION-M1.1-CLOSE.md`。14 项编码任务 + 1 项元数据任务全 CLOSED，S-1 已闭环，工程面交付完成。体验验证推迟到 M1.2 首批交付后。
 - **M1.2：首批 + 第二批（UI 层）已关闭**。首批 4 任务（OI-20 TUNING + OI-21 BANKRUPTCY + C-01 DESCOPE + C-02 DELAY-LAUNCH）设计闸门 PASS_WITH_NOTES + 编码审核第二轮 **PASS**（5/5 反证锁住、14 条精准变红）。第二批 UI 层（破产横幅 / descope & delay 弹窗 / game-store 守卫 / 错误码→toast）已实现并全绿。**32 文件 / 230 用例 / 0 skip / 0 failed / 四命令真实退出码全 0**。剩余未决 OI/C 问题及 V11/V12/V13 UI 覆盖补测（`TASK-M1.2-UI-COVERAGE-FOLLOWUP`，P2）可在 M1.2 第三批或并入 M2 启动前处理，仍须过设计闸门 + READY 闸门。
 - M2：冻结，七项阻塞（`docs/` 中 M2_BLOCKERS.md）未裁定前不启动销售/退款/营销/合同/抽成。
 - `spec/` 只读（版本元数据例外：D-05 已由 Owner 授权统一 README 版本标记，见 CHANGE-META-VERSION-TAG，规格正文零改动）。

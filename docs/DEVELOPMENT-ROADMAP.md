@@ -48,7 +48,7 @@ M0 规则冻结 ─→ M1 研发切片(G1 CLOSED) ─→ M2 商业化(出口成�
 |---|---|---|---|---|
 | M0 | 核心规则冻结 | 范围、状态机、工作量/质量模型、销售管线、现金流规则、首发UI清单 | P0 字段无空白；未知参数有负责人与校准计划 | **已完成**（产物即 V2.1.7-final-freeze） |
 | M1 | 研发垂直切片 | 建公司→招员工→立项→组队→推进→调整范围→QA→上市，跑通单款游戏全流程 | 一款游戏从立项到上市的完整流程可玩 | **G1 CLOSED（附条件 / PASS_WITH_NOTES）** — Owner 2026-11-24 08:38 本人宣告；编码 11/11 CLOSED、1219 全绿；真实玩家交付闭环 NOT_VERIFIED 转 P2 |
-| ├ M1.1 | 稳定性修复收尾 | G-05 成本口径、D-01 暂停超时、pause_timeout UI、体验验收 | 见 §2 | **CLOSED**（Owner 授权跳过真人试玩，见 `DECISION-M1.1-CLOSE.md`） |
+| ├ M1.1 | 稳定性修复收尾 | G-05 成本口径、D-01 暂停超时、pause_timeout UI、体验验收 | 见 §2 | **CLOSED**（Owner 授权跳过真人试玩，见 `archive/milestones/decisions/DECISION-M1.1-CLOSE.md`） |
 | ├ M1.2 | 商业化与 UI 口径批次 | 批次 A~H、07A/07B、W5 数值标定 | 见 G1 收口结论 | **CLOSED**（并入 G1） |
 | └ **P1 可玩闭环补完**（原误称"P2 欠账偿还轮"） | 补 G1 缺口：D-02 内核链 / 定价口碑裁定 / i18n 治理等 8 条义务（SUP-01~08） | 真实玩家可玩闭环 + 5 条披露逐条撤销 | **当前进行中** — 依据恢复报告 REC-01~12 串行推进；SUP-01 主AI验收 PWC、SUP-02/03 材料已出待主设计负责人内部裁定；**不是正式 P2** |
 | M2 | 市场与商业化切片 | 定价、营销、销售、退款、口碑、补丁、财务流水 | 玩家能解释销量与现金流变化；≥2类定位产生不同结果（量化：两类定位 30 天销量差 ≥25%） | 批次 A~H **CLOSED**，**阶段出口成立**（`M2-EXIT-VERIFICATION-001` v2：生产 30 天 5,096 件；两定位 36.37% ≥25%；同 seed 逐字段可复现；现金=流水）。可进 M3 前置评审。出口后加固 **M2-I**（负余额结算）已交付，不改变出口判定 |
@@ -71,12 +71,12 @@ M0 规则冻结 ─→ M1 研发切片(G1 CLOSED) ─→ M2 商业化(出口成�
 | D-01 暂停超时 | ✅ | D01-001 + TERMINAL-CLEANUP CLOSED |
 | pause_timeout UI | ✅ | UI-001 → FIX → FIX2 → FIX3 四轮全 CLOSED，UI 线判定收尾 |
 | 元数据一致性 | ✅ | META-VERSION-TAG 已落库（提交 `405f4c4`，`spec/README.md` = 2.1.7-final-freeze） |
-| 集成正常 | ✅ | `UI-WALKTHROUGH-M1.1.md` v1.2：A~E 44 项 + F 终态 10 项 = **54 项断言全通过**、25 张引用截图 |
-| 阶段独立审核 | ✅ 已出 | `REVIEW-STAGE-M1.1.md`：技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED；其唯一 P1（S-1）已由 `TERMINAL-RELEASE-001`（`9e474de`）整改并复审 PASS_WITH_NOTES、**已关闭** |
-| 体验验收（真人试玩） | ❌ | **唯一硬缺口**：需 Owner 组织 3-5 名真人（`PLAYTEST-KICKOFF-M1.1.md` v1.2） |
+| 集成正常 | ✅ | `archive/milestones/execution/UI-WALKTHROUGH-M1.1.md` v1.2：A~E 44 项 + F 终态 10 项 = **54 项断言全通过**、25 张引用截图 |
+| 阶段独立审核 | ✅ 已出 | `archive/milestones/reports/REVIEW-STAGE-M1.1.md`：技术面 PASS_WITH_NOTES / 体验面 NOT_VERIFIED；其唯一 P1（S-1）已由 `TERMINAL-RELEASE-001`（`9e474de`）整改并复审 PASS_WITH_NOTES、**已关闭** |
+| 体验验收（真人试玩） | ❌ | **唯一硬缺口**：需 Owner 组织 3-5 名真人（`archive/milestones/execution/PLAYTEST-KICKOFF-M1.1.md` v1.2） |
 | Owner 确认关闭 | ❌ | 待试玩与报告完成后由项目负责人确认 |
 
-**M1.1 现不可关闭**：工程面已闭环（14 项编码任务 + 1 项元数据任务全 CLOSED、**22 文件 / 173 用例**、54 项端到端断言、阶段审核已出且 P1 归零），差的是「真人试玩的体验结论」与试玩报告。九项核查见 `STAGE-CHECK-M1.1.md` v0.7（6 满足 / 2 部分 / 1 未满足，第 4、8 项的「部分」均挂靠第 6 项）。
+**M1.1 现不可关闭**：工程面已闭环（14 项编码任务 + 1 项元数据任务全 CLOSED、**22 文件 / 173 用例**、54 项端到端断言、阶段审核已出且 P1 归零），差的是「真人试玩的体验结论」与试玩报告。九项核查见 `archive/milestones/execution/STAGE-CHECK-M1.1.md` v0.7（6 满足 / 2 部分 / 1 未满足，第 4、8 项的「部分」均挂靠第 6 项）。
 
 ## 2b. P1 可玩闭环补完（当前焦点 · 2026-11-24）
 
@@ -96,9 +96,9 @@ M0 规则冻结 ─→ M1 研发切片(G1 CLOSED) ─→ M2 商业化(出口成�
 
 ## 3. M2 七项阻塞（商业化的设计前置）
 
-> **状态更新（2026-11-19）**：七项阻塞已由设计负责人（代行）逐项裁定，权威结论见 `docs/DESIGN-M2-UNBLOCK-001.md`，并经 GDR 复审 R2 = PASS_WITH_NOTES（D-01~D-06 全闭环）。**M2 设计前置已满足，冻结解除**；BDD 旧键更新与领域字段补充已完成（`DESIGN-M2-DATA-001`）。**仅剩前置 4：M1.1 关闭**。任务包骨架 `TASK-M2-001-骨架.md` v0.3 已备、未派发。以下保留原始阻塞清单供追溯。
+> **状态更新（2026-11-19）**：七项阻塞已由设计负责人（代行）逐项裁定，权威结论见 `docs/design/milestone-specs/DESIGN-M2-UNBLOCK-001.md`，并经 GDR 复审 R2 = PASS_WITH_NOTES（D-01~D-06 全闭环）。**M2 设计前置已满足，冻结解除**；BDD 旧键更新与领域字段补充已完成（`DESIGN-M2-DATA-001`）。**仅剩前置 4：M1.1 关闭**。任务包骨架 `archive/milestones/execution/TASK-M2-001-骨架.md` v0.3 已备、未派发。以下保留原始阻塞清单供追溯。
 
-M2 冻结原因——七项待裁定，原文件 `docs/M2_BLOCKERS.md`：
+M2 冻结原因——七项待裁定，原文件 `docs/archive/milestones/execution/M2_BLOCKERS.md`：
 
 1. 退款幂等键格式
 2. SalesRecord 字段定义

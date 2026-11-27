@@ -4,33 +4,48 @@ import { TUNING } from '@content/tuning'
 
 /**
  * P-01 创建公司（S01，批次 07A）：
- *  - 固定条件摘要：起始资金 TUNING $120,000（ADJ-12 S1-1）/ 起始日期 2026-01-05（Day 0，经 formatDay 单源，ADJ-12 S1-3）/ 北美市场 / 初始团队 创始人 ×1（ADJ-12 S1-2）
+ *  - 固定条件摘要：起始资金、模拟起始日、地区和创始人身份。
  *  - 城市与难度控件不开放（ADJ-12 S1-3 / §1.5-3；ADJ-16 R-3：隐藏入口保留代码，cities 下拉逻辑不删除仅不渲染）
  *  - 覆盖警告：已有存档时进入创建页需确认，不静默清档（M-03 模板）
  *  - 引导文案三问可答（CODE-07 §2）：拥有什么 / 能做什么 / 下一步
  */
 export const CreateCompany: React.FC = () => {
-  const { createCompany, init, getHasSave } = useGameStore()
+  const { createCompany, init, getHasSave, load } = useGameStore()
   const [name, setName] = useState('')
   // ADJ-16 R-3：城市选择控件 P1 隐藏；保留 cityId 固定默认值与既有 createCompany 签名（代码保留，恢复时按 ADJ-16 R-3 处理）
   const [cityId] = useState('san_francisco')
   const [error, setError] = useState('')
   const [overwriteConfirm, setOverwriteConfirm] = useState(false)
   const [checked, setChecked] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [aiCompetition, setAiCompetition] = useState(false)
 
   useEffect(() => {
-    void getHasSave().then((has) => {
-      setOverwriteConfirm(has)
-      setChecked(true)
-    })
+    void getHasSave()
+      .then(setOverwriteConfirm)
+      .catch(() => setError(t('company.create.loadFailed')))
+      .finally(() => setChecked(true))
   }, [getHasSave])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) { setError(t('error.requiredField')); return }
-    if (overwriteConfirm && !checked) return // 已有存档未确认：不允许静默覆盖
-    init(42)
+    if (!checked || overwriteConfirm || loading) return
+    if (aiCompetition) init(42, { aiCompetition: true })
+    else init(42)
     createCompany(name.trim(), cityId)
+  }
+
+  const handleLoad = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      if (!await load()) setError(t('company.create.loadFailed'))
+    } catch {
+      setError(t('company.create.loadFailed'))
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -45,8 +60,13 @@ export const CreateCompany: React.FC = () => {
               ⚠ {t('company.create.overwrite.title')}
             </p>
             <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>{t('company.create.overwrite.hint')}</p>
+            <button className="btn btn-small" type="button" disabled={loading} onClick={() => { void handleLoad() }} data-testid="continue-saved-game">
+              {t('company.create.continue')}
+            </button>{' '}
             <button
               className="btn btn-secondary btn-small"
+              type="button"
+              disabled={loading}
               data-testid="overwrite-confirm"
               onClick={() => setOverwriteConfirm(false)}
             >
@@ -57,9 +77,15 @@ export const CreateCompany: React.FC = () => {
 
         <form onSubmit={handleSubmit}>
           <div className="form-row">
-            <label>{t('company.field.name')}</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="My Game Studio" autoFocus />
+            <label htmlFor="studio-name">{t('company.field.name')}</label>
+            <input id="studio-name" value={name} onChange={e => setName(e.target.value)} placeholder="My Game Studio" autoFocus />
           </div>
+          <label className="form-row">
+            <span>
+              <input type="checkbox" checked={aiCompetition} onChange={e => setAiCompetition(e.target.checked)} />{' '}
+              {t('company.create.aiCompetition')}
+            </span>
+          </label>
           {/* A-3：难度选项不开放（ADJ-12 S1-3），不渲染任何难度控件；城市控件 P1 移除（ADJ-16 R-3 隐藏入口保留代码） */}
           {/*
           <div className="form-row">
@@ -72,14 +98,14 @@ export const CreateCompany: React.FC = () => {
           </div>
           */}
 
-          {error && <p className="negative mb-16">{error}</p>}
+          {error && <p role="alert" className="negative mb-16">{error}</p>}
 
           <button
             className="btn"
             style={{ width: '100%' }}
             type="submit"
-            disabled={overwriteConfirm}
-            aria-disabled={overwriteConfirm}
+            disabled={!checked || overwriteConfirm || loading}
+            aria-disabled={!checked || overwriteConfirm || loading}
             title={overwriteConfirm ? t('company.create.overwrite.confirm') : undefined}
           >
             {t('button.startGame')}

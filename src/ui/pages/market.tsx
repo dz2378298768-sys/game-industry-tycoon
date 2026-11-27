@@ -1,10 +1,12 @@
 import React from 'react'
-import { useGameStore, t, formatMoney } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
 import { SEED_SEGMENT_TAGS } from '@content/d04-vocabulary'
-import { AI_COMPANIES } from '@content/ai-companies'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
 import type { MarketResearchResult } from '@application/mediators/game-world'
+import { currentMarketCompetitors, readGenreSalesChanges } from '@application/queries/market-feedback'
+import { latestCompanyRelease } from '@application/queries/product-feedback'
+import { netRevenueCents } from '@ui/components/product-metrics'
 import affinityRows from '@content/genre-segment-affinity.json'
 
 interface Props { onNavigate: (route: string, param?: string) => void }
@@ -32,38 +34,67 @@ function bandOf(max: number): Band {
 
 /**
  * P-02 市场分析（S02，批次 07B）：
- *  ① 类别与需求趋势（趋势档无内核数据源 → fail-closed "信息不足"，OPEN-MARKET-TREND）；
- *     契合方向档取内容亲和度定性换算（A-4，不展示数值；数值机会模型 OPEN-P2）。
- *  ② 消费者群体标签云（D-04 SegmentTag，broad/niche 灰度）+ 静态竞品档案（ADJ-12 S2-2）。
- *  ③ 调研动作（P1_UI_TUNING $5,000 = 500_000 cents；账本 research 交易 R-4）+
- *     一次性结果卡（竞品档案条数 + 方向标签，ADJ-16 R-6 / A-43）。
- *  破产 → 调研按钮 aria-disabled + finance.bankrupt.blocked.*（G-9）。
+ * Observation windows read settled sales. Affinity bands are catalog estimates.
  */
 export const Market: React.FC<Props> = ({ onNavigate }) => {
-  const { company, conductMarketResearch } = useGameStore()
+  const { game, company, dayIndex, locale, products, refundBatches, conductMarketResearch } = useGameStore()
   const [result, setResult] = React.useState<MarketResearchResult | null>(null)
+  const [compareGenreId, setCompareGenreId] = React.useState<string | null>(null)
   const isBankrupt = company?.status === 'bankrupt'
   const researchCost = P1_UI_TUNING.market.researchCostCents
+  const latestRelease = latestCompanyRelease(products, company?.id)
+  const competitors = currentMarketCompetitors(game?.world.companies ?? [])
+  const worldProducts = game?.world.products
+  const marketProducts = React.useMemo(
+    () => [...products, ...(worldProducts ?? []).filter((product) => product.companyId !== company?.id)],
+    [company?.id, products, worldProducts],
+  )
+  const salesChanges = React.useMemo(() => readGenreSalesChanges(marketProducts, dayIndex), [marketProducts, dayIndex])
+  const units = new Intl.NumberFormat(locale)
+  const signedUnits = new Intl.NumberFormat(locale, { signDisplay: 'exceptZero' })
 
   const handleResearch = () => {
     const r = conductMarketResearch()
     if (r.success && r.result) setResult(r.result)
   }
 
-  const comparisonGenres = React.useMemo(() => {
-    const ids = result?.directionTags.map((d) => d.genreId) ?? []
-    const picked = ids.length > 0
-      ? ids.map((id) => content.genres.find((g) => g.id === id)).filter((g): g is NonNullable<typeof g> => Boolean(g))
-      : content.genres.slice(0, 3)
-    return picked
-  }, [result])
+  const baseline = content.genres.find((genre) => genre.id === latestRelease?.genreId) ?? content.genres[0]
+  const comparisonOptions = content.genres.filter((genre) => genre.id !== baseline?.id)
+  const comparison = comparisonOptions.find((genre) => genre.id === compareGenreId)
+    ?? comparisonOptions.find((genre) => result?.directionTags.some((tag) => tag.genreId === genre.id))
+    ?? comparisonOptions[0]
+  const comparisonGenres = [baseline, comparison].filter((genre) => genre !== undefined)
+
+  const renderSalesChange = (genreId: string) => {
+    const change = salesChanges.get(genreId)
+    if (change === undefined) return <span className="badge paused">{t('market.missing')}</span>
+    return t('market.trend.change')
+      .replace('{previous}', units.format(change.previous))
+      .replace('{current}', units.format(change.current))
+      .replace('{delta}', signedUnits.format(change.current - change.previous))
+  }
 
   return (
     <div>
       <h2>{t('market.title')}</h2>
       <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>{t('market.intro')}</p>
 
-      {/* ① 类别与需求趋势档 */}
+      {latestRelease !== undefined && (
+        <div className="panel" data-testid="market-previous-release">
+          <h3 style={{ marginTop: 0 }}>{t('market.previousRelease')}</h3>
+          <p>{latestRelease.name} · {t(`genre.${latestRelease.genreId}`)}</p>
+          {latestRelease.salesByPeriod.length > 0 ? (
+            <p>
+              {t('sales.units')} {units.format(latestRelease.salesByPeriod.reduce((sum, record) => sum + record.grossUnits, 0))}
+              {' · '}{t('products.col.netRevenue')} {formatMoney(netRevenueCents(latestRelease, refundBatches))}
+            </p>
+          ) : <p className="muted">{t('sales.empty')}</p>}
+          <button className="btn btn-link" onClick={() => onNavigate('productDetail', latestRelease.id)}>
+            {t('p12.attribution.link')}
+          </button>
+        </div>
+      )}
+
       <div className="panel" data-testid="market-trend-section">
         <h3 style={{ marginTop: 0 }}>{t('market.section.trend')}</h3>
         <table className="data-table">
@@ -79,14 +110,13 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
           <tbody>
             {content.genres.map((g) => {
               const aff = AFFINITY_BY_GENRE.get(g.id)
-              const segmentLabel = aff
-                ? (content.consumerSegments.find((s) => s.id === aff.topSegmentId)?.displayNameZh ?? aff.topSegmentId)
-                : t('market.missing')
+              const segment = content.consumerSegments.find((s) => s.id === aff?.topSegmentId)
+              const segmentLabel = segment === undefined ? t('market.missing')
+                : locale === 'zh-CN' ? segment.displayNameZh : segment.displayName
               return (
                 <tr key={g.id} data-testid="market-genre-row">
-                  <td>{g.displayNameZh}</td>
-                  {/* 趋势档内核无数据源：fail-closed 信息不足，不伪造档位（G-3 / OPEN-MARKET-TREND） */}
-                  <td data-testid="market-trend"><span className="badge paused">{t('market.missing')}</span></td>
+                  <td>{t(`genre.${g.id}`)}</td>
+                  <td data-testid="market-trend">{renderSalesChange(g.id)}</td>
                   <td>
                     {aff
                       ? <span className={`badge ${bandOf(aff.max) === 'high' ? 'active' : bandOf(aff.max) === 'medium' ? '' : 'danger'}`}>
@@ -94,7 +124,7 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
                         </span>
                       : <span className="badge paused">{t('market.missing')}</span>}
                   </td>
-                  <td>{aff ? segmentLabel : t('market.missing')}</td>
+                  <td>{segmentLabel}</td>
                   <td>
                     <button className="btn btn-secondary btn-small" onClick={() => onNavigate('newProject', g.id)}>
                       {t('market.startProject')}
@@ -106,20 +136,25 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
           </tbody>
         </table>
         <p className="muted" style={{ fontSize: 11 }}>
-          {t('market.trend.open')} · {t('market.band.hint')}
+          {t('market.trend.period')} {t('market.band.hint')}
         </p>
       </div>
 
-      {/* 方向并排比较视图（总纲 §S2.2）：无调研数据 → 列降级"信息不足" */}
       <div className="panel" data-testid="market-comparison">
         <h3 style={{ marginTop: 0 }}>{t('market.comparison.title')}</h3>
+        <label>
+          {t('market.compareGenre')}{' '}
+          <select value={comparison?.id ?? ''} onChange={(event) => setCompareGenreId(event.target.value)}>
+            {comparisonOptions.map((genre) => <option key={genre.id} value={genre.id}>{t(`genre.${genre.id}`)}</option>)}
+          </select>
+        </label>
         <table className="data-table">
           <thead>
             <tr>
               <th>{t('market.col.category')}</th>
               <th>{t('market.col.trend')}</th>
               <th>{t('market.col.affinityBand')}</th>
-              <th>{t('market.col.positioning')}</th>
+              <th style={{ width: 130 }} />
             </tr>
           </thead>
           <tbody>
@@ -128,10 +163,14 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
               const band = result?.directionTags.find((d) => d.genreId === g.id)?.band ?? (aff ? bandOf(aff.max) : null)
               return (
                 <tr key={g.id}>
-                  <td>{g.displayNameZh}</td>
-                  <td>{result ? <span className="badge paused">{t('market.missing')}</span> : t('market.missing')}</td>
+                  <td>{t(`genre.${g.id}`)}</td>
+                  <td>{renderSalesChange(g.id)}</td>
                   <td>{band ? t(`market.band.${band}`) : t('market.missing')}</td>
-                  <td>{g.displayName}</td>
+                  <td>
+                    <button className="btn btn-secondary btn-small" onClick={() => onNavigate('newProject', g.id)}>
+                      {t('market.startProject')}
+                    </button>
+                  </td>
                 </tr>
               )
             })}
@@ -139,7 +178,6 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
         </table>
       </div>
 
-      {/* ② 消费者群体标签云 + 静态竞品档案 */}
       <div className="panel" data-testid="market-segments">
         <h3 style={{ marginTop: 0 }}>{t('market.section.segments')}</h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -149,7 +187,7 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
               className={`badge ${tag.granularity === 'broad' ? '' : 'paused'}`}
               title={`${tag.tagId} · ${tag.granularity}`}
             >
-              {tag.displayName}
+              {locale === 'zh-CN' ? tag.displayName : t(`market.segment.${tag.code}`)}
             </span>
           ))}
         </div>
@@ -158,16 +196,24 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
 
       <div className="panel" data-testid="market-competitors">
         <h3 style={{ marginTop: 0 }}>{t('market.section.competitors')}</h3>
-        {AI_COMPANIES.length === 0
+        {competitors.length === 0
           ? <p className="muted">{t('market.competitor.empty')}</p>
           : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
-              {AI_COMPANIES.map((c) => (
-                <div key={c.id} className="kpi-card" data-testid="market-competitor-card">
-                  <div className="value" style={{ fontSize: 13 }}>{c.name}</div>
-                  <div className="label">{t('market.competitor.positioning')}: {t(`market.persona.${c.persona}`)}</div>
-                </div>
-              ))}
+              {competitors.map((competitor) => {
+                const release = latestCompanyRelease(marketProducts, competitor.id)
+                const onSale = marketProducts.filter((product) => product.companyId === competitor.id && product.status === 'active').length
+                return (
+                  <div key={competitor.id} className="kpi-card" data-testid="market-competitor-card">
+                    <div className="value" style={{ fontSize: 13 }}>{competitor.name}</div>
+                    {competitor.persona !== undefined && <div className="label">{t(`market.persona.${competitor.persona}`)}</div>}
+                    <div className="label">{t('market.competitor.founded').replace('{day}', formatDay(competitor.foundingDay))}</div>
+                    <div className="label">{t('market.competitor.onSale').replace('{n}', units.format(onSale))}</div>
+                    {release !== undefined && <div className="label">{t('market.competitor.latest').replace('{product}', release.name)}</div>}
+                    {competitor.status === 'bankrupt' && <div className="negative">{t('market.competitor.restructuring')}</div>}
+                  </div>
+                )
+              })}
             </div>
           )}
       </div>
@@ -199,7 +245,7 @@ export const Market: React.FC<Props> = ({ onNavigate }) => {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {result.directionTags.map((d) => (
                 <span key={d.genreId} className={`badge ${d.band === 'high' ? 'active' : d.band === 'medium' ? '' : 'danger'}`}>
-                  {d.displayName} · {t(`market.band.${d.band}`)}
+                  {t(`genre.${d.genreId}`)} · {t(`market.band.${d.band}`)}
                 </span>
               ))}
             </div>

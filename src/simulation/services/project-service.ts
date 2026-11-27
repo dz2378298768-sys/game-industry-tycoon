@@ -368,8 +368,11 @@ export class ProjectService {
 
     if (this.deps.getCompanyStatus) {
       const status = this.deps.getCompanyStatus(p.companyId)
-      // 仅终止态（dissolved）拦截；bankrupt 仍可上市（DESIGN-OI-21 §2.2 / T-FIX-2）
+      // M3：破产期间只允许破产日被明确保留的唯一近上市项目完成上市。
       if (status === 'dissolved') return fail('PRJ_COMPANY_INACTIVE', 'Company is dissolved')
+      if (status === 'bankrupt' && !p.riskFlags.includes('bankruptcy_retained')) {
+        return fail('PRJ_BANKRUPTCY_PROJECT_NOT_RETAINED', 'Project was not retained after bankruptcy')
+      }
     }
     if (this.deps.hasProductForProject?.(p.id)) {
       return fail('PRJ_PRODUCT_EXISTS', 'Product already exists for this project')

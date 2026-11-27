@@ -12,6 +12,7 @@
  */
 import { TUNING } from '@content/tuning'
 import genres from '@content/genres.json'
+import { REC03_MODULES, REC03_SEGMENT_MAP } from '@content/rec03-content'
 import {
   buildDemandScopesForDay,
   genreSegmentAffinity,
@@ -21,6 +22,7 @@ import {
   buildDailyDemand,
   computeAudienceUnits,
   computeLaunchAwarenessFloor,
+  computeMarketingLift,
 } from './demand-pool'
 import type { DemandProductInput, DemandScopeInput, DemandTuning } from './demand-pool'
 import { awarenessByScopeOf, rollupAwarenessByMarket } from './product-awareness'
@@ -31,7 +33,8 @@ import {
   isSegmentAvailable,
 } from '@content/queries'
 import type { Product } from '@domain/entities/product'
-import { effectivePriceCents } from '@domain/value-objects'
+import { CHANNEL_FACTOR, effectivePriceCents, productMarketingSpendKey } from '@domain/value-objects'
+import type { MarketingChannel } from '@domain/value-objects/marketing-response'
 import { stableProductKey } from './sales-formulas'
 import type { SalesRecord } from '@domain/entities/sales-record'
 import { makeSalesRecordId } from '@domain/entities/sales-record'
@@ -70,6 +73,8 @@ import type {
 import { NULL_MARKET_INPUT_PROVIDER } from './sales-types'
 import type { WorldState } from './world-state'
 
+const PRODUCT_MARKETING_CHANNELS = Object.keys(CHANNEL_FACTOR) as MarketingChannel[]
+
 /** 重整清仓价：按 clearanceDiscountRatePercent 打折；正常产品原样。 */
 function salePriceCents(product: Product): number | null {
   const base = effectivePriceCents(product)
@@ -90,6 +95,17 @@ export interface MarketSimulationDeps {
   demandMode?: boolean
   /** C1 需求池参数；缺省 TUNING.c1.demand */
   demandTuning?: DemandTuning
+}
+
+export interface DemandSalesFeedback {
+  dayIndex: number
+  /** Sum across the demand scopes behind this day's settled sales records. */
+  addressableUnits: number
+  purchaseIntentReductionUnits: number
+  priorDayMarketingSpendCents: number
+  marketingAddedIntentUnits: number
+  allocationReductionUnits: number
+  soldUnits: number
 }
 
 interface CreatedRecord {
@@ -118,6 +134,7 @@ export class MarketSimulationService {
   private readonly tuning: SalesTuning
   private readonly meta: SalesFormulaMeta
   private readonly explainCache = new Map<string, SalesExplanation>()
+  private readonly latestDemandFeedback = new Map<string, DemandSalesFeedback>()
   private warnings: SalesWarning[] = []
 
   constructor(deps: MarketSimulationDeps) {
@@ -139,6 +156,11 @@ export class MarketSimulationService {
   /** 最近一次 simulateDailySales 产生的告警（每次调用重置） */
   getWarnings(): readonly SalesWarning[] {
     return [...this.warnings]
+  }
+
+  /** The latest settled demand-pool sale day in this session. Historical scopes are not in save files. */
+  getLatestDemandFeedback(productId: string): Readonly<DemandSalesFeedback> | undefined {
+    return this.latestDemandFeedback.get(productId)
   }
 
   /**
@@ -243,6 +265,7 @@ export class MarketSimulationService {
 
   clearExplainCache(): void {
     this.explainCache.clear()
+    this.latestDemandFeedback.clear()
   }
 
   private cacheKey(
@@ -278,6 +301,7 @@ export class MarketSimulationService {
 
     const brandById = new Map(world.companies.map((company) => [company.id, company.brand]))
     const productById = new Map(launched.map((product) => [product.id, product]))
+    const priorDaySpendByProduct = new Map<string, number>()
     const demandProducts: DemandProductInput[] = []
 
     for (const product of launched) {
@@ -299,11 +323,24 @@ export class MarketSimulationService {
       if (availablePlatforms.length === 0) continue
 
       const affinity: Record<string, number> = {}
+      const moduleAffinity: Record<string, number> = {}
       let affinitySum = 0
       for (const segmentId of segmentIds) {
         const value = genreSegmentAffinity(product.genreId, segmentId)
         affinity[segmentId] = value
         affinitySum += value
+        const tag = REC03_DEFAULT_TAG_BY_SEGMENT[segmentId]
+        const moduleIds = product.moduleTemplateIds ?? []
+        const hasSupportModule = moduleIds.some((templateId) => templateId === 'MOD-SYSTEM-PROGRESSION' || templateId === 'MOD-SOCIAL-COOP')
+        const moduleValues = hasSupportModule ? moduleIds.map((templateId) => {
+          const template = REC03_MODULES.find((item) => item.templateId === templateId)
+          if (template === undefined) return 1
+          const tagValue = tag === undefined ? undefined : template.audienceAffinity[tag]
+          return tagValue === undefined ? 0.7 : tagValue
+        }) : []
+        moduleAffinity[segmentId] = moduleValues.length === 0
+          ? 1
+          : Math.max(0.05, Math.min(1, moduleValues.reduce((sum, value) => sum + value, 0) / moduleValues.length))
       }
       const platformFit: Record<string, number> = {}
       for (const platformId of availablePlatforms) platformFit[platformId] = 1
@@ -313,6 +350,15 @@ export class MarketSimulationService {
         segmentIds[0]!,
       )
       const genreMatch = segmentIds.length > 0 ? affinitySum / segmentIds.length : 0
+      const priorDayMarketingSpendCents = this.priorDayMarketingSpend(product, dayIndex)
+      const company = world.companies.find((item) => item.id === product.companyId)
+      const memoryValues = segmentIds.map((segmentId) => company?.brandMemoryBySegment?.[segmentId] ?? 0)
+      const memoryAverage = memoryValues.length === 0 ? 0 : memoryValues.reduce((sum, value) => sum + value, 0) / memoryValues.length
+      priorDaySpendByProduct.set(product.id, priorDayMarketingSpendCents)
+      const paidMarketingLift = computeMarketingLift(
+        priorDayMarketingSpendCents,
+        this.tuning.marketingResponseScaleCents[marketingScaleKeyOf(product.lifecycleStage)],
+      )
 
       demandProducts.push({
         productId: product.id,
@@ -322,10 +368,12 @@ export class MarketSimulationService {
         audienceSegmentIds: segmentIds,
         awarenessByScope: awarenessByScopeOf(product),
         quality01: Math.max(0, Math.min(1, product.finalQualityScore / 100)),
-        brand01: Math.max(0, Math.min(1, (brandById.get(product.companyId) ?? 10) / 100)),
+        brand01: Math.max(0, Math.min(1, ((brandById.get(product.companyId) ?? 10) * 0.7 + memoryAverage * 0.3) / 100)),
         referencePriceCents: reference,
         effectivePriceCents: priceCents,
+        paidMarketingLift,
         genreAffinityBySegment: affinity,
+        moduleAffinityBySegment: moduleAffinity,
         platformFitByPlatform: platformFit,
         launchAwarenessFloor: computeLaunchAwarenessFloor({
           storeVisibility: 1,
@@ -370,6 +418,7 @@ export class MarketSimulationService {
     }
 
     const recordsByProduct = new Map<string, SalesRecord[]>()
+    const settledRecordIds = new Set<string>()
     for (const aggregate of aggregates.values()) {
       const product = productById.get(aggregate.productId)
       if (!product) continue
@@ -401,6 +450,7 @@ export class MarketSimulationService {
       const records = recordsByProduct.get(product.id) ?? []
       records.push(record)
       recordsByProduct.set(product.id, records)
+      settledRecordIds.add(recordId)
     }
 
     const sortedProducts = [...launched].sort((a, b) => a.id.localeCompare(b.id))
@@ -413,6 +463,65 @@ export class MarketSimulationService {
       if (!posted.success) {
         throw new SalesError('SALES_POSTING_FAILED', posted.errorMessage ?? 'bulk posting failed')
       }
+    }
+
+    const feedbackByProduct = new Map<string, DemandSalesFeedback>()
+    const segmentFeedbackByProduct = new Map<string, Record<string, { addressableUnits: number; soldUnits: number }>>()
+    for (const scope of demand.scopes) {
+      for (const row of scope.rows) {
+        if (!recordsByProduct.has(row.productId)) continue
+        const recordId = makeSalesRecordId(row.productId, dayIndex, scope.marketId, scope.platformId)
+        if (!settledRecordIds.has(recordId)) continue
+
+        const addressable = Math.floor(row.audienceUnits)
+        const matched = Math.floor(row.poolUnits)
+        const feedback = feedbackByProduct.get(row.productId) ?? {
+          dayIndex,
+          addressableUnits: 0,
+          purchaseIntentReductionUnits: 0,
+          priorDayMarketingSpendCents: priorDaySpendByProduct.get(row.productId) ?? 0,
+          marketingAddedIntentUnits: 0,
+          allocationReductionUnits: 0,
+          soldUnits: 0,
+        }
+        feedback.addressableUnits += addressable
+        feedback.purchaseIntentReductionUnits += addressable - matched
+        feedback.marketingAddedIntentUnits += row.marketingAddedIntentUnits
+        feedback.allocationReductionUnits += matched - row.allocatedUnits
+        feedback.soldUnits += row.allocatedUnits
+        feedbackByProduct.set(row.productId, feedback)
+        const bySegment = segmentFeedbackByProduct.get(row.productId) ?? {}
+        const segment = bySegment[row.scopeKey.split(':').at(-1) ?? 'unknown'] ?? { addressableUnits: 0, soldUnits: 0 }
+        segment.addressableUnits += addressable
+        segment.soldUnits += row.allocatedUnits
+        bySegment[row.scopeKey.split(':').at(-1) ?? 'unknown'] = segment
+        segmentFeedbackByProduct.set(row.productId, bySegment)
+      }
+    }
+    for (const [productId, feedback] of feedbackByProduct) {
+      this.latestDemandFeedback.set(productId, feedback)
+      const product = productById.get(productId)
+      if (product !== undefined) {
+        product.latestMarketFeedback = {
+          ...feedback,
+          bySegment: segmentFeedbackByProduct.get(productId) ?? {},
+        }
+      }
+    }
+
+    // P2：品牌记忆按细分短期累积并每日衰减，避免一次爆款永久覆盖后续产品。
+    for (const company of world.companies) {
+      const memory = { ...(company.brandMemoryBySegment ?? {}) }
+      for (const key of Object.keys(memory)) memory[key] = Math.max(0, memory[key]! * 0.995)
+      for (const [productId, segments] of segmentFeedbackByProduct) {
+        const product = productById.get(productId)
+        if (product?.companyId !== company.id) continue
+        for (const [segmentId, value] of Object.entries(segments)) {
+          const signal = value.addressableUnits <= 0 ? 0 : (value.soldUnits / value.addressableUnits) * (product.finalQualityScore / 100) * 8
+          memory[segmentId] = Math.max(0, Math.min(100, (memory[segmentId] ?? 0) + signal))
+        }
+      }
+      company.brandMemoryBySegment = memory
     }
 
     const nextProducts = world.products.map((product) => {
@@ -449,6 +558,25 @@ export class MarketSimulationService {
       products: nextProducts,
       refundBatches: [...world.refundBatches, ...batches],
     }
+  }
+
+  private priorDayMarketingSpend(product: Product, saleDay: number): number {
+    // Sales settle before marketing. Read the previous day's payments from the ledger,
+    // including after save and restore, without counting current campaign budgets.
+    const spendDay = saleDay - 1
+    if (spendDay < product.launchDay) return 0
+    const ledger = this.deps.finance.getLedger()
+    let total = 0
+    for (const channel of PRODUCT_MARKETING_CHANNELS) {
+      const key = productMarketingSpendKey(product.id, channel, spendDay)
+      const tx = ledger.getTransactionByKeyInCompany(product.companyId, key)
+      if (tx?.category === 'marketing' && tx.day === spendDay &&
+          tx.status === 'posted' && tx.reversedBy === null && tx.reversalOf === null &&
+          Number.isSafeInteger(tx.amountCents) && tx.amountCents < 0) {
+        total -= tx.amountCents
+      }
+    }
+    return total
   }
 
   private computeProductDay(product: Product, dayIndex: number): CreatedRecord[] {
@@ -793,3 +921,7 @@ export class MarketSimulationService {
     return commands
   }
 }
+
+const REC03_DEFAULT_TAG_BY_SEGMENT: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(Object.entries(REC03_SEGMENT_MAP).map(([tag, segment]) => [segment, tag])),
+)

@@ -64,6 +64,7 @@ const companySchema = z
     cityId: z.string().min(1),
     foundingDay: z.number().int().nonnegative(),
     brand: z.number(),
+    brandMemoryBySegment: z.record(z.string(), z.number()).optional(),
     technologyCapacity: z.number(),
     managementCapacity: z.number(),
     cashBalanceCents: z.number().int(),
@@ -97,7 +98,7 @@ const employeeSchema = z
     id: z.string().min(1),
     companyId: z.string().min(1),
     name: z.string().min(1),
-    role: z.enum(['designer', 'programmer', 'artist', 'qa', 'producer', 'manager']),
+    role: z.enum(['designer', 'programmer', 'artist', 'audio_designer', 'qa', 'producer', 'manager']),
     skillLevel: z.number().int().min(1).max(5),
     salaryMonthlyCents: z.number().int().positive(),
     morale: z.number().min(0).max(100),
@@ -124,7 +125,7 @@ const projectSchema = z
     isPaused: z.boolean(),
     /** D-01：连续暂停天数，旧存档缺省 0；NaN/负数/非整数由 zod 拒绝 */
     pausedDays: z.number().int().nonnegative().default(0),
-    pauseReason: z.enum(['manual', 'budget_exhausted']).nullish(),
+    pauseReason: z.enum(['manual', 'budget_exhausted', 'bankruptcy']).nullish(),
     plannedLaunchDay: z.number().int().nonnegative(),
     budgetTotalCapCents: z.number().int().nonnegative(),
     /** M3-C1：开发/上市营销拆分；旧档缺省不补，由预算服务回退 */
@@ -227,6 +228,8 @@ const productSchema = z
     name: z.string().min(1),
     launchDay: z.number().int().nonnegative(),
     launchPriceCents: z.number().int().nullable(),
+    moduleTemplateIds: z.array(z.string().min(1)).optional(),
+    moduleAffinityBySegment: z.record(z.string(), z.number()).optional(),
     /** M2-D：三字段可选，旧档缺失即 undefined，由 effectivePriceCents 兜底（不升 schemaVersion） */
     pricePerUnitCents: z.number().int().positive().optional(),
     discountRatePercent: z.number().int().min(0).max(50).optional(),
@@ -238,6 +241,16 @@ const productSchema = z
     awarenessByScope: z.record(z.string(), z.number()).optional(),
     /** M2-A：旧存档缺省 []；读取即补，不提升 schemaVersion */
     salesByPeriod: z.array(salesRecordSchema).default([]),
+    latestMarketFeedback: z.object({
+      dayIndex: z.number().int().nonnegative(),
+      addressableUnits: z.number().int().nonnegative(),
+      purchaseIntentReductionUnits: z.number().int().nonnegative(),
+      allocationReductionUnits: z.number().int().nonnegative(),
+      marketingAddedIntentUnits: z.number().int().nonnegative(),
+      priorDayMarketingSpendCents: z.number().int().nonnegative().optional(),
+      soldUnits: z.number().int().nonnegative(),
+      bySegment: z.record(z.string(), z.object({ addressableUnits: z.number().int().nonnegative(), soldUnits: z.number().int().nonnegative() })),
+    }).optional(),
   })
   .passthrough()
 
@@ -276,7 +289,7 @@ const publishingContractSchema = z
     id: z.string().min(1),
     productId: z.string().min(1),
     type: z.enum(['revenue_share', 'milestone']),
-    ratePercent: z.number().int().min(5).max(30).optional(),
+    ratePercent: z.number().int().min(5).max(35).optional(),
     thresholdNetRevenueCents: z.number().int().nonnegative().optional(),
     payoutCents: z.number().int().nonnegative().optional(),
     signedDay: z.number().int().nonnegative(),
@@ -304,6 +317,10 @@ const publishingContractSchema = z
     updatedAt: z.number().int().nonnegative(),
   })
   .passthrough()
+  .refine((contract) => (contract.ratePercent ?? 0) <= 30 || contract.template === 'co_marketing', {
+    path: ['ratePercent'],
+    message: 'Only co-marketing contracts may exceed 30%',
+  })
 
 export const worldStateSchema = z
   .object({
@@ -311,6 +328,7 @@ export const worldStateSchema = z
     saveSeed: z.number().int(),
     simulationAlgorithmVersion: z.string().min(1),
     currentDayIndex: z.number().int().nonnegative(),
+    aiCompetitionEnabled: z.boolean().optional(),
     companies: z.array(companySchema),
     employees: z.array(employeeSchema),
     projects: z.array(projectSchema),
@@ -381,6 +399,14 @@ export const worldStateSchema = z
       .default([]),
     candidates: z.array(z.object({ candidateId: z.string().min(1), personId: z.string().min(1) }).passthrough()).default([]),
     personEvents: z.array(z.object({ eventId: z.string().min(1), personId: z.string().min(1), kind: z.string().min(1) }).passthrough()).default([]),
+    pendingHires: z.array(z.object({
+      pendingHireId: z.string().min(1), employmentId: z.string().min(1), personId: z.string().min(1), companyId: z.string().min(1),
+      candidateId: z.string().min(1), role: z.enum(['designer', 'programmer', 'artist', 'audio_designer', 'qa', 'producer', 'manager']),
+      discipline: z.enum(['design', 'code', 'art', 'audio', 'qa']), skillLevel: z.number().int().min(1).max(5), seniority: z.enum(['junior', 'senior']),
+      negotiatedSalaryCents: z.number().int().positive(), askingSalaryCents: z.number().int().positive(), initialTermMonths: z.number().int().positive(), hireConfirmDay: z.number().int().nonnegative(), candidateAvailableFromDay: z.number().int().nonnegative(),
+      arrivalDay: z.number().int().nonnegative(), candidateExpiresAtDay: z.number().int().nonnegative(), salaryCommitmentId: z.string().min(1),
+      recruitFeeCommitmentId: z.string().min(1), state: z.enum(['pending', 'arrived', 'cancelled']), cancelledAtDay: z.number().int().nonnegative().nullable(),
+    }).passthrough()).default([]),
     /** §11 S7：D-03 存档结构版本（V0.1.1=2，编码时升 3）；旧档缺省 undefined。 */
     d03SchemaVersion: z.number().int().optional(),
     /** §11 S7 / §18.3 C13 必存项：参数快照三元组。 */
@@ -402,6 +428,19 @@ export const worldStateSchema = z
           .passthrough(),
       )
       .default([]),
+    deliveryLaunchPlans: z.record(z.object({
+      priceCents: z.number().int().positive(),
+      dailyBudgetCents: z.number().int().nonnegative(),
+    })).optional(),
+    rec04RecruitingGuardByCompany: z
+      .record(z.object({
+        state: z.enum(['eligible', 'active', 'completed', 'cancelled']),
+        projectId: z.string().nullable(),
+        seedKey: z.string().min(1),
+        requiredDisciplines: z.array(z.enum(['design', 'code', 'art', 'audio', 'qa'])),
+        supplementSequence: z.number().int().nonnegative(),
+      }))
+      .default({}),
   })
   .passthrough()
 

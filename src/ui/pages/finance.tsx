@@ -2,19 +2,14 @@ import React, { useMemo, useState } from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import type { TransactionCategory } from '@domain/enums'
 import type { ProjectCostAllocation } from '@domain/entities/project-cost-allocation'
-import { dayIndexToGregorian, gregorianToDayIndex } from '@domain/value-objects/day-index'
+import { monthKeyOf } from '@domain/value-objects/finance-commitment'
+import { TUNING } from '@content/tuning'
+import { ModalShell } from '@ui/components/modal-shell'
 
 const CATEGORIES: TransactionCategory[] = [
   'salary', 'office_rent', 'project_expense', 'marketing', 'sales_revenue',
   'customer_refund', 'platform_fee', 'contract_payment', 'tax', 'advance', 'severance',
 ]
-
-/** 显示纪元口径：Day 0 = 2026-01-05（ADJ-12 S1-3 / ADJ-17 §2，与 formatDay 同源）。 */
-const DISPLAY_EPOCH = gregorianToDayIndex(2026, 1, 5)
-function monthKeyOf(day: number): string {
-  const g = dayIndexToGregorian(day + DISPLAY_EPOCH)
-  return `${g.year}-${String(g.month).padStart(2, '0')}`
-}
 
 interface Props {
   onNavigate?: (route: string, param?: string) => void
@@ -22,9 +17,11 @@ interface Props {
 
 export const Finance: React.FC<Props> = ({ onNavigate }) => {
   const store = useGameStore()
-  const { transactions, company, projects, financial, dayIndex, restartNewGame } = store
+  const { transactions, company, projects, financial, dayIndex, restartNewGame, toggleProjectPause, cancelProject } = store
   const [filter, setFilter] = useState<TransactionCategory | 'all'>('all')
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null)
+  const [remedy, setRemedy] = useState<{ projectId: string; action: 'pause' | 'cancel' } | null>(null)
+  const [remedyFeedback, setRemedyFeedback] = useState<{ ok: boolean; message: string } | null>(null)
 
   const filtered = useMemo(() => {
     if (filter === 'all') return transactions
@@ -89,18 +86,33 @@ export const Finance: React.FC<Props> = ({ onNavigate }) => {
   const reasonCodes: string[] = financial?.reasonCodes ?? []
   const isBankrupt = company?.status === 'bankrupt' || crisisLevel === 'bankrupt'
   const inCrisis = crisisLevel === 'watch' || crisisLevel === 'warning' || crisisLevel === 'critical'
+  const ownProjects = projects.filter((project) =>
+    project.companyId === company?.id && project.phase !== 'LAUNCHED' && project.phase !== 'CANCELLED')
+  const target = remedy === null ? undefined : ownProjects.find((project) => project.id === remedy.projectId)
+  const cash = financial?.cashBalanceCents ?? company?.cashBalanceCents ?? 0
+  const deadline = company?.restructuringDeadlineDay
+
+  const confirmRemedy = () => {
+    if (!remedy || !target) return
+    const result = remedy.action === 'pause'
+      ? toggleProjectPause(target.id)
+      : cancelProject(target.id)
+    setRemedyFeedback({ ok: result.success, message: t(result.success ? 'finance.remediation.applied' : 'error.unknown') })
+    setRemedy(null)
+  }
 
   return (
     <div>
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="label">{t('finance.cashOnHand')}</div>
-          <div className="value">{formatMoney(company?.cashBalanceCents ?? 0)}</div>
+          <div className="value">{formatMoney(cash)}</div>
         </div>
         <div className="kpi-card" data-testid="finance-available-cash">
           <div className="label">{t('finance.availableCash')}</div>
           <div className="value">{financial ? formatMoney(financial.availableCashCents) : '—'}</div>
           <div className="label" style={{ fontSize: 10, opacity: 0.7 }}>{t('finance.availableCash.hint')}</div>
+          {financial && <div className="label">{t('finance.commitments').replace('{amount}', formatMoney(financial.committedCents))}</div>}
         </div>
         <div className="kpi-card" data-testid="finance-runway">
           <div className="label">{t('finance.runway')}</div>
@@ -120,7 +132,6 @@ export const Finance: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </div>
 
-      {/* 危机状态区（§1.4）：状态徽标 + 原因码逐条 + 补救窗口（CrisisState 未接线 → 剩余天数 fail-closed） */}
       <div className="panel" data-testid="finance-crisis">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ margin: 0 }}>{t('finance.section.crisis')}</h2>
@@ -140,22 +151,26 @@ export const Finance: React.FC<Props> = ({ onNavigate }) => {
         )}
         {crisisLevel === 'critical' && !isBankrupt && (
           <div style={{ fontSize: 12, marginTop: 8 }} data-testid="finance-crisis-critical">
-            {t('finance.crisis.remediation')}: <span data-testid="finance-remediation-days">—</span>
-            {' · '}{t('finance.crisis.gap')}: {formatMoney(company?.cashBalanceCents ?? 0)}
-            <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>{t('finance.crisis.andCondition')}</p>
+            {t('finance.crisis.gap')}: {formatMoney(cash - TUNING.finance.cashBankruptThresholdCents)}
+            <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>{t('finance.crisis.dailyCheck')}</p>
           </div>
         )}
-        <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>{t('finance.crisis.history.unavailable')}</p>
-
-        {/* 补救行动：availableRemedies 内核未接线（OPEN-FIN-CRISIS-WIRING），展示静态入口 + 破产禁用 */}
-        {inCrisis && !isBankrupt && onNavigate && (
-          <div className="flex-gap" style={{ flexWrap: 'wrap', marginTop: 8 }} data-testid="finance-remediation-actions">
-            <button className="btn btn-secondary btn-small" onClick={() => onNavigate('projects')}>{t('finance.remediation.descope')}</button>
-            <button className="btn btn-secondary btn-small" onClick={() => onNavigate('employees')}>{t('finance.remediation.cutStaff')}</button>
-            <button className="btn btn-secondary btn-small" onClick={() => onNavigate('projects')}>{t('finance.remediation.pauseProject')}</button>
-            <p className="muted" style={{ fontSize: 11 }}>{t('finance.remediation.hint')}</p>
+        {deadline !== undefined && isBankrupt && (
+          <p data-testid="finance-remediation-days">{t('finance.crisis.restructuringDays').replace('{days}', String(Math.max(0, deadline - dayIndex)))}</p>
+        )}
+        {inCrisis && !isBankrupt && (
+          <div style={{ marginTop: 8 }} data-testid="finance-remediation-actions">
+            {ownProjects.map((project) => (
+              <div key={project.id} className="flex-gap" style={{ flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
+                <strong>{project.name}</strong>
+                {!project.isPaused && <button className="btn btn-secondary btn-small" onClick={() => setRemedy({ projectId: project.id, action: 'pause' })}>{t('finance.remediation.pauseProject')}</button>}
+                <button className="btn btn-secondary btn-small" onClick={() => setRemedy({ projectId: project.id, action: 'cancel' })}>{t('finance.remediation.cancelProject')}</button>
+              </div>
+            ))}
+            {onNavigate && <button className="btn btn-secondary btn-small" onClick={() => onNavigate('employees')}>{t('finance.remediation.cutStaff')}</button>}
           </div>
         )}
+        {remedyFeedback && <p role={remedyFeedback.ok ? 'status' : 'alert'}>{remedyFeedback.message}</p>}
       </div>
 
       {/* GAME OVER（ADJ-12 S11-3）：破产 → 重开新档（清档回 P-01） */}
@@ -163,10 +178,26 @@ export const Finance: React.FC<Props> = ({ onNavigate }) => {
         <div className="panel" style={{ borderColor: '#b3423a' }} data-testid="finance-gameover">
           <h2 style={{ color: '#b3423a', margin: 0 }}>{t('finance.gameover.title')}</h2>
           <p className="muted" style={{ fontSize: 12 }}>{t('finance.gameover.hint')}</p>
+          {onNavigate && (
+            <div className="flex-gap" style={{ marginBottom: 8 }}>
+              <button className="btn btn-secondary btn-small" onClick={() => onNavigate('employees')}>{t('finance.remediation.cutStaff')}</button>
+              <button className="btn btn-secondary btn-small" onClick={() => onNavigate('products')}>{t('nav.products')}</button>
+            </div>
+          )}
           <button className="btn btn-danger" onClick={() => { void restartNewGame() }} data-testid="finance-gameover-restart">
             {t('finance.gameover.restart')}
           </button>
         </div>
+      )}
+      {target && remedy && (
+        <ModalShell title={target.name} onClose={() => setRemedy(null)} footer={
+          <>
+            <button className="btn" onClick={confirmRemedy}>{t(remedy.action === 'pause' ? 'finance.remediation.pauseProject' : 'finance.remediation.cancelProject')}</button>
+            <button className="btn btn-secondary" onClick={() => setRemedy(null)}>{t('common.cancel')}</button>
+          </>
+        }>
+          <p>{t(remedy.action === 'pause' ? 'finance.remediation.pausePreview' : 'finance.remediation.cancelPreview')}</p>
+        </ModalShell>
       )}
 
       {/* 月度结算区（FIN §3.9 12 类三分映射，settlementDay 语义） */}

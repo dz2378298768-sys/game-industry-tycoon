@@ -14,6 +14,8 @@ export interface Company {
   cityId: string
   industryStartYear: number
   brand: number                    // 0-100
+  /** P2：按消费者细分保存的短期品牌记忆，按日衰减。 */
+  brandMemoryBySegment?: Record<string, number>
   technologyCapacity: number       // 0-100
   managementCapacity: number       // 0-100
   /**

@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Finance } from '@ui/pages/finance'
 import { useGameStore, formatMoney } from '@ui/state/game-store'
@@ -58,19 +58,37 @@ describe('P-11 财务结算页（批次 07B）', () => {
     expect(reasons.textContent).toContain('LOW_CASH')
   })
 
-  it('危机历史 time线不伪造（OPEN-FIN-CRISIS-WIRING）', () => {
-    renderFinance()
-    expect(screen.getByTestId('finance-crisis').textContent).toContain('待接线')
-  })
-
-  it('A-32：critical 展示补救窗口剩余天数（fail-closed “—”）+ 三条件 AND 文案', () => {
+  it('说明实际的每日现金检查，且在开启重整后显示存档中的期限', () => {
     useGameStore.setState({
       financial: { ...useGameStore.getState().financial!, crisisLevel: 'critical' },
     } as never)
-    renderFinance()
+    const { rerender } = renderFinance()
     const critical = screen.getByTestId('finance-crisis-critical')
-    expect(critical.textContent).toContain('—')
-    expect(critical.textContent).toContain('三条件')
+    expect(critical.textContent).toContain('每日结算后检查账面现金')
+    expect(screen.queryByTestId('finance-remediation-days')).toBeNull()
+    const state = useGameStore.getState()
+    useGameStore.setState({
+      company: { ...state.company!, status: 'bankrupt', restructuringDeadlineDay: 27 },
+      dayIndex: 7,
+    })
+    rerender(<Finance />)
+    expect(screen.getByTestId('finance-remediation-days').textContent).toContain('20 天')
+  })
+
+  it('财务页确认取消后真实释放研发预算承诺，账面现金保持不变', () => {
+    const { game } = useGameStore.getState()
+    expect(game!.createExecutionProject({ name: 'Remedy Project', genreId: 'action', hrb: 0.45, budgetCapacityCents: 2_000_000 }).success).toBe(true)
+    game!.advanceSimulation(31)
+    useGameStore.getState().refresh()
+    const before = useGameStore.getState().financial!
+    useGameStore.setState({ financial: { ...before, crisisLevel: 'warning' } })
+    renderFinance()
+    fireEvent.click(within(screen.getByTestId('finance-remediation-actions')).getByRole('button', { name: '取消项目' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消项目' }))
+    const { projects, financial } = useGameStore.getState()
+    expect(projects[0]!.phase).toBe('CANCELLED')
+    expect(financial!.cashBalanceCents).toBe(before.cashBalanceCents)
+    expect(financial!.availableCashCents - before.availableCashCents).toBe(900_000)
   })
 
   it('月度结算区：六分项按 settlementDay 语义归类', () => {

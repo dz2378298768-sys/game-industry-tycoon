@@ -117,6 +117,21 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     // —— 4. 交付 PASS：真点击 UI 确认按钮（P2 SUP-01，生产路径真实求值 + 登记，无 gate 夹具）——
     // 游戏态推进到可交付态；gate 快照由 Deliver 渲染时的生产路径 evaluateRuntimeDeliveryGate 生成。
     afterRework.project.state = 'READY_TO_DELIVER'
+    // REC-05：PASS 交付需要可追溯的项目支出交易。该夹具仅补一笔合法账本事实，
+    // 不绕过闸门，也不手写 Build 字段。
+    const expense = useGameStore.getState().game!.finance.getLedger().postTransaction({
+      companyId: useGameStore.getState().game!.getPlayerCompany()!.id,
+      day: useGameStore.getState().game!.calendar.currentDayIndex,
+      category: 'project_expense',
+      cashFlowType: 'operating',
+      amountCents: -1,
+      idempotencyKey: `code07b-buildfacts-expense-${projectId}`,
+      referenceId: projectId,
+      source: 'system_auto',
+      description: 'test project expense',
+    }, { allowNegativeBalance: true })
+    expect(expense.success).toBe(true)
+    afterRework.expenseTxIds.push(expense.result!.transaction.transactionId)
     const registerSpy = vi.spyOn(useGameStore.getState().game!, 'registerDeliveryGateEvaluation')
     const submitSpy = vi.spyOn(useGameStore.getState().game!, 'submitDeliveryForProject')
     const deliverView = render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)

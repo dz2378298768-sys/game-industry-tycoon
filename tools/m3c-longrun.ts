@@ -11,9 +11,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { createGameWorld } from '@application/factories/create-game-world'
 import type { WorldState } from '@simulation/services/world-state'
-import type { Company, CompanyPersona } from '@domain/entities/company'
+import type { Company } from '@domain/entities/company'
+import type { CompanyPersona } from '@domain/enums'
 
-const OUT = 'artifacts/longrun'
+const OUT = process.env.GIT_LONGRUN_OUTPUT ?? 'artifacts/longrun'
 const SEEDS = [42, 7, 99, 123, 2026, 31415, 2718, 808]
 const PERSONAS: CompanyPersona[] = ['indie', 'genre_specialist', 'integrated_dev_publisher']
 

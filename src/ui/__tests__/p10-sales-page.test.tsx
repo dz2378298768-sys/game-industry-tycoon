@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Product } from '@domain/entities/product'
 import type { SalesRecord } from '@domain/entities/sales-record'
@@ -7,11 +7,12 @@ import { Products } from '@ui/pages/products'
 import { ProductDetail } from '@ui/pages/product-detail'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
+import { seedInitialAwareness } from '@content/market-inputs'
 
-/** P-10 市场反馈与销售验收：FIX-1 三质量分列、A-29 周聚合、R-2 口碑降级、A-28 锚点结构、G-9 破产禁用。 */
+/** P-10 三质量分列、周聚合、真实口碑与退款、需求池结算归因。 */
 function salesRecord(dayIndex: number, units = 10): SalesRecord {
   return {
-    id: `SR-P1-${dayIndex}`, productId: 'P-1', dayIndex, marketId: 'JP', platformId: 'home_console_g2',
+    id: `SR-P1-${dayIndex}`, productId: 'P-1', dayIndex, marketId: 'japan', platformId: 'home_console_g2',
     grossUnits: units, unitPriceAtSaleCents: 2000, grossRevenueCents: units * 2000,
     platformFeeCents: units * 600, netSalesRevenueCents: units * 1400,
     estimatedRefundUnits: 0, actualRefundUnits: 0,
@@ -58,12 +59,40 @@ describe('P-10 市场反馈与销售页（批次 07B）', () => {
     return render(<ProductDetail productId="P-1" onNavigate={vi.fn()} />)
   }
 
-  it('FIX-1 / U1：产品表三质量分列且不合成，口碑档降级为暂无评价', () => {
+  it('同一发行模板字段用于估算和签署，默认可用并按填写期限估算', () => {
+    const { game } = useGameStore.getState()
+    const product = makeProduct({ companyId: game!.getPlayerCompany()!.id, launchDay: 0 })
+    game!.world.products = [product]
+    useGameStore.getState().refresh()
+    renderDetail()
+    const rate = screen.getByRole('textbox', { name: '模板分成比例（%）' }) as HTMLInputElement
+    const partner = screen.getByRole('combobox', { name: '发行商' }) as HTMLSelectElement
+    expect(partner.value).toBe('global-star')
+    expect(rate.value).toBe('15')
+    const quote = screen.getByRole('button', { name: '试算合同' })
+    fireEvent.change(rate, { target: { value: '10' } })
+    fireEvent.click(quote)
+    expect(useGameStore.getState().messages.at(-1)?.text).toContain('15%–30%')
+    expect(screen.queryByText('按 30 天估算')).toBeNull()
+    fireEvent.change(rate, { target: { value: '15' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '模板期限（天）' }), { target: { value: '30' } })
+    fireEvent.click(quote)
+    expect(screen.getByText('按 30 天估算')).toBeTruthy()
+    fireEvent.change(rate, { target: { value: '20' } })
+    expect(screen.queryByText('按 30 天估算')).toBeNull()
+    fireEvent.change(rate, { target: { value: '15' } })
+    fireEvent.click(screen.getByRole('button', { name: '签模板合同' }))
+    expect(useGameStore.getState().publishingContracts).toMatchObject([
+      { partnerId: 'global-star', ratePercent: 15, durationDays: 30, status: 'active' },
+    ])
+  })
+
+  it('FIX-1 / U1：产品表三质量分列，口碑只显示媒体推算档', () => {
     const { container } = renderList()
     expect(screen.getByTestId('p10-quality-design').textContent?.trim()).toBe('—')
     expect(screen.getByTestId('p10-quality-implementation').textContent?.trim()).toBe('—')
     expect(screen.getByTestId('p10-quality-completeness').textContent?.trim()).toBe('—')
-    expect(screen.getByTestId('p10-reputation-P-1').textContent).toContain('暂无评价')
+    expect(screen.getByTestId('p10-reputation-P-1').textContent).toContain('偏正面')
     expect(container.textContent).not.toMatch(/综合|总评|加权平均|平均分|qualityScore|finalQualityScore/)
   })
 
@@ -79,16 +108,23 @@ describe('P-10 市场反馈与销售页（批次 07B）', () => {
     expect(screen.queryByText(/^100$/)).toBeNull()
   })
 
-  it('R-2 / ADJ-16 R-2：口碑档降级为暂无评价，不由 reviewScore 推算档位', () => {
-    renderDetail()
-    const band = screen.getByTestId('p10-reputation-band').textContent ?? ''
-    expect(band).toContain('暂无评价')
-    for (const fabricated of ['poor', 'mixed', 'positive', '好评', '差评', '毁誉参半']) {
-      expect(band).not.toContain(fabricated)
-    }
+  it('低于一美元的上市价、当前价和列表价保留美分', () => {
+    const detail = renderDetail({ launchPriceCents: 28, pricePerUnitCents: 35 })
+    expect(detail.container.textContent).toContain('$0.28')
+    expect(detail.container.textContent).toContain('$0.35')
+    detail.unmount()
+    expect(renderList().container.textContent).toContain('$0.35')
   })
 
-  it('S10-2 / S10-3：退款率取 TUNING 常数，退款额按周聚合，不展示原因明细', () => {
+  it.each([
+    [49, '偏负面'], [50, '褒贬不一'], [74, '褒贬不一'], [75, '偏正面'],
+  ])('ADJ-26：媒体评价使用已裁定的边界 %d', (score, label) => {
+    renderDetail({ reviewScore: null, finalQualityScore: score })
+    expect(screen.getByTestId('p10-reputation-band').textContent).toBe(label)
+    expect(screen.getByTestId('p10-reputation').textContent).toMatch(/产品质量.*推算/)
+  })
+
+  it('REC-06：区分退款模型与真实已退单位率，已入账退款额按周聚合', () => {
     useGameStore.setState({
       refundBatches: [{
         id: 'RB-1', productId: 'P-1', salesRecordId: 'SR-P1-100', marketId: 'JP', platformId: 'home_console_g2',
@@ -96,10 +132,10 @@ describe('P-10 市场反馈与销售页（批次 07B）', () => {
         source: 'auto_window', status: 'posted', idempotencyKey: 'k',
       }],
     } as never)
-    renderDetail()
+    renderDetail({ defectLevel: 40, salesByPeriod: [{ ...salesRecord(100), actualRefundUnits: 1 }, salesRecord(103)] })
     const summary = screen.getByTestId('p10-refund-summary')
-    // ADJ-18 §6：退款率权威值 5%，锁定具体值而非仅含 '%'（07B-06）。
-    expect(summary.textContent).toContain('5%')
+    expect(screen.getByTestId('p10-refund-modelled').textContent).toMatch(/7%$/)
+    expect(screen.getByTestId('p10-refund-actual').textContent).toMatch(/5%$/)
     expect(summary.textContent).toContain('Day 98–104')
     expect(summary.textContent).not.toMatch(/原因|reason/i)
   })
@@ -108,12 +144,61 @@ describe('P-10 市场反馈与销售页（批次 07B）', () => {
     renderDetail()
     expect(screen.getByTestId('p10-positioning-tags')).toBeTruthy()
     expect(screen.getByTestId('p10-positioning-slices')).toBeTruthy()
-    expect(screen.getByTestId('p10-positioning-slices').textContent).toContain('home_console_g2')
+    const slices = screen.getByTestId('p10-positioning-slices')
+    expect(slices.textContent).toContain('日本')
+    expect(slices.textContent).toContain('家用游戏机 G2')
+    expect(slices.querySelectorAll('tbody tr')).toHaveLength(1)
   })
 
   it('归因 fail-closed：无内核支撑原因则不出现归因行', () => {
     renderDetail()
-    expect(screen.getByTestId('p10-attribution').textContent).toContain('暂无可归因')
+    expect(screen.getByTestId('p10-attribution-empty')).toBeTruthy()
+    expect(screen.queryByTestId('p10-attribution-result')).toBeNull()
+  })
+
+  it('需求池真实结算的三项归因对得上当天毛销量，读档保留销售事实', () => {
+    const world = useGameStore.getState().game!
+    const product = makeProduct({
+      companyId: world.getPlayerCompany()!.id,
+      launchDay: 0,
+      audienceSegmentIds: ['arcade_enthusiasts'],
+      supportedPlatformIds: ['arcade_pre_1975'],
+      awarenessByMarket: seedInitialAwareness(7, 0),
+      salesByPeriod: [],
+    })
+    world.world.products = [product, { ...product, id: 'same-market-competitor' }]
+    world.advanceSimulation(1)
+    useGameStore.getState().refresh()
+    const feedback = world.sales.getLatestDemandFeedback(product.id)!
+    const latest = world.world.products.find((p) => p.id === product.id)!
+    const unitsSold = latest.salesByPeriod
+      .filter((record) => record.dayIndex === feedback.dayIndex)
+      .reduce((total, record) => total + record.grossUnits, 0)
+    expect(unitsSold).toBeGreaterThan(0)
+    expect(feedback.purchaseIntentReductionUnits).toBeGreaterThan(0)
+    expect(feedback.allocationReductionUnits).toBeGreaterThan(0)
+    expect(feedback.addressableUnits - feedback.purchaseIntentReductionUnits - feedback.allocationReductionUnits).toBe(unitsSold)
+    const detail = renderDetail()
+    for (const row of ['audience', 'positioning', 'competition', 'result']) {
+      expect(screen.getByTestId(`p10-attribution-${row}`)).toBeTruthy()
+    }
+    detail.unmount()
+
+    const restored = createGameWorld(42)
+    restored.restore(world.serialize())
+    useGameStore.setState({ game: restored })
+    useGameStore.getState().refresh()
+    expect(restored.world.products.find((p) => p.id === product.id)?.salesByPeriod).toEqual(latest.salesByPeriod)
+    expect(restored.sales.getLatestDemandFeedback(product.id)).toBeUndefined()
+    const restoredDetail = renderDetail()
+    for (const row of ['audience', 'positioning', 'competition', 'result']) {
+      expect(screen.getByTestId(`p10-attribution-${row}`)).toBeTruthy()
+    }
+    expect(screen.getByTestId('p10-reputation-band').textContent).toBe('偏正面')
+    expect(screen.getByTestId('p10-refund-actual').textContent).toMatch(/0%$/)
+    restoredDetail.unmount()
+    restored.advanceSimulation(1)
+    expect(restored.sales.getLatestDemandFeedback(product.id)?.dayIndex).toBe(feedback.dayIndex + 1)
   })
 
   it('G-9：破产时降价与追加营销按钮禁用并带原因', () => {

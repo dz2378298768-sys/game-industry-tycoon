@@ -16,7 +16,8 @@ import type {
   Worklog,
 } from '@domain/entities/project-execution'
 import { PROJ_ERROR, ProjectError } from '@domain/entities/project-execution/errors'
-import type { UnifiedLedger } from '@domain/entities/finance'
+import type { PostLedgerTxInput, UnifiedLedger } from '@domain/entities/finance'
+import { InsufficientCashError } from '@domain/entities/finance'
 import type { DisciplineWorkload } from './project-execution-cost-helpers'
 
 const PRIORITY_RANK: Record<WorkPackage['priority'], number> = { P0: 0, P1: 1, P2: 2 }
@@ -76,6 +77,7 @@ export function advanceOneDay(input: AdvanceDayInput): AdvanceDayResult {
   const producedByDiscipline = emptyWorkload()
   const logs: Worklog[] = []
   const transactionIds: string[] = []
+  const pendingTransactions: PostLedgerTxInput[] = []
   const sessions = (input.reworkSessions ?? []).map((s) => ({
     ...s,
     costEstimate: { ...s.costEstimate },
@@ -130,7 +132,7 @@ export function advanceOneDay(input: AdvanceDayInput): AdvanceDayResult {
 
       // 账本：逐日兑现（$0 不提交，FIN AMOUNT_ZERO 拒收）
       if (costCents > 0 && input.ledger !== undefined) {
-        const res = input.ledger.postTransaction({
+        pendingTransactions.push({
           idempotencyKey: expenseKey(input.projectId, input.day, wp),
           companyId: input.companyId,
           day: input.day,
@@ -140,17 +142,21 @@ export function advanceOneDay(input: AdvanceDayInput): AdvanceDayResult {
           referenceId: wp.workPackageId,
           source,
         })
-        if (!res.success) {
-          throw new ProjectError(
-            PROJ_ERROR.LEDGER_POST_FAILED,
-            res.errorMessage ?? 'project expense post failed',
-          )
-        }
-        transactionIds.push(res.result!.transaction.transactionId)
       }
       // 未接账本或幂等命中（重放同一天）时仍以日志口径计入当日支出
       if (costCents > 0) spentCents += costCents
     }
+  }
+
+  if (input.ledger !== undefined && pendingTransactions.length > 0) {
+    const posted = input.ledger.bulkPostTransactions(pendingTransactions)
+    if (!posted.success || posted.result === undefined) {
+      const code = posted.errorCode === new InsufficientCashError().code
+        ? PROJ_ERROR.CASH_SHORTAGE
+        : PROJ_ERROR.LEDGER_POST_FAILED
+      throw new ProjectError(code, posted.errorMessage ?? 'project expense post failed')
+    }
+    transactionIds.push(...posted.result.map(({ transaction }) => transaction.transactionId))
   }
 
   return { workPackages: next, logs, producedByDiscipline, transactionIds, reworkSessions: sessions, spentCents }

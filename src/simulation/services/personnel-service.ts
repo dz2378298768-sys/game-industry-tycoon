@@ -19,6 +19,7 @@ import type {
   Employment,
   Person,
   PersonEvent,
+  PendingHire,
   PersonnelFormulaSnapshot,
 } from '@domain/entities/personnel'
 import {
@@ -48,11 +49,14 @@ import {
   buildSalaryCommitment,
   cancelEffectiveMonthFor,
   realizeCommitmentFor,
+  startOfMonthDay,
 } from '@domain/value-objects/personnel-salary'
 import { refreshCandidatePool } from '@domain/value-objects/personnel-candidates'
 import { isRetirementDue } from '@domain/value-objects/personnel-salary'
+import { monthKeyOf } from '@domain/value-objects/finance-commitment'
 import type { FinanceService } from './finance-service'
 import { uuid } from '@domain/types'
+import type { CandidatePoolGuardInput } from '@domain/value-objects/personnel-candidates'
 
 export const D03_SCHEMA_VERSION = 3
 
@@ -61,6 +65,7 @@ export interface PersonnelStateSlice {
   employments: Employment[]
   candidates: Candidate[]
   personEvents: PersonEvent[]
+  pendingHires: PendingHire[]
 }
 
 /** 每日 tick 输入（§8.2；全部由调用方注入，公式层不读 TUNING——§18.3）。 */
@@ -101,12 +106,21 @@ export interface RecruitFromPoolCommand {
   employmentId?: string
 }
 
+export interface PendingArrival {
+  pendingHire: PendingHire
+  employment: Employment
+  feeCents: number
+}
+
+export type PendingCompanyStatus = 'active' | 'bankrupt' | 'dissolved' | string
+
 /** role → 默认主学科（§3.2：role 仅影响默认学科提示）。 */
 function defaultDisciplineOfRole(role: EmployeeRole): D03Discipline | null {
   switch (role) {
     case 'designer': return 'design'
     case 'programmer': return 'code'
     case 'artist': return 'art'
+    case 'audio_designer': return 'audio'
     case 'qa': return 'qa'
     default: return null
   }
@@ -117,6 +131,7 @@ export class PersonnelService {
   private employments: Employment[] = []
   private candidates: Candidate[] = []
   private personEvents: PersonEvent[] = []
+  private pendingHires: PendingHire[] = []
   private snapshot: PersonnelFormulaSnapshot = createPersonnelSnapshot(0)
   private finance: FinanceService
   private params: PersonnelParams
@@ -152,6 +167,7 @@ export class PersonnelService {
     this.employments = [...(slice.employments ?? [])]
     this.candidates = [...(slice.candidates ?? [])]
     this.personEvents = [...(slice.personEvents ?? [])]
+    this.pendingHires = [...(slice.pendingHires ?? [])]
     if (snapshot !== undefined) {
       this.snapshot = snapshot
       // §18.3：公式参数快照是权威调参入口（存档持久化/测试覆盖均经此注入），
@@ -167,6 +183,7 @@ export class PersonnelService {
       employments: [...this.employments],
       candidates: [...this.candidates],
       personEvents: [...this.personEvents],
+      pendingHires: [...this.pendingHires],
       snapshot: this.snapshot,
       d03SchemaVersion: D03_SCHEMA_VERSION,
     }
@@ -188,6 +205,14 @@ export class PersonnelService {
 
   listPersonEvents(): PersonEvent[] {
     return [...this.personEvents]
+  }
+
+  listPendingHires(companyId?: string): PendingHire[] {
+    return this.pendingHires.filter((h) => companyId === undefined || h.companyId === companyId)
+  }
+
+  countHeadcountByCompany(companyId: string): number {
+    return this.countOccupyingByCompany(companyId) + this.pendingHires.filter((h) => h.companyId === companyId && h.state === 'pending').length
   }
 
   getEmployment(employmentId: string): Employment | undefined {
@@ -224,7 +249,7 @@ export class PersonnelService {
     if (!Number.isInteger(cmd.salaryMonthlyCents) || cmd.salaryMonthlyCents <= 0) {
       return d03Fail(D03_ERROR.OFFER_INVALID, '月薪必须是正整数美分')
     }
-    if (cmd.headcountLimit !== undefined && this.countOccupyingByCompany(cmd.companyId) >= cmd.headcountLimit) {
+    if (cmd.headcountLimit !== undefined && this.countHeadcountByCompany(cmd.companyId) >= cmd.headcountLimit) {
       return d03Fail(D03_ERROR.HEADCOUNT_FULL, `管理容量已满（${cmd.headcountLimit} 人）`)
     }
     const employmentId = cmd.employmentId ?? this.nextEmploymentId()
@@ -319,19 +344,29 @@ export class PersonnelService {
   }
 
   /**
-   * 从候选池招聘（RULE-04/05 + §6.3 定价）。
-   * playerOffer < floorPrice ⇒ 拒绝（候选保留）；> ceilingPrice ⇒ 接受但 morale 不加（防买士气）。
-   * arrivalDay = candidate.availableFromDay：招聘费承诺当日创建、到日兑现。
+   * 从候选池确认招聘（RULE-04/05 + §6.3 定价）。确认只创建 PendingHire；
+   * Employment、项目产能和招聘费交易均延迟到 arrivalDay。
    */
   recruitFromCandidate(
     cmd: RecruitFromPoolCommand,
     marketSalaryOf: (d: D03Discipline) => number,
-  ): D03Result<{ person: Person; employment: Employment; feeCents: number; arrivalDay: number }> {
+  ): D03Result<{ person: Person; pendingHire: PendingHire; employment?: Employment; feeCents: number; arrivalDay: number }> {
     const candidate = this.candidates.find((c) => c.candidateId === cmd.candidateId)
-    if (candidate === undefined) return d03Fail(D03_ERROR.CANDIDATE_NOT_FOUND, `候选 ${cmd.candidateId} 不存在`)
+    if (candidate === undefined) {
+      const reserved = this.pendingHires.find((h) => h.candidateId === cmd.candidateId && h.state === 'pending')
+      if (reserved !== undefined) return d03Fail(D03_ERROR.HIRE_PENDING, '候选人已被预留，等待到岗')
+      return d03Fail(D03_ERROR.CANDIDATE_NOT_FOUND, `候选 ${cmd.candidateId} 不存在`)
+    }
     if (cmd.day > candidate.expiresAtDay) return d03Fail(D03_ERROR.CANDIDATE_EXPIRED, '候选已过期')
     if (this.employmentOfPerson(candidate.personId) !== undefined) {
       return d03Fail(D03_ERROR.ALREADY_EMPLOYED, '候选人已被雇佣')
+    }
+    const existingPending = this.pendingHires.find((h) => h.personId === candidate.personId && h.state === 'pending')
+    if (existingPending !== undefined) {
+      return d03Fail(D03_ERROR.HIRE_PENDING, '候选人已被预留，等待到岗')
+    }
+    if (cmd.headcountLimit !== undefined && this.countHeadcountByCompany(cmd.companyId) >= cmd.headcountLimit) {
+      return d03Fail(D03_ERROR.HEADCOUNT_FULL, `管理容量已满（${cmd.headcountLimit} 人）`)
     }
     const market = marketSalaryOf(candidate.discipline)
     const floor = Math.round(market * this.params.floorPriceRatio)
@@ -342,41 +377,219 @@ export class PersonnelService {
     const negotiated = Math.min(cmd.playerOfferCents, ceiling)
     const person = this.getPerson(candidate.personId)
     if (person === undefined) return d03Fail(D03_ERROR.PERSON_NOT_FOUND, '候选人物不存在')
-    const personIdx = this.persons.indexOf(person)
     const level = person.skills.level[candidate.discipline] ?? candidate.skillLevel
-    const hire = this.hire({
+    const seniority = person.seniority
+    const leadDays = this.params.baseLeadDays + (seniority === 'senior' ? this.params.kLead : 0)
+    const arrivalDay = cmd.day + leadDays
+    const employmentId = cmd.employmentId ?? this.nextEmploymentId()
+    const role: EmployeeRole = candidate.discipline === 'code' ? 'programmer'
+      : candidate.discipline === 'design' ? 'designer'
+        : candidate.discipline === 'art' ? 'artist'
+          : candidate.discipline === 'audio' ? 'audio_designer' : 'qa'
+    const termMonths = this.params.p1DefaultTermMonths
+    const salaryCommitmentId = `d03-sal-${employmentId}`
+    const recruitFeeCommitmentId = `d03-rec-${employmentId}`
+    const pendingEmployment: Employment = {
+      employmentId,
+      personId: person.personId,
       companyId: cmd.companyId,
-      ...(cmd.employmentId !== undefined ? { employmentId: cmd.employmentId } : {}),
-      name: person.displayName,
-      role: candidate.discipline === 'code' ? 'programmer' : candidate.discipline === 'design' ? 'designer' : candidate.discipline === 'art' ? 'artist' : 'qa',
-      skillLevel: Math.max(1, Math.min(5, level)),
+      role,
+      status: 'probation',
+      occupiesPerson: true,
       salaryMonthlyCents: negotiated,
-      day: cmd.day,
-      primaryDiscipline: candidate.discipline,
-      ...(cmd.headcountLimit !== undefined ? { headcountLimit: cmd.headcountLimit } : {}),
-    })
-    if (!hire.ok || !hire.value) {
-      return d03Fail(hire.error!.code, hire.error!.message, hire.error!.repairHint)
+      pendingSalaryMonthlyCents: null,
+      pendingEffectiveDay: null,
+      startDay: arrivalDay,
+      endDay: null,
+      initialTermMonths: termMonths,
+      renewalCount: 0,
+      moraleModifier: 0,
+      probationEndDay: computeProbationEndDay(arrivalDay, this.params.probationMonths, this.params.workingDaysPerMonth),
+      noticeStartDay: null,
+      terminationKind: null,
+      salaryCommitmentId,
+      version: 1,
+      createdAt: cmd.day,
+      updatedAt: arrivalDay,
     }
-    // R-D03-1：跳槽不复制 Person——池招聘复用既有 Person，改挂新 Employment。
-    const employment = hire.value.employment
-    const reusedPerson: Person = {
-      ...person,
-      currentEmploymentId: employment.employmentId,
-      status: 'on_leave',
-      updatedAt: cmd.day,
-      version: person.version + 1,
+    const salaryReg = this.finance.getLedger().registerCommitment(buildSalaryCommitment(pendingEmployment))
+    if (!salaryReg.success) return d03Fail(D03_ERROR.SALARY_COMMITMENT_MISSING, salaryReg.errorMessage ?? '薪资承诺注册失败')
+    const feeInput = buildRecruitFeeCommitment(employmentId, cmd.companyId, negotiated, arrivalDay, this.params)
+    const feeReg = this.finance.getLedger().registerCommitment(feeInput)
+    if (!feeReg.success) {
+      this.finance.getLedger().releaseCommitment(cmd.companyId, salaryCommitmentId, monthKeyOf(startOfMonthDay(arrivalDay)))
+      return d03Fail(D03_ERROR.OFFER_INVALID, feeReg.errorMessage ?? '招聘费承诺注册失败')
     }
-    this.persons[personIdx] = reusedPerson
-    // hire() 里生成的占位 Person（d03-per-<employmentId>）与池 Person 并存会违反"同一人唯一"：
-    // 池招聘的权威 Person 是既有候选 Person，删除占位副本。
-    const placeholderIdx = this.persons.findIndex((p) => p.personId === `d03-per-${employment.employmentId}`)
-    if (placeholderIdx >= 0 && this.persons[placeholderIdx] !== reusedPerson) {
-      this.persons.splice(placeholderIdx, 1)
-      employment.personId = reusedPerson.personId
+    const pendingHire: PendingHire = {
+      pendingHireId: `d03-pending-${employmentId}`,
+      employmentId,
+      personId: person.personId,
+      companyId: cmd.companyId,
+      candidateId: candidate.candidateId,
+      role,
+      discipline: candidate.discipline,
+      skillLevel: Math.max(1, Math.min(5, level)),
+      seniority,
+      negotiatedSalaryCents: negotiated,
+      askingSalaryCents: candidate.askingSalaryCents,
+      initialTermMonths: termMonths,
+      hireConfirmDay: cmd.day,
+      candidateAvailableFromDay: candidate.availableFromDay,
+      arrivalDay,
+      candidateExpiresAtDay: candidate.expiresAtDay,
+      salaryCommitmentId,
+      recruitFeeCommitmentId,
+      state: 'pending',
+      cancelledAtDay: null,
     }
     this.candidates = this.candidates.filter((c) => c.candidateId !== cmd.candidateId)
-    return d03Ok({ person: reusedPerson, employment, feeCents: hire.value.feeCents, arrivalDay: candidate.availableFromDay })
+    this.pendingHires.push(pendingHire)
+    this.emit({
+      eventId: uuid(),
+      personId: person.personId,
+      day: cmd.day,
+      kind: 'hired',
+      payload: { pendingHireId: pendingHire.pendingHireId, companyId: cmd.companyId, arrivalDay },
+    })
+    return d03Ok({ person, pendingHire, feeCents: feeInput.amountCents, arrivalDay })
+  }
+
+  /**
+   * 到岗阶段（必须在月度工资结算前调用）。只有 active 公司才会生效；
+   * bankrupt/dissolved 的待到岗项由同一阶段取消。重复调用只处理 pending，保证费用/Employment 幂等。
+   */
+  processPendingArrivals(
+    day: number,
+    companyStatus: (companyId: string) => PendingCompanyStatus = () => 'active',
+  ): PendingArrival[] {
+    const arrivals: PendingArrival[] = []
+    for (const pending of [...this.pendingHires]) {
+      if (pending.state !== 'pending') continue
+      const status = companyStatus(pending.companyId)
+      if (status !== 'active') {
+        this.cancelPendingHireInternal(pending, day, true)
+        continue
+      }
+      if (pending.arrivalDay > day) continue
+      const person = this.getPerson(pending.personId)
+      if (person === undefined) continue
+      const existing = this.getEmployment(pending.employmentId)
+      if (existing !== undefined) {
+        if (existing.occupiesPerson) {
+          this.markPendingArrived(pending.pendingHireId)
+          arrivals.push({ pendingHire: this.pendingHires.find((h) => h.pendingHireId === pending.pendingHireId) ?? pending, employment: existing, feeCents: 0 })
+        }
+        continue
+      }
+      if (this.employmentOfPerson(person.personId) !== undefined) continue
+      const commitment = this.finance.getLedger().getCommitment(pending.companyId, pending.recruitFeeCommitmentId)
+      if (commitment === undefined) continue
+      const realized = realizeCommitmentFor(commitment, this.finance.getLedger(), day, {
+        categoryOverride: 'project_expense',
+        description: `入职成本：${person.displayName}`,
+      })
+      if ('errorCode' in realized) continue
+      const employment = this.employmentFromPending(pending, day)
+      this.replaceEmployment(employment)
+      this.markPendingArrived(pending.pendingHireId)
+      this.emit({
+        eventId: uuid(),
+        personId: person.personId,
+        day,
+        kind: 'hired',
+        payload: { employmentId: employment.employmentId, arrivalDay: pending.arrivalDay, feeCents: realized.amountCents },
+      })
+      const arrived = this.pendingHires.find((h) => h.pendingHireId === pending.pendingHireId) ?? pending
+      arrivals.push({ pendingHire: arrived, employment, feeCents: realized.amountCents })
+    }
+    return arrivals
+  }
+
+  /** 玩家取消到岗前招聘；同一 pending 的重复取消返回已取消快照。 */
+  cancelPendingHire(pendingHireId: string, day: number): D03Result<PendingHire> {
+    const pending = this.pendingHires.find((h) => h.pendingHireId === pendingHireId)
+    if (pending === undefined) return d03Fail(D03_ERROR.CANDIDATE_NOT_FOUND, `待到岗招聘 ${pendingHireId} 不存在`)
+    if (pending.state === 'cancelled') return d03Ok(pending)
+    if (pending.state !== 'pending' || day >= pending.arrivalDay) {
+      return d03Fail(D03_ERROR.HIRE_ALREADY_ARRIVED, '招聘已到岗，不能取消')
+    }
+    this.cancelPendingHireInternal(pending, day, false)
+    return d03Ok(this.pendingHires.find((h) => h.pendingHireId === pendingHireId) ?? pending)
+  }
+
+  /** 公司破产/解散钩子：取消仍未到岗项并释放未来承诺。 */
+  cancelPendingHiresForCompany(companyId: string, day: number): PendingHire[] {
+    const cancelled: PendingHire[] = []
+    for (const pending of [...this.pendingHires]) {
+      if (pending.companyId !== companyId || pending.state !== 'pending') continue
+      if (pending.arrivalDay <= day) continue
+      this.cancelPendingHireInternal(pending, day, true)
+      const next = this.pendingHires.find((h) => h.pendingHireId === pending.pendingHireId)
+      if (next !== undefined) cancelled.push(next)
+    }
+    return cancelled
+  }
+
+  private employmentFromPending(pending: PendingHire, day: number): Employment {
+    return {
+      employmentId: pending.employmentId,
+      personId: pending.personId,
+      companyId: pending.companyId,
+      role: pending.role,
+      status: 'probation',
+      occupiesPerson: true,
+      salaryMonthlyCents: pending.negotiatedSalaryCents,
+      pendingSalaryMonthlyCents: null,
+      pendingEffectiveDay: null,
+      startDay: pending.arrivalDay,
+      endDay: null,
+      initialTermMonths: pending.initialTermMonths,
+      renewalCount: 0,
+      moraleModifier: 0,
+      probationEndDay: computeProbationEndDay(pending.arrivalDay, this.params.probationMonths, this.params.workingDaysPerMonth),
+      noticeStartDay: null,
+      terminationKind: null,
+      salaryCommitmentId: pending.salaryCommitmentId,
+      version: 1,
+      createdAt: pending.hireConfirmDay,
+      updatedAt: day,
+    }
+  }
+
+  private markPendingArrived(pendingHireId: string): void {
+    const index = this.pendingHires.findIndex((h) => h.pendingHireId === pendingHireId)
+    if (index < 0) return
+    this.pendingHires[index] = { ...this.pendingHires[index]!, state: 'arrived' as const, cancelledAtDay: null }
+  }
+
+  private cancelPendingHireInternal(pending: PendingHire, day: number, system: boolean): void {
+    if (pending.state !== 'pending') return
+    const effectiveMonth = monthKeyOf(startOfMonthDay(pending.arrivalDay))
+    this.finance.getLedger().releaseCommitment(pending.companyId, pending.salaryCommitmentId, effectiveMonth)
+    this.finance.getLedger().releaseCommitment(pending.companyId, pending.recruitFeeCommitmentId, effectiveMonth)
+    const candidateExists = this.candidates.some((c) => c.candidateId === pending.candidateId || c.personId === pending.personId)
+    const person = this.getPerson(pending.personId)
+    if (!candidateExists && person !== undefined && pending.candidateExpiresAtDay >= day) {
+      this.candidates.push({
+        candidateId: pending.candidateId,
+        personId: pending.personId,
+        regionId: person.regionId,
+        discipline: pending.discipline,
+        skillLevel: pending.skillLevel,
+        askingSalaryCents: pending.askingSalaryCents,
+        availableFromDay: pending.candidateAvailableFromDay,
+        expiresAtDay: pending.candidateExpiresAtDay,
+      })
+    }
+    const index = this.pendingHires.findIndex((h) => h.pendingHireId === pending.pendingHireId)
+    if (index >= 0) this.pendingHires[index] = { ...pending, state: 'cancelled', cancelledAtDay: day }
+    this.emit({
+      eventId: uuid(),
+      personId: pending.personId,
+      day,
+      kind: 'hired',
+      payload: { pendingHireId: pending.pendingHireId, cancelled: true, system },
+    })
   }
 
   // ===== 解雇 / 辞职 / 跳槽 =====
@@ -641,10 +854,13 @@ export class PersonnelService {
     this.personEvents.push(...output.personEvents)
   }
 
-  /** 每游戏日刷新一次（§12）：5 名候选、4 学科随机分配、档位 0..5 均匀（ADJ-12 S5-1）。 */
-  refreshCandidatePool(day: number, marketSalaryOf: (d: D03Discipline) => number, regionId: string): void {
+  /** 每游戏日刷新一次（§12）：5 名候选、五学科随机分配、档位 0..5 均匀（REC-04 扩展 S5-1）。 */
+  refreshCandidatePool(day: number, marketSalaryOf: (d: D03Discipline) => number, regionId: string, guard?: CandidatePoolGuardInput): number {
     const occupied = new Set(
-      this.employments.filter((e) => e.occupiesPerson).map((e) => e.personId),
+      [
+        ...this.employments.filter((e) => e.occupiesPerson).map((e) => e.personId),
+        ...this.pendingHires.filter((h) => h.state === 'pending').map((h) => h.personId),
+      ],
     )
     const r = refreshCandidatePool({
       day,
@@ -653,6 +869,7 @@ export class PersonnelService {
       params: this.params,
       marketSalaryOf,
       regionId,
+      guard,
     })
     this.persons.push(...r.newPersons)
     this.candidates = r.candidates
@@ -665,6 +882,7 @@ export class PersonnelService {
         payload: { duplicateCandidatesRemoved: r.duplicatesRemoved, code: D03_ERROR.DUPLICATE_CANDIDATE },
       })
     }
+    return r.supplementSequence
   }
 
   // ===== 派生 Employee 视图（双轨：零回归桥） =====

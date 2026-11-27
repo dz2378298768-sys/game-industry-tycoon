@@ -657,7 +657,7 @@ describe('D-03 TC-19 / TC-22 / TC-23 / TC-24 / S5-1 / S5-2', () => {
     expect(result.errors.some((x) => x.code === D03_ERROR.DATA_REPAIR)).toBe(true)
   })
 
-  it('S5-1 候选池：每次 5 名、固定 4 学科随机分配、档位 0..5 均匀、asking ∈ [0.85,1.10]×market', () => {
+  it('S5-1 候选池：每次 5 名、五学科随机分配、档位 0..5 均匀、asking ∈ [0.85,1.10]×market', () => {
     const { svc } = newService(['company-1'])
     svc.refreshCandidatePool(100, () => 100_000, 'default')
     const { candidates } = svc.toSlice()
@@ -670,6 +670,35 @@ describe('D-03 TC-19 / TC-22 / TC-23 / TC-24 / S5-1 / S5-2', () => {
       expect(c.askingSalaryCents).toBeGreaterThanOrEqual(Math.round(100_000 * 0.85))
       expect(c.askingSalaryCents).toBeLessThanOrEqual(Math.round(100_000 * 1.10))
     }
+  })
+
+  it('REC-04 音频候选招聘：audio 学科映射为 audio_designer 且保留技能', () => {
+    const { svc } = newService(['company-1'])
+    const person = personOf('audio-person', { audio: 4 })
+    svc.adopt({
+      persons: [person],
+      employments: [],
+      candidates: [{
+        candidateId: 'audio-candidate',
+        personId: person.personId,
+        regionId: 'default',
+        discipline: 'audio',
+        skillLevel: 4,
+        askingSalaryCents: 100_000,
+        availableFromDay: 0,
+        expiresAtDay: 1000,
+      }],
+      personEvents: [],
+    })
+    const hired = svc.recruitFromCandidate(
+      { candidateId: 'audio-candidate', companyId: 'company-1', playerOfferCents: 100_000, day: 0 },
+      () => 100_000,
+    )
+    expect(hired.ok).toBe(true)
+    expect(hired.value?.employment).toBeUndefined()
+    const arrivals = svc.processPendingArrivals(hired.value!.arrivalDay)
+    expect(arrivals[0]?.employment.role).toBe('audio_designer')
+    expect(hired.value?.person.skills.level.audio).toBe(4)
   })
 
   it('S5-2 基础成长：完成 WP ⇒ +0.1 档经验；跨档阈值 expCap 升级；冷却期内不得连升', () => {

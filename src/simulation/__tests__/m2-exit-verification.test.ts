@@ -9,12 +9,12 @@
 import { describe, it, expect } from 'vitest'
 import { GameWorld } from '@application/mediators/game-world'
 import { createGameWorld } from '@application/factories/create-game-world'
+import { referencePriceCents } from '@content/c1-content'
 import { buildMarketInput, seedInitialAwareness } from '@content/market-inputs'
 import { makeCompany, makeProject, makeWorld } from '../../__tests__/helpers'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
 
 const DAYS = 30
-const PRICE = 2999
 const PLATFORM = 'arcade_pre_1975'
 
 function seedCompany(gw: GameWorld, cashCents = 10_000_000) {
@@ -56,7 +56,8 @@ function addProjectAndLaunch(
   // stableId=null 时保留随机 id：用于证明“不靠固定 id 也复现”
   if (stableId !== null) product.id = stableId
   const id = stableId ?? productId
-  expect(gw.setProductPrice({ productId: id, priceCents: PRICE }).success).toBe(true)
+  const priceCents = referencePriceCents(product.genreId, platformId, segmentId)
+  expect(gw.setProductPrice({ productId: id, priceCents }).success).toBe(true)
   return { productId: id, product }
 }
 
@@ -77,6 +78,7 @@ describe('M2 出口验证 v2', () => {
     const { productId, product } = addProjectAndLaunch(gw, 'project-1', 'arcade_enthusiasts', 'PROD-1')
     console.log('[H08] 上市认知度:', JSON.stringify(product.awarenessByMarket))
     expect(Object.keys(product.awarenessByMarket).length).toBeGreaterThan(0)
+    const openingCash = gw.finance.getCashBalance('company-1')
     gw.advanceSimulation(DAYS)
     const t = totals(gw, productId)
     const refunds = gw.world.refundBatches.filter((b) => b.productId === productId)
@@ -85,7 +87,15 @@ describe('M2 出口验证 v2', () => {
     expect(t.records).toBeGreaterThan(0)
     expect(t.units).toBeGreaterThan(0)
     expect(t.net).toBeGreaterThan(0)
-    expect(refunds.length).toBeGreaterThan(0)
+    const postedRefunds = refunds.filter((batch) => batch.status === 'posted')
+    expect(postedRefunds.length).toBeGreaterThan(0)
+    const refundTotal = postedRefunds.reduce((sum, batch) => sum + batch.refundAmountCents, 0)
+    const refundDebits = gw.finance.getTransactionsByCompany('company-1')
+      .filter((tx) => tx.category === 'customer_refund' && tx.referenceId === productId)
+      .reduce((sum, tx) => sum - tx.amountCents, 0)
+    expect(refundTotal).toBeGreaterThan(0)
+    expect(refundDebits).toBe(refundTotal)
+    expect(cash).toBeGreaterThan(openingCash)
   })
 
   it('H01/H02 内容 provider：字段完整，未开放市场返回 null', () => {
@@ -115,7 +125,7 @@ describe('M2 出口验证 v2', () => {
     // C1 后 arcade_pre_1975 在 1974 后进入 tail 并退场；1977 改用当时可用的 arcade_classic
     const arcade = addProjectAndLaunch(gw, 'project-arcade', 'arcade_enthusiasts', 'PROD-ARCADE', 'arcade_classic')
     const home = addProjectAndLaunch(gw, 'project-home', 'home_players', 'PROD-HOME', 'arcade_classic')
-    // 测量协议：同认知度（消除品牌加成差异），同价、同市场、同平台、无营销
+    // 测量协议：同认知度、各自参考价（价格倍率都为 1）、同市场、同平台、无营销。
     const baseline = 0.072
     for (const p of [arcade.product, home.product]) {
       const seeded = { ...p.awarenessByMarket }

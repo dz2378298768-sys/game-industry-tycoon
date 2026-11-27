@@ -61,7 +61,7 @@ const TRIGGER_TARGET: Record<ProjectTransitionTrigger, ProjectState> = {
 /** 每个触发的合法起点（§4.3）。 */
 const TRIGGER_SOURCES: Record<ProjectTransitionTrigger, readonly ProjectState[]> = {
   launch: ['SETUP'],
-  rework_start: ['ACTIVE'],
+  rework_start: ['ACTIVE', 'READY_TO_DELIVER'],
   rework_complete: ['ACTIVE'],
   all_work_packages_done: ['ACTIVE'],
   delivery_pass: ['READY_TO_DELIVER'],

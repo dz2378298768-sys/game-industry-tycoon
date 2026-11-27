@@ -25,12 +25,17 @@ export function clamp01(x: number): number {
 /** §6.7 plannedTier 推导：快照内容槽绑定内容包 tier 之和（buildFacts.plannedTier 优先，OPEN-D02-O5）。 */
 export function derivePlannedTier(ctx: EvaluationContext): number {
   if (ctx.buildFacts?.plannedTier !== undefined) return ctx.buildFacts.plannedTier
-  const packsById = new Map(ctx.snapshot.frozenBlueprint.contentPacks.map((p) => [p.packId, p]))
-  const contentSlots = ctx.snapshot.frozenBlueprint.slots.filter((s) => s.isContentSlot)
+  return deriveSnapshotContentTier(ctx.snapshot)
+}
+
+export function deriveSnapshotContentTier(snapshot: EvaluationContext['snapshot']): number {
+  const { contentPacks, slots, instances } = snapshot.frozenBlueprint
+  const packsById = new Map(contentPacks.map((p) => [p.packId, p]))
+  const contentSlots = slots.filter((s) => s.isContentSlot)
   let sum = 0
   for (const slot of contentSlots) {
     for (const bindingId of slot.bindings) {
-      const inst = ctx.snapshot.frozenBlueprint.instances.find((i) => i.instanceId === bindingId)
+      const inst = instances.find((i) => i.instanceId === bindingId)
       if (inst === undefined || inst.state !== 'active' || inst.contentPackId === null) continue
       const pack = packsById.get(inst.contentPackId)
       if (pack !== undefined) sum += pack.tier

@@ -13,9 +13,19 @@ import type {
   Employment,
   Person,
   PersonEvent,
+  PendingHire,
   PersonnelFormulaSnapshot,
 } from '@domain/entities/personnel'
 import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
+
+export type Rec04GuardDiscipline = 'design' | 'code' | 'art' | 'audio' | 'qa'
+export interface Rec04RecruitingGuard {
+  state: 'eligible' | 'active' | 'completed' | 'cancelled'
+  projectId: string | null
+  seedKey: string
+  requiredDisciplines: Rec04GuardDiscipline[]
+  supplementSequence: number
+}
 
 /**
  * CODE-07B REVISION / U3（A-25）：ExecutionProject 存档切片条目。
@@ -25,6 +35,11 @@ import type { ProjectExecutionState } from '@domain/value-objects/project-execut
 export interface ExecutionProjectSaveEntry {
   key: string
   state: ProjectExecutionState
+}
+
+export interface Rec03SaveEntry {
+  key: string
+  value: unknown
 }
 
 export interface WorldState {
@@ -44,6 +59,7 @@ export interface WorldState {
   simulationAlgorithmVersion: string
   currentDayIndex: number
   schemaVersion: number
+  aiCompetitionEnabled?: boolean
   /** M3-A2/A3：AI 决策日志（最近 24 个月，随档持久化，供克隆对照与审计） */
   aiDecisionLog?: unknown[]
   /**
@@ -59,6 +75,7 @@ export interface WorldState {
   employments?: Employment[]
   candidates?: Candidate[]
   personEvents?: PersonEvent[]
+  pendingHires?: PendingHire[]
   /** §11 S7：D-03 存档结构版本（编码时升 3）；旧档缺省 undefined。 */
   d03SchemaVersion?: number
   /** §11 S7 / §18.3 C13 必存项：personnelFormulaVersion + 参数快照三元组。 */
@@ -68,6 +85,11 @@ export interface WorldState {
    * 含交付失败审计 lastDeliveryFailure / reasonCodes；旧档缺省 undefined（不升版本）。
    */
   executionProjects?: ExecutionProjectSaveEntry[]
+  rec03Snapshots?: Rec03SaveEntry[]
+  rec03Requests?: Rec03SaveEntry[]
+  deliveryLaunchPlans?: Record<string, { priceCents: number; dailyBudgetCents: number }>
+  /** REC-04A：按公司隔离的首项目招聘保障状态；旧档缺省为空。 */
+  rec04RecruitingGuardByCompany?: Record<string, Rec04RecruitingGuard>
 }
 
 export function createEmptyWorld(saveSeed = 42): WorldState {
@@ -85,5 +107,6 @@ export function createEmptyWorld(saveSeed = 42): WorldState {
     simulationAlgorithmVersion: 'mulberry32-v1',
     currentDayIndex: 0,
     schemaVersion: 3, // SAVE_SCHEMA_VERSION：新世界即 v3，v1/v2 档由迁移层升级
+    rec04RecruitingGuardByCompany: {},
   }
 }

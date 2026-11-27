@@ -8,6 +8,10 @@ import type { ProductLifecycleStage } from '@domain/enums'
 export type MarketingChannel = 'social' | 'expo' | 'ads'
 export type PublishingContractType = 'revenue_share' | 'milestone'
 
+export function productMarketingSpendKey(productId: string, channel: MarketingChannel, day: number): string {
+  return `marketing:${productId}:${channel}:${day}`
+}
+
 export const MARKETING_BUDGET_MIN_CENTS = 1_000
 export const MARKETING_BUDGET_MAX_CENTS = 500_000
 export const MARKETING_DECAY_FACTOR = 0.97

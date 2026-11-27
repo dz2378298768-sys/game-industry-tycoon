@@ -1,10 +1,12 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { NewProject } from '@ui/pages/new-project'
 import { useGameStore } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
+import type { BlueprintDraftInput } from '@application/mediators/game-world'
 import { TUNING } from '@content/tuning'
+import { GameShell } from '@app/game-shell'
 
 /**
  * P-03/P-04 立项两步向导验收（批次 07A）：
@@ -29,6 +31,7 @@ describe('P-03/P-04 立项两步向导', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks()
+    useGameStore.getState().setLocale('zh-CN')
   })
 
   function goStep2() {
@@ -38,6 +41,11 @@ describe('P-03/P-04 立项两步向导', () => {
     fireEvent.click(screen.getByTestId('segment-multiselect').querySelector('input')!)
     fireEvent.click(screen.getByTestId('lock-snapshot'))
     expect(screen.getByTestId('wizard-step').textContent).toContain('2')
+  }
+
+  function enablePcAudience() {
+    const inputs = screen.getByTestId('segment-multiselect').querySelectorAll('input')
+    fireEvent.click(inputs[2]!)
   }
 
   it('P-03：HRB 两档 radio（0.45 默认 / 0.6），锁定生成快照（A-40）', () => {
@@ -52,8 +60,7 @@ describe('P-03/P-04 立项两步向导', () => {
     expect(summary).toContain('Star Quest')
     expect(summary).toContain('目标用户')
     expect(summary).toContain('模块组合')
-    // 模块槽位 fail-closed（OPEN-CONTENT-MODULES），不伪造
-    expect(screen.getByTestId('module-slots-failclosed').textContent).toContain('OPEN-CONTENT-MODULES')
+    expect(screen.getByTestId('module-impact-work').textContent).toContain('内核工作量')
     fireEvent.click(screen.getByTestId('lock-snapshot'))
     expect(screen.getByTestId('wizard-step').textContent).toContain('2')
   })
@@ -125,7 +132,8 @@ describe('P-03/P-04 立项两步向导', () => {
     fireEvent.change(screen.getByTestId('budget-capacity'), { target: { value: '5000000' } })
     fireEvent.change(screen.getByTestId('project-name'), { target: { value: 'Proj Gamma' } })
     fireEvent.click(screen.getByTestId('confirm-create'))
-    expect(document.body.textContent).toContain('PROJ_BUDGET_CAPACITY_EXCEEDS_CASH')
+    expect(screen.getByRole('alert').textContent).toContain('项目预算承诺额超出可用现金。')
+    expect(useGameStore.getState().projects).toHaveLength(0)
   })
 
   it('破产禁入（C-3/N-01）：aria-disabled + finance.bankrupt.blocked.create', () => {
@@ -135,5 +143,124 @@ describe('P-03/P-04 立项两步向导', () => {
     const lock = screen.getByTestId('lock-snapshot') as HTMLButtonElement
     expect(lock.disabled).toBe(true)
     expect(lock.getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('REC-03：内容模块卡可见，并显示内核分解工作量与内容包', () => {
+    boot()
+    useGameStore.setState({ dayIndex: 6000 })
+    render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'Module Showcase' } })
+    enablePcAudience()
+
+    const contentCard = screen.getByTestId('module-card-MOD-CONTENT-EPISODES')
+    expect(contentCard.textContent).toContain('章节内容')
+    expect(contentCard.textContent).toContain('提供可交付的章节内容')
+    expect(contentCard.textContent).toContain('PACK-EPISODES-P1')
+    expect(screen.getByTestId('module-workload-MOD-CONTENT-EPISODES').textContent).toContain('设计:')
+    expect(screen.getByTestId('module-audience-MOD-CORE-ACTION').textContent).toContain('核心玩家')
+  })
+
+  it('REC-03：选择成长模块会改变四学科派生工作量和核心玩家亲和度', () => {
+    boot()
+    useGameStore.setState({ dayIndex: 6000 })
+    render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'Progression Check' } })
+    enablePcAudience()
+
+    const workBefore = screen.getByTestId('module-impact-work').textContent ?? ''
+    const audienceBefore = screen.getByTestId('module-impact-audience').textContent ?? ''
+    fireEvent.click(screen.getByTestId('module-card-MOD-SYSTEM-PROGRESSION').querySelector('input')!)
+    const workAfter = screen.getByTestId('module-impact-work').textContent ?? ''
+    const audienceAfter = screen.getByTestId('module-impact-audience').textContent ?? ''
+
+    expect(workAfter).not.toBe(workBefore)
+    expect(audienceAfter).not.toBe(audienceBefore)
+    expect(screen.getByTestId('module-impact-audience').textContent).not.toContain('未选择成长支援模块')
+    expect(screen.getByTestId('module-workload-MOD-SYSTEM-PROGRESSION').textContent).toContain('设计:')
+  })
+
+  it('REC-03：英文模块区域不包含裸中文文案', () => {
+    boot()
+    useGameStore.getState().setLocale('en')
+    const { unmount } = render(<NewProject onNavigate={vi.fn()} />)
+    expect(screen.getByTestId('module-selection').textContent).not.toMatch(/[\u4e00-\u9fff]/)
+    unmount()
+    useGameStore.getState().setLocale('zh-CN')
+  })
+
+  it('REC-09：导航、速度、立项选项和已显示错误跟随语言往返切换', () => {
+    boot()
+    const shell = render(<GameShell />)
+    const sidebar = within(screen.getByRole('navigation'))
+    fireEvent.click(sidebar.getByText('新建项目'))
+    fireEvent.change(screen.getByRole('combobox', { name: '语言' }), { target: { value: 'en' } })
+    expect(sidebar.getByText('New Project')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Paused' })).toBeTruthy()
+    expect(document.documentElement.lang).toBe('en')
+    const wizard = within(screen.getByRole('main'))
+    expect(wizard.getByRole('option', { name: 'Action' })).toBeTruthy()
+    expect(wizard.getByRole('option', { name: 'Arcade (pre-1975) (1970)' })).toBeTruthy()
+    fireEvent.change(wizard.getByRole('textbox', { name: 'Product Name' }), { target: { value: 'Star Quest' } })
+    fireEvent.click(wizard.getByRole('checkbox', { name: 'Arcade Enthusiasts' }))
+    const summary = wizard.getByTestId('five-elements-summary')
+    expect(summary.textContent).toContain('Arcade Enthusiasts')
+    expect(summary.textContent).not.toContain('MOD-CORE-ACTION')
+    expect(screen.getByRole('main').textContent).not.toMatch(/\p{Script=Han}/u)
+
+    fireEvent.click(wizard.getByTestId('lock-snapshot'))
+    fireEvent.change(wizard.getByTestId('budget-capacity'), { target: { value: '5000000' } })
+    fireEvent.change(wizard.getByTestId('project-name'), { target: { value: 'Proj Alpha' } })
+    fireEvent.click(wizard.getByTestId('confirm-create'))
+    expect(wizard.getByRole('alert').textContent).toContain('The project commitment exceeds available cash.')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Language' }), { target: { value: 'zh-CN' } })
+    expect(sidebar.getByText('新建项目')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '暂停' })).toBeTruthy()
+    expect(wizard.getByRole('alert').textContent).toContain('项目预算承诺额超出可用现金。')
+    expect((wizard.getByTestId('project-name') as HTMLInputElement).value).toBe('Proj Alpha')
+    expect(document.documentElement.lang).toBe('zh-CN')
+    shell.unmount()
+  })
+
+  it('REC-04C：首项目默认精简范围；切换自定义后快照包含完整强度与支援模块', () => {
+    const gw = boot()
+    const createSpy = vi.spyOn(gw, 'createExecutionProject')
+    const { unmount } = render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'First Scope' } })
+    fireEvent.click(screen.getByTestId('segment-multiselect').querySelector('input')!)
+
+    const recommended = screen.getByLabelText('推荐范围：核心玩法 + 章节内容（强度 1）') as HTMLInputElement
+    expect(recommended.checked).toBe(true)
+    expect((screen.getByTestId('module-card-MOD-SYSTEM-PROGRESSION').querySelector('input') as HTMLInputElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('lock-snapshot'))
+    fireEvent.change(screen.getByTestId('project-name'), { target: { value: 'First Scope Project' } })
+    fireEvent.click(screen.getByTestId('confirm-create'))
+
+    const recommendedInput = createSpy.mock.calls[0]![0] as Extract<BlueprintDraftInput, { kind: 'draft' }>
+    expect(recommendedInput.kind).toBe('draft')
+    if (recommendedInput.kind !== 'draft') throw new Error('expected draft input')
+    expect(recommendedInput.scopePolicy).toBe('recommended')
+    expect(recommendedInput.modules.map(({ templateId, intensity }) => [templateId, intensity])).toEqual([
+      ['MOD-CORE-ACTION', 1], ['MOD-CONTENT-EPISODES', 1],
+    ])
+
+    unmount()
+    const customWorld = boot()
+    const customSpy = vi.spyOn(customWorld, 'createExecutionProject')
+    const customRender = render(<NewProject onNavigate={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'Custom Scope' } })
+    fireEvent.click(screen.getByTestId('segment-multiselect').querySelector('input')!)
+    fireEvent.click(screen.getByLabelText('自定义完整范围（可追加支援模块，强度 3）'))
+    fireEvent.click(screen.getByTestId('module-card-MOD-SYSTEM-PROGRESSION').querySelector('input')!)
+    fireEvent.click(screen.getByTestId('lock-snapshot'))
+    fireEvent.change(screen.getByTestId('project-name'), { target: { value: 'Custom Scope Project' } })
+    fireEvent.click(screen.getByTestId('confirm-create'))
+    const customInput = customSpy.mock.calls[0]![0] as Extract<BlueprintDraftInput, { kind: 'draft' }>
+    expect(customInput.kind).toBe('draft')
+    if (customInput.kind !== 'draft') throw new Error('expected draft input')
+    expect(customInput.scopePolicy).toBe('custom')
+    expect(customInput.modules.map(({ templateId, intensity }) => [templateId, intensity])).toEqual([
+      ['MOD-CORE-ACTION', 3], ['MOD-SYSTEM-PROGRESSION', 3], ['MOD-CONTENT-EPISODES', 3],
+    ])
+    customRender.unmount()
   })
 })

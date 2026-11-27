@@ -270,6 +270,7 @@ export interface Build {
   deliveryGateResult: { pass: boolean; violationCodes: string[] }
   /** D-02 QualityAssessment 只读引用。 */
   qualitySnapshotRef: string | null
+  deliveryDecision?: import('@domain/entities/product-completeness').DeliveryDecisionRecord
   defectListRefs: string[]
   deliveredTier: number
   actualCostCents: number

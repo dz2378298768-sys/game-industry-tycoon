@@ -62,7 +62,7 @@ export interface Project {
   /** 连续暂停计数（完整游戏日），存档保留；终态项目不再累计 */
   pausedDays: number
   /** 本次暂停的原因；null 表示未暂停或原因未知 */
-  pauseReason?: 'manual' | 'budget_exhausted' | null
+  pauseReason?: 'manual' | 'budget_exhausted' | 'bankruptcy' | null
   /** 预算耗尽态标记（DESIGN-G05 §6.2）；旧存档缺省 false */
   budgetExhausted?: boolean
   /** 已成功恢复次数，耗尽事件幂等键的组成（DESIGN-G05 §7.1 GDR R2）；旧存档缺省 0 */

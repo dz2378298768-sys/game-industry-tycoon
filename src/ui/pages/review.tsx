@@ -1,28 +1,18 @@
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
-import { P1_UI_TUNING } from '@content/p1-ui-tuning'
-import { dayIndexToGregorian, gregorianToDayIndex } from '@domain/value-objects/day-index'
+import { monthKeyOf } from '@domain/value-objects/finance-commitment'
+import { estimateMediaReception, latestCompanyRelease } from '@application/queries/product-feedback'
+import { currentMarketCompetitors } from '@application/queries/market-feedback'
+import { netRevenueCents } from '@ui/components/product-metrics'
 
 /**
  * P-12 经营复盘与第二款（S12，批次 07B）+ §3 S12-4 媒体评价聚合卡。
  *
- * fail-closed 纪律（ADJ-17 §4 / M-02 缺口）：
- *  - ProductArchive / 口碑档三档 / 评价记录切片 / 归因锚点内核零实现 → 对应区块显示"数据不足 /
- *    暂无评价，上市后积累"，登记 OPEN，不伪造档位、不写死示例评价、不前端推算（R-2 / A-35 / A-36）；
- *  - G1 不建 BrandMemory：不渲染任何品牌值 / Brand 点数，不做跨产品品牌聚合；
- *  - 四域归因空集占位（OPEN-S12-1），无可点锚点条目；
- *  - 预算/工期/现金曲线来自账本与项目已有字段（真实数据，不造数）；
- *  - 第二款入口无禁用态（强制走完整 S2–S11，ADJ-12 S12-3）。
+ * 三质量终值和继承项等待 ProductArchive。归因仅展示最近上市产品的可核对事实。
  */
 
 interface Props {
   onNavigate: (route: string, param?: string) => void
-}
-
-const DISPLAY_EPOCH = gregorianToDayIndex(2026, 1, 5)
-function monthKeyOf(day: number): string {
-  const g = dayIndexToGregorian(day + DISPLAY_EPOCH)
-  return `${g.year}-${String(g.month).padStart(2, '0')}`
 }
 
 const ATTRIBUTION_DOMAINS = [
@@ -42,7 +32,9 @@ const INHERITANCE_ITEMS = [
 
 export const Review: React.FC<Props> = ({ onNavigate }) => {
   const store = useGameStore()
-  const { products, projects, transactions, financial, dayIndex } = store
+  const { company, transactions, financial, dayIndex, refundBatches } = store
+  const products = store.products.filter((product) => product.companyId === company?.id)
+  const projects = store.projects.filter((project) => project.companyId === company?.id)
 
   // 账本派生：月度净额（现金曲线，简单分段列表，不引入图表库）
   const cashCurve = React.useMemo(() => {
@@ -54,16 +46,65 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
   }, [transactions])
 
-  const latestProject = React.useMemo(() => [...projects].sort((a, b) => b.createdAt - a.createdAt)[0], [projects])
+  const latestProduct = latestCompanyRelease(products, company?.id)
+  const sourceProject = projects.find((project) => project.id === latestProduct?.sourceProjectId)
+  const deliveredQuality = sourceProject === undefined ? undefined
+    : store.game?.getExecutionProject(sourceProject.id)?.builds.at(-1)?.deliveryDecision
+  const latestProject = sourceProject ?? projects.sort((a, b) => b.createdAt - a.createdAt)[0]
+  const reputation = latestProduct === undefined ? null : estimateMediaReception(latestProduct)
+  const feedback = latestProduct === undefined ? undefined
+    : latestProduct.latestMarketFeedback ?? store.game?.sales.getLatestDemandFeedback(latestProduct.id)
+  const units = new Intl.NumberFormat(store.locale)
+  const productAnchor = latestProduct === undefined ? undefined : { route: 'productDetail', id: latestProduct.id }
+  const reasons = {
+    design: sourceProject === undefined || latestProduct === undefined ? null : {
+      fact: t(`genre.${latestProduct.genreId}`),
+      anchor: { route: 'projectDetail', id: sourceProject.id },
+    },
+    execution: latestProduct === undefined || !Number.isFinite(latestProduct.defectLevel) ? null : {
+      fact: `${t('p08.defect.level')} ${latestProduct.defectLevel}/100`,
+      anchor: productAnchor,
+    },
+    market: feedback === undefined ? null : {
+      fact: `${formatDay(feedback.dayIndex)} · ${t('sales.units')} ${units.format(feedback.soldUnits)}`,
+      anchor: productAnchor,
+    },
+    finance: latestProduct === undefined || latestProduct.salesByPeriod.length === 0 ? null : {
+      fact: `${t('products.col.netRevenue')} ${formatMoney(netRevenueCents(latestProduct, refundBatches))}`,
+      anchor: productAnchor,
+    },
+  }
+  const activeRoles = new Map<string, number>()
+  for (const employee of store.employees) {
+    if (employee.companyId !== company?.id || employee.status !== 'hired') continue
+    activeRoles.set(employee.role, (activeRoles.get(employee.role) ?? 0) + 1)
+  }
+  const inheritedFacts = {
+    cash: financial === null ? null : `${t('finance.availableCash')} ${formatMoney(financial.availableCashCents)}`,
+    team: company === null ? null : activeRoles.size === 0
+      ? `${t('overview.employees')} 0`
+      : [...activeRoles].map(([role, count]) => `${t(`employee.role.${role}`)} × ${units.format(count)}`).join(' · '),
+    lastProduct: latestProduct === undefined ? null : [
+      latestProduct.name,
+      t(`genre.${latestProduct.genreId}`),
+      latestProduct.salesByPeriod.length === 0
+        ? t('sales.empty')
+        : `${t('products.col.netRevenue')} ${formatMoney(netRevenueCents(latestProduct, refundBatches))}`,
+    ].join(' · '),
+    experience: latestProduct === undefined ? null : (latestProduct.moduleTemplateIds?.length
+      ? `模块组合 ${latestProduct.moduleTemplateIds.join('、')} · 可作为第二款产品的继承基线`
+      : '数据不足 · 旧产品未保存模块快照'),
+    market: store.game === null ? null : `${t('market.runtimeCompetitors')} ${units.format(currentMarketCompetitors(store.game.world.companies).length)}`,
+  }
 
-  // 周聚合汇总（真实数据）
+  // Product receipts after platform fees and posted refunds.
   const totalUnits = products.reduce((sum, p) => sum + p.salesByPeriod.reduce((s, r) => s + r.grossUnits, 0), 0)
-  const totalRevenue = products.reduce((sum, p) => sum + p.salesByPeriod.reduce((s, r) => s + r.netSalesRevenueCents, 0), 0)
-  const totalRefunds = transactions
-    .filter((tx) => tx.category === 'customer_refund' && tx.amountCents < 0)
-    .reduce((s, tx) => s + Math.abs(tx.amountCents), 0)
+  const productIds = new Set(products.map((product) => product.id))
+  const totalRevenue = products.reduce((sum, product) => sum + netRevenueCents(product, refundBatches), 0)
+  const totalRefunds = refundBatches
+    .filter((batch) => batch.status === 'posted' && productIds.has(batch.productId))
+    .reduce((sum, batch) => sum + batch.refundAmountCents, 0)
 
-  const windowN = P1_UI_TUNING.review.mediaWindowN
   const distressed = store.isFinanciallyDistressed() || (financial?.availableCashCents ?? 0) <= 0
 
   return (
@@ -105,7 +146,6 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
             </tr>
           </tbody>
         </table>
-        {/* U1：三质量分列终值，D-02 ProductArchive 未接线 → '—'，三列始终分列展示 */}
         <div style={{ marginTop: 12 }} data-testid="p12-quality">
           <p style={{ fontSize: 13, fontWeight: 600 }}>{t('p12.quality.title')}</p>
           <table className="data-table">
@@ -115,12 +155,23 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
               <th>{t('p12.quality.completeness')}</th>
             </tr></thead>
             <tbody><tr>
-              <td data-testid="p12-quality-design">—</td>
-              <td data-testid="p12-quality-implementation">—</td>
-              <td data-testid="p12-quality-completeness">—</td>
+              {([
+                ['design', deliveredQuality?.dqVector],
+                ['implementation', deliveredQuality?.iqVector],
+                ['completeness', deliveredQuality?.completenessVector],
+              ] as const).map(([column, vector]) => (
+                <td key={column} data-testid={`p12-quality-${column}`}>
+                  {vector === undefined ? '—' : (
+                    <ul style={{ margin: 0, paddingLeft: 16 }}>
+                      {Object.entries(vector).map(([dimension, value]) => (
+                        <li key={dimension}>{t(`p08.quality.${dimension}`)} {typeof value === 'number' ? `${Math.round(value * 100)}%` : '—'}</li>
+                      ))}
+                    </ul>
+                  )}
+                </td>
+              ))}
             </tr></tbody>
           </table>
-          <p className="muted" style={{ fontSize: 11 }}>{t('p12.quality.hint')}</p>
         </div>
       </div>
 
@@ -141,44 +192,45 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
         )}
       </div>
 
-      {/* 四域归因空集占位（OPEN-S12-1，A-35 / A-36 CONDITIONAL） */}
       <div className="panel" data-testid="p12-attribution">
         <h2 style={{ marginTop: 0 }}>{t('p12.section.attribution')}</h2>
+        {latestProduct !== undefined && <p>{t('p12.attribution.product').replace('{product}', latestProduct.name)}</p>}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8 }}>
-          {ATTRIBUTION_DOMAINS.map((domain) => (
-            <div key={domain.key} className="panel" data-testid={`p12-domain-${domain.key}`}>
-              <strong style={{ fontSize: 13 }}>{t(domain.labelKey)}</strong>
-              <p className="muted" style={{ fontSize: 12 }}>{t('p12.dataInsufficient')}</p>
-            </div>
-          ))}
+          {ATTRIBUTION_DOMAINS.map((domain) => {
+            const reason = reasons[domain.key]
+            const anchor = reason?.anchor
+            return (
+              <div key={domain.key} className="panel" data-testid={`p12-domain-${domain.key}`}>
+                <strong style={{ fontSize: 13 }}>{t(domain.labelKey)}</strong>
+                <p className="muted" style={{ fontSize: 12 }}>{reason?.fact ?? t('p12.dataInsufficient')}</p>
+                {anchor !== undefined && (
+                  <button className="btn btn-link" onClick={() => onNavigate(anchor.route, anchor.id)}>
+                    {t('p12.attribution.link')}
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
         <p className="muted" style={{ fontSize: 11 }}>{t('p12.attribution.hint')}</p>
       </div>
 
-      {/* S12-4 媒体评价聚合卡（独立卡区，G1 仅复盘页） */}
       <div className="panel" data-testid="p12-media-card">
         <h2 style={{ marginTop: 0 }}>{t('p12.media.title')}</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span className="badge badge-muted" data-testid="p12-media-band">{t('p10.reputation.none')}</span>
-          <span data-testid="p12-media-count">
-            {t('p12.media.count').replace('{n}', '0').replace('{N}', String(windowN))}
-          </span>
-        </div>
-        <ul data-testid="p12-media-list" style={{ fontSize: 12, marginTop: 8 }}>
-          <li className="muted">{t('p12.media.empty')}</li>
-        </ul>
+        <span className="badge badge-muted" data-testid="p12-media-band">
+          {t(reputation === null ? 'p10.reputation.none' : `p10.reputation.${reputation}`)}
+        </span>
+        {reputation === null && <p className="muted">{t('p12.media.empty')}</p>}
         <p className="muted" style={{ fontSize: 11 }}>{t('p12.media.hint')}</p>
-        {/* G1 不建 BrandMemory：不渲染品牌值 / Brand 点数，不做跨产品品牌聚合 */}
       </div>
 
-      {/* 继承项五项（ProductArchive 未接线 → 数据不足，纯展示不做选项解锁） */}
       <div className="panel" data-testid="p12-inheritance">
         <h2 style={{ marginTop: 0 }}>{t('p12.section.inheritance')}</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8 }}>
           {INHERITANCE_ITEMS.map((item) => (
             <div key={item.key} className="panel" data-testid={`p12-inherit-${item.key}`}>
               <strong style={{ fontSize: 13 }}>{t(item.labelKey)}</strong>
-              <p className="muted" style={{ fontSize: 12 }}>{t('p12.dataInsufficient')}</p>
+              <p className="muted" style={{ fontSize: 12 }}>{inheritedFacts[item.key] ?? t('p12.dataInsufficient')}</p>
             </div>
           ))}
         </div>

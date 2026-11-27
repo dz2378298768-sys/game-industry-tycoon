@@ -4,7 +4,7 @@
  * - Z1：teamRefs 原样展开，不做任何额外过滤（悬空引用记 D03_DANGLING_TEAMREF 不入集）；
  * - Z2：available ≡ occupiesPerson ∧ status∈{probation,active,resigning} ∧ day ≤ (endDay ?? +∞)；
  *   **不引入任何 discipline 过滤**（C1 / D03-01 反证锁：按 Assignment.discipline 收窄 ⇒ Cap_code 22 ≠ 32）；
- * - Z3：skillLevel(e,d) ≡ Person.skills.level[d] ?? 0（缺键=0，Project B-9；audio P1 恒 0）。
+ * - Z3：skillLevel(e,d) ≡ Person.skills.level[d] ?? 0（缺键=0，Project B-9）。
  */
 import type { D03Assignment, D03Discipline, Employment, SkillProfile } from '@domain/entities/personnel'
 import { toD03Discipline } from '@domain/entities/personnel'

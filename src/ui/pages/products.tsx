@@ -1,6 +1,8 @@
 import React from 'react'
 import { useGameStore, t, formatMoney } from '@ui/state/game-store'
 import { displayPriceCents, netRevenueCents, peakAwareness, refundCount } from '@ui/components/product-metrics'
+import { estimateMediaReception } from '@application/queries/product-feedback'
+import { formatUnitPrice } from '@ui/components/money-format'
 
 interface Props { onNavigate: (route: string, param?: string) => void }
 
@@ -30,8 +32,7 @@ export const Products: React.FC<Props> = ({ onNavigate }) => {
             <th>{t('p10.quality.design')}</th>
             <th>{t('p10.quality.implementation')}</th>
             <th>{t('p10.quality.completeness')}</th>
-            {/* R-2：口碑档内核无产出 → 直读缺失态，不前端推算 */}
-            <th>{t('p10.reputation')}</th>
+            <th title={t('p10.reputation.hint')}>{t('p10.reputation')}</th>
             <th>{t('products.col.price')}</th>
             <th>{t('products.col.netRevenue')}</th>
             <th>{t('products.col.awareness')}</th>
@@ -41,6 +42,7 @@ export const Products: React.FC<Props> = ({ onNavigate }) => {
         <tbody>
           {products.map((product) => {
             const price = displayPriceCents(product)
+            const reputation = estimateMediaReception(product)
             return (
               <tr key={product.id} style={{ cursor: 'pointer' }} onClick={() => onNavigate('productDetail', product.id)}>
                 <td>{product.name}</td>
@@ -49,8 +51,10 @@ export const Products: React.FC<Props> = ({ onNavigate }) => {
                 <td data-testid="p10-quality-design">—</td>
                 <td data-testid="p10-quality-implementation">—</td>
                 <td data-testid="p10-quality-completeness">—</td>
-                <td data-testid={`p10-reputation-${product.id}`}>{t('p10.reputation.none')}</td>
-                <td>{price === null ? t('product.noPrice') : formatMoney(price)}{product.discountRatePercent ? ` (-${product.discountRatePercent}%)` : ''}</td>
+                <td data-testid={`p10-reputation-${product.id}`}>
+                  {t(reputation === null ? 'p10.reputation.none' : `p10.reputation.${reputation}`)}
+                </td>
+                <td>{price === null ? t('product.noPrice') : formatUnitPrice(price)}{product.discountRatePercent ? ` (-${product.discountRatePercent}%)` : ''}</td>
                 <td>{formatMoney(netRevenueCents(product, refundBatches))}</td>
                 <td>{Math.round(peakAwareness(product) * 100)}%</td>
                 <td>{refundCount(product.id, refundBatches)}</td>

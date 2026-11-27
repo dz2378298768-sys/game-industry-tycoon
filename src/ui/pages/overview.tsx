@@ -12,6 +12,13 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
   const hiredEmployees = employees.filter(e => e.status === 'hired')
 
   const city = content.cities.find(c => c.id === company?.cityId)
+  const firstProjectStep = company?.status === 'active' && products.length === 0
+    ? activeProjects.length === 0
+      ? { hint: 'overview.first.plan', route: 'newProject', action: 'nav.newProject' }
+      : hiredEmployees.length === 0
+        ? { hint: 'overview.first.hire', route: 'hire', action: 'nav.hire' }
+        : { hint: 'overview.first.progress', route: 'projects', action: 'nav.projects' }
+    : null
 
   return (
     <div>
@@ -41,6 +48,15 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
           <p className="muted">{t('error.noCompany')}</p>
         )}
       </div>
+
+      {firstProjectStep && (
+        <div className="panel">
+          <p className="mb-16">{t(firstProjectStep.hint)}</p>
+          <button type="button" className="btn btn-small" onClick={() => onNavigate(firstProjectStep.route)}>
+            {t(firstProjectStep.action)}
+          </button>
+        </div>
+      )}
 
       <div className="panel">
         <h2>{t('overview.recentEmployees')}</h2>

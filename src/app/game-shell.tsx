@@ -17,27 +17,21 @@ import type { CalendarSpeed } from '@domain/enums'
 
 type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver' | 'review'
 
-interface NavItem { key: Route; label: string }
+interface NavItem { key: Route; labelKey: string }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: 'overview', label: t('nav.overview') },
-  { key: 'market', label: t('nav.market') },
-  { key: 'employees', label: t('nav.employees') },
-  { key: 'hire', label: t('nav.hire') },
-  { key: 'projects', label: t('nav.projects') },
-  { key: 'newProject', label: t('nav.newProject') },
-  { key: 'finance', label: t('nav.finance') },
-  { key: 'products', label: t('nav.products') },
-  { key: 'review', label: t('nav.review') },
+  { key: 'overview', labelKey: 'nav.overview' },
+  { key: 'market', labelKey: 'nav.market' },
+  { key: 'employees', labelKey: 'nav.employees' },
+  { key: 'hire', labelKey: 'nav.hire' },
+  { key: 'projects', labelKey: 'nav.projects' },
+  { key: 'newProject', labelKey: 'nav.newProject' },
+  { key: 'finance', labelKey: 'nav.finance' },
+  { key: 'products', labelKey: 'nav.products' },
+  { key: 'review', labelKey: 'nav.review' },
 ]
 
-const SPEEDS: { value: CalendarSpeed; label: string }[] = [
-  { value: 'paused', label: t('gameCalendar.speed.paused') },
-  { value: 'slow', label: t('gameCalendar.speed.slow') },
-  { value: 'normal', label: t('gameCalendar.speed.normal') },
-  { value: 'fast', label: t('gameCalendar.speed.fast') },
-  { value: 'ultra', label: t('gameCalendar.speed.ultra') },
-]
+const SPEEDS: readonly CalendarSpeed[] = ['paused', 'slow', 'normal', 'fast', 'ultra']
 
 export const GameShell: React.FC = () => {
   const store = useGameStore()
@@ -46,9 +40,13 @@ export const GameShell: React.FC = () => {
     setSpeed, advanceDays, save, load, restartNewGame,
     locale, setLocale,
   } = store
+  React.useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
 
   const [route, setRoute] = React.useState<Route>('overview')
   const [projectDetailId, setProjectDetailId] = React.useState<string | null>(null)
+  const [projectFocus, setProjectFocus] = React.useState<'design' | 'qa' | undefined>(undefined)
   const [productDetailId, setProductDetailId] = React.useState<string | null>(null)
   /** P-09 交付页入口项目（仅 projectDetail 交付按钮跳转） */
   const [deliverProjectId, setDeliverProjectId] = React.useState<string | null>(null)
@@ -71,8 +69,9 @@ export const GameShell: React.FC = () => {
       setRoute('deliver')
       return
     }
-    if (r === 'projectDetail' && param) {
+    if ((r === 'projectDetail' || r === 'projectRework' || r === 'projectQa') && param) {
       setProjectDetailId(param)
+      setProjectFocus(r === 'projectRework' ? 'design' : r === 'projectQa' ? 'qa' : undefined)
       setRoute('projectDetail')
     } else {
       setProjectDetailId(null)
@@ -96,7 +95,7 @@ export const GameShell: React.FC = () => {
       case 'employees': return <Employees />
       case 'hire': return <Hire onNavigate={handleNavigate} />
       case 'projects': return <Projects onNavigate={handleNavigate} />
-      case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
+      case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} focusSection={projectFocus} /> : <Projects onNavigate={handleNavigate} />
       case 'newProject': return <NewProject onNavigate={handleNavigate} initialGenreId={prefillGenreId} />
       case 'finance': return <Finance onNavigate={handleNavigate} />
       case 'products': return <Products onNavigate={handleNavigate} />
@@ -135,23 +134,25 @@ export const GameShell: React.FC = () => {
         </div>
         {/* FIX-5 / ADJ-16 R-3：Brand 玩法面 v1 隐藏；入口代码保留，恢复时按 ADJ-16 R-3 处理 */}
         <div className="controls">
-          {SPEEDS.map(s => (
+          {SPEEDS.map(value => (
             <button
-              key={s.value}
-              className={`btn ${speed === s.value ? '' : 'btn-secondary'} btn-small`}
-              style={speed === s.value ? { background: '#c9a865', color: '#0a192f' } : undefined}
-              onClick={() => setSpeed(s.value)}
+              key={value}
+              className={`btn ${speed === value ? '' : 'btn-secondary'} btn-small`}
+              style={speed === value ? { background: '#c9a865', color: '#0a192f' } : undefined}
+              onClick={() => setSpeed(value)}
+              aria-pressed={speed === value}
             >
-              {s.label}
+              {t(`gameCalendar.speed.${value}`)}
             </button>
           ))}
-          <button className="btn btn-secondary btn-small" onClick={() => advanceDays(30)}>+30d</button>
+          <button className="btn btn-secondary btn-small" onClick={() => advanceDays(30)}>{t('button.advance30d')}</button>
           <span style={{ width: 1, height: 20, background: 'rgba(201,168,101,0.3)' }} />
           <button className="btn btn-secondary btn-small" onClick={save}>{t('button.save')}</button>
           <button className="btn btn-secondary btn-small" onClick={load}>{t('button.load')}</button>
           <select
             value={locale}
-            onChange={e => setLocale(e.target.value as any)}
+            aria-label={t('app.language')}
+            onChange={(e) => setLocale(e.target.value === 'en' ? 'en' : 'zh-CN')}
             style={{ padding: '4px 8px', background: '#0a192f', border: '1px solid var(--border)', color: 'var(--off-white)', fontSize: 12 }}
           >
             <option value="zh-CN">中文</option>
@@ -171,13 +172,15 @@ export const GameShell: React.FC = () => {
       <div className="main-layout">
         <nav className="sidebar">
           {NAV_ITEMS.map(item => (
-            <a
+            <button
               key={item.key}
+              type="button"
+              aria-current={route === item.key ? 'page' : undefined}
               className={route === item.key ? 'active' : ''}
               onClick={() => handleNavigate(item.key)}
             >
-              {item.label}
-            </a>
+              {t(item.labelKey)}
+            </button>
           ))}
         </nav>
 
@@ -186,7 +189,7 @@ export const GameShell: React.FC = () => {
         </main>
       </div>
 
-      <div className="message-overlay">
+      <div className="message-overlay" role="status">
         {messages.map(m => (
           <div key={m.id} className={`message-toast ${m.type}`}>{m.text}</div>
         ))}

@@ -14,7 +14,7 @@ interface Props { onNavigate: (route: string, param?: string) => void }
 type ProjectFilter = 'all' | 'paused' | 'cancelled'
 
 export const Projects: React.FC<Props> = ({ onNavigate }) => {
-  const { projects, employees, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
+  const { projects, employees, company, getExecutionSummary, getDeliveryStatus, toggleProjectPause, cancelProject, advanceProjectPhase, dayIndex } = useGameStore()
   const [filter, setFilter] = React.useState<ProjectFilter>('all')
   const [reasonTargetId, setReasonTargetId] = React.useState<string | null>(null)
 
@@ -100,10 +100,16 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
             </thead>
             <tbody>
               {filtered.map((p: Project) => {
-                const total = Math.round(totalCompletion(p) * 100)
+                const execution = getExecutionSummary?.(p.id)
+                const work = execution?.workPackages.filter((wp) => wp.state !== 'DEACTIVATED') ?? []
+                const baseline = work.reduce((sum, wp) => sum + wp.baselineWorkUnits, 0)
+                const remaining = work.reduce((sum, wp) => sum + wp.remainingWorkUnits, 0)
+                const total = Math.round((baseline > 0 ? Math.max(0, 1 - remaining / baseline) : totalCompletion(p)) * 100)
                 const budgetPct = p.budgetTotalCapCents > 0 ? Math.round((p.budgetSpentCents / p.budgetTotalCapCents) * 100) : 0
                 const canAdvance = !p.isPaused && p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && p.phase !== 'READY_TO_LAUNCH'
                 const canLaunch = p.phase === 'READY_TO_LAUNCH'
+                const awaitingDelivery = getDeliveryStatus?.(p.id)?.state === 'READY_TO_DELIVER'
+                const lockedByBankruptcy = p.pauseReason === 'bankruptcy' && company?.status === 'bankrupt'
                 const cancelled = isCancelledStatus(resolveProjectStatus(p))
                 const paused = p.isPaused && p.phase !== 'CANCELLED'
                 const eta = estimateProjectEta(p)
@@ -161,12 +167,15 @@ export const Projects: React.FC<Props> = ({ onNavigate }) => {
                       <td className="text-right" style={{ whiteSpace: 'nowrap' }}>
                         <div className="flex-gap" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
                           {p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED' && (
-                            <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); toggleProjectPause(p.id) }}>
+                            <button className="btn btn-secondary btn-small" disabled={lockedByBankruptcy} title={lockedByBankruptcy ? t('error.finCompanyBankrupt') : undefined}
+                              onClick={(e) => { e.stopPropagation(); toggleProjectPause(p.id) }}>
                               {p.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
                             </button>
                           )}
                           {canLaunch && (
-                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.launch')}</button>
+                            <button className="btn btn-small" onClick={(e) => { e.stopPropagation(); onNavigate(awaitingDelivery ? 'deliver' : 'projectDetail', p.id) }}>
+                              {t(awaitingDelivery ? 'project.actions.deliver' : 'project.actions.launch')}
+                            </button>
                           )}
                           {canAdvance && (
                             <button className="btn btn-secondary btn-small" onClick={(e) => { e.stopPropagation(); advanceProjectPhase(p.id) }}>{t('project.actions.advancePhase')}</button>

@@ -1,12 +1,11 @@
 import React from 'react'
-import { useGameStore, t, formatMoney, formatDay, getI18nLocale } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney, formatDay, ERROR_I18N } from '@ui/state/game-store'
 import { budgetUsageRatio, recomputeRemaining } from '@domain/value-objects'
 import type { ProjectCostAllocation } from '@domain/entities/project-cost-allocation'
 import { completionRatio, allProductionDisciplinesCompleteAtLeast, isQaComplete, estimateDaysToFinish } from '@simulation/systems/project-progress'
 import { baseEffectiveWorkPerDay } from '@simulation/systems/work-systems'
 import { defectLevelOf, computeInitialDefectLevel } from '@simulation/systems/qa-quality'
 import { TUNING } from '@content/tuning'
-import { content } from '@infrastructure/loading/content-loader'
 import { CancelReasonDialog } from '@ui/components/cancel-reason-dialog'
 import { ProjectStatusBadge } from '@ui/components/project-status-badge'
 import { DescopeDialog } from '@ui/components/descope-dialog'
@@ -15,10 +14,15 @@ import { selectProjectActionState, selectRiskBadges } from '@ui/components/proje
 import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolveProjectStatus } from '@ui/components/project-status'
 import { ChangeReworkPanel } from '@ui/components/change-rework-panel'
 import { QaOptimizationPanel } from '@ui/components/qa-optimization-panel'
+import { personLabel } from '@ui/components/personnel-display'
 
-interface Props { projectId: string; onNavigate: (route: string, param?: string) => void }
+interface Props {
+  projectId: string
+  onNavigate: (route: string, param?: string) => void
+  focusSection?: 'design' | 'qa' | undefined
+}
 
-export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
+export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate, focusSection }) => {
   const store = useGameStore()
   const project = store.projects.find(p => p.id === projectId)
   const { employees, toggleProjectPause, cancelProject, advanceProjectPhase, launchProject } = store
@@ -34,6 +38,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const [delayOpen, setDelayOpen] = React.useState(false)
   const [descopeError, setDescopeError] = React.useState<string | null>(null)
   const [delayError, setDelayError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (focusSection === undefined) return
+    const panel = document.getElementById(focusSection === 'design' ? 'project-design-changes' : 'project-qa')
+    panel?.focus({ preventScroll: true })
+    panel?.scrollIntoView?.({ block: 'start' })
+  }, [focusSection, projectId])
 
   if (!project) {
     return (
@@ -75,7 +86,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const fmtMoneyPlain = (cents: number, withCents = false) => {
     const digits = withCents ? 2 : 0
     const amount = (Math.abs(cents) / 100).toLocaleString(
-      getI18nLocale() === 'zh-CN' ? 'zh-CN' : 'en-US',
+      store.locale === 'zh-CN' ? 'zh-CN' : 'en-US',
       { minimumFractionDigits: digits, maximumFractionDigits: digits },
     )
     return `${cents < 0 ? '-' : ''}$${amount}`
@@ -96,7 +107,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       ? Math.floor(remainingCapCents / dailyBurnCents)
       : null
 
-  const genre = content.genres.find(g => g.id === project.genreId)
+  const people = new Map((store.game?.world.persons ?? []).map((person) => [person.personId, person]))
+  const employmentById = new Map((store.game?.world.employments ?? []).map((employment) => [employment.employmentId, employment]))
+  const employeeName = (employee: (typeof employees)[number]) => {
+    const employment = employmentById.get(employee.id)
+    return personLabel(employment === undefined ? undefined : people.get(employment.personId), employee.name)
+  }
   const assignedEmployees = employees.filter(e => project.teamAssignments.some(a => a.employeeId === e.id))
   const availableEmployees = employees.filter(
     e => e.status === 'hired' && !project.teamAssignments.some(a => a.employeeId === e.id),
@@ -104,8 +120,10 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   const isTerminal = project.phase === 'LAUNCHED' || project.phase === 'CANCELLED'
   // 破产三维矩阵 + 阶段守卫（DESIGN-UI-LAYER §3.2）；hint 只做展示，命令层为权威
   const actions = selectProjectActionState(project, store.company, store.dayIndex)
+  const deliveryState = store.getDeliveryStatus?.(project.id).state ?? null
+  const awaitingDelivery = deliveryState === 'READY_TO_DELIVER'
   const riskBadges = selectRiskBadges(project)
-  const reasonTitle = (keys: string[]) => (keys.length === 0 ? undefined : keys.map(k => t(k)).join('；'))
+  const reasonTitle = (keys: string[]) => (keys.length === 0 ? undefined : keys.map(k => t(k)).join(' · '))
   const riskText = (badge: { key: string; placeholder?: string; value?: number }) =>
     badge.value === undefined ? t(badge.key) : t(badge.key).replace(badge.placeholder!, String(badge.value))
 
@@ -139,7 +157,11 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
     if (!selectedEmp) return
     const result = store.assignEmployeeToProject(selectedEmp.id, project.id, allocation / 100, 'generalist')
     if (result.success) {
-      store.toast(`${selectedEmp.name} 已加入「${project.name}」`, 'success')
+      const message = t('project.team.assigned').replace(
+        /\{employee\}|\{project\}/g,
+        (token) => token === '{employee}' ? employeeName(selectedEmp) : project.name,
+      )
+      store.toast(message, 'success')
       setSelectedEmployeeId('')
     }
   }
@@ -164,19 +186,17 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
   if (!isTerminal) {
     if (project.teamAssignments.length === 0) {
       if (project.phase === 'PRODUCTION' || project.phase === 'QA') {
-        blockHint = '项目还没有团队，进度不会增长。请在下方「团队分配」中添加员工。'
+        blockHint = t('project.block.noTeam')
       }
     } else if (project.phase === 'PRODUCTION' && missingProduction.length > 0) {
-      const names = missingProduction
-        .map(d => (d === 'design' ? '设计' : d === 'programming' ? '程序' : '美术'))
-        .join('、')
-      blockHint = `缺少${names}岗位的员工，对应的研发学科不会增长，项目无法达到 ${productionThresholdPct}%。请招聘并分配相应岗位。`
+      const names = new Intl.ListFormat(store.locale).format(missingProduction.map(d => t(`project.discipline.${d}`)))
+      blockHint = t('project.block.missingProduction').replace('{disciplines}', names)
     } else if (project.phase === 'PRODUCTION' && !allProductionDisciplinesCompleteAtLeast(project, productionThreshold)) {
-      blockHint = `制作阶段需要设计 / 程序 / 美术都达到 ${productionThresholdPct}% 才能进入测试。请继续推进日期（顶部 +30d 或启动时间流速）。`
+      blockHint = t('project.block.production').replace('{percent}', String(productionThresholdPct))
     } else if (project.phase === 'QA' && !isQaComplete(project)) {
-      blockHint = `测试（QA）必须完成 100% 才能进入上市准备（当前 ${Math.round(completionRatio(project, 'qa') * 100)}%）。请分配 QA 员工并继续推进日期。`
+      blockHint = t('project.block.qa').replace('{percent}', String(Math.round(completionRatio(project, 'qa') * 100)))
     } else if (project.phase === 'READY_TO_LAUNCH' && store.dayIndex < project.plannedLaunchDay) {
-      blockHint = `已进入上市准备，但还没到计划上市日（Day ${project.plannedLaunchDay}，当前 Day ${store.dayIndex}）。`
+      blockHint = t('project.block.launchDay').replace('{planned}', formatDay(project.plannedLaunchDay)).replace('{current}', formatDay(store.dayIndex))
     }
   }
 
@@ -193,6 +213,19 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
     art: t('project.discipline.art'),
     audio: t('project.discipline.audio'),
     qa: t('project.discipline.qa'),
+  }
+  const unstaffed = execution?.unstaffedDisciplines ?? []
+  const earliestDays = execution?.earliestCompletionDays
+  const staffingBlock = !isTerminal && unstaffed.length > 0
+  const scheduleRisk = !isTerminal && earliestDays !== undefined && earliestDays > 0 &&
+    store.dayIndex + earliestDays > project.plannedLaunchDay
+  if (staffingBlock) {
+    const names = new Intl.ListFormat(store.locale).format(unstaffed.map((discipline) => DISCIPLINE_LABEL[discipline] ?? discipline))
+    blockHint = t('project.block.unstaffedExecution').replace('{disciplines}', names)
+  } else if (scheduleRisk) {
+    blockHint = t('project.block.scheduleRisk')
+      .replace('{days}', String(earliestDays))
+      .replace('{planned}', formatDay(project.plannedLaunchDay))
   }
 
   const disciplines: Array<{ key: 'design' | 'programming' | 'art' | 'qa'; labelZh: string }> = [
@@ -218,9 +251,9 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
             <button className="btn btn-secondary btn-small mb-16" onClick={() => onNavigate('projects')}>← {t('common.back')}</button>
             <h2 style={{ marginBottom: 4 }}>{project.name}</h2>
             <p className="muted" style={{ fontSize: 12 }}>
-              {genre?.displayNameZh ?? project.genreId} · {t(`phase.${project.phase}`)}
+              {t(`genre.${project.genreId}`)} · {t(`phase.${project.phase}`)}
               {project.isPaused && project.phase !== 'CANCELLED' && t('project.status.phasePausedSuffix')}
-              {' · '}Created {formatDay(project.createdAt)}
+              {' · '}{t('project.createdOn').replace('{day}', formatDay(project.createdAt))}
             </p>
             {/* 与列表一致的状态徽标（F5），暂停态由阶段后缀「（暂停）」+ 徽标双通道标识 */}
             <div>
@@ -238,7 +271,10 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           </div>
           {!isTerminal && (
             <div className="flex-gap" style={{ flexWrap: 'wrap' }}>
-              <button className="btn btn-secondary" onClick={() => toggleProjectPause(project.id)}>
+              <button className="btn btn-secondary"
+                disabled={project.pauseReason === 'bankruptcy' && store.company?.status === 'bankrupt'}
+                title={project.pauseReason === 'bankruptcy' && store.company?.status === 'bankrupt' ? t('error.finCompanyBankrupt') : undefined}
+                onClick={() => toggleProjectPause(project.id)}>
                 {project.isPaused ? t('project.actions.resume') : t('project.actions.pause')}
               </button>
               {/* P-09：交付入口（仅已登记 ExecutionProject 的项目可达；内核 READY_TO_DELIVER 状态机未与 UI 生命周期接线，OPEN-P09-DELIVERY-WIRING） */}
@@ -252,8 +288,8 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 <button
                   className="btn"
                   onClick={() => launchProject(project.id)}
-                  disabled={!actions.launch.enabled}
-                  title={reasonTitle(actions.launch.reasonKeys)}
+                  disabled={awaitingDelivery || !actions.launch.enabled}
+                  title={awaitingDelivery ? t('error.projectDeliveryRequired') : reasonTitle(actions.launch.reasonKeys)}
                 >{t('project.actions.launch')}</button>
               ) : (
                 <button
@@ -263,7 +299,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                   title={reasonTitle(actions.advance.reasonKeys)}
                 >{t('project.actions.advancePhase')}</button>
               )}
-              {actions.descope.visible && (
+              {actions.descope.visible && execution?.coreIntensity === undefined && (
                 <button
                   className="btn btn-secondary"
                   disabled={!actions.descope.enabled}
@@ -349,8 +385,12 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
       )}
 
       {blockHint && !isTerminal && (
-        <div className="panel" style={{ borderColor: 'var(--gold)', background: 'rgba(201,168,101,0.08)' }}>
+        <div className="panel" style={{ borderColor: 'var(--gold)', background: 'rgba(201,168,101,0.08)' }} data-testid="project-block-hint">
           <p style={{ color: 'var(--gold)', fontSize: 13 }}>⚠️ {blockHint}</p>
+          {(staffingBlock || scheduleRisk) && <div className="flex-gap">
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => onNavigate('hire')}>{t('nav.hire')}</button>
+            <a className="btn btn-secondary btn-small" href="#project-team">{t('project.teamAssignments')}</a>
+          </div>}
         </div>
       )}
 
@@ -488,9 +528,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               </div>
               <div className="kpi-card" data-testid="exec-verdict">
                 <div className="label">{t('project.execution.ratioVerdict')}</div>
-                <div className="value" style={{ color: execution.ratio >= 1 ? '#b3423a' : undefined }}>
-                  {(execution.ratio * 100).toFixed(1)}%
-                  {execution.ratio >= 1 && <span className="badge danger" style={{ marginLeft: 6 }}>{t('error.crisis.budgetOverrun')}</span>}
+                <div className="value" style={{ color: Number.isFinite(execution.ratio) && execution.ratio >= 1 ? '#b3423a' : undefined }}>
+                  {Number.isFinite(execution.ratio)
+                    ? `${(execution.ratio * 100).toFixed(1)}%`
+                    : t('project.execution.ratioUnavailable')}
+                  {Number.isFinite(execution.ratio) && execution.ratio >= 1 && (
+                    <span className="badge danger" style={{ marginLeft: 6 }}>{t('error.crisis.budget_overrun')}</span>
+                  )}
                 </div>
                 <div className="muted" style={{ fontSize: 10 }}>{t(`project.execution.verdict.${execution.verdict}`)}</div>
               </div>
@@ -516,16 +560,22 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {costAllocations.map(a => (
-                    <tr key={a.id}>
-                      <td>{t(`project.cost.source.${a.sourceType}`)}</td>
-                      <td>{a.periodKey}</td>
-                      <td className="text-right positive">{fmtSigned(a.amountCents)}</td>
-                      <td className="muted" style={{ fontSize: 11 }}>{a.cashTransactionId ?? '—'}</td>
-                      <td>{t(`project.cost.status.${a.status}`)}</td>
-                      <td className="muted" style={{ fontSize: 11 }}>{a.description}</td>
-                    </tr>
-                  ))}
+                  {costAllocations.map(a => {
+                    const employee = a.sourceType === 'salary' ? employees.find((item) => item.id === a.sourceRefId) : undefined
+                    const description = a.sourceType === 'salary'
+                      ? employee === undefined ? t('project.cost.salaryAllocation') : t('project.cost.salaryAllocationFor').replace('{employee}', () => employeeName(employee))
+                      : a.description
+                    return (
+                      <tr key={a.id}>
+                        <td>{t(`project.cost.source.${a.sourceType}`)}</td>
+                        <td>{a.periodKey}</td>
+                        <td className="text-right positive">{fmtSigned(a.amountCents)}</td>
+                        <td className="muted" style={{ fontSize: 11 }}>{a.cashTransactionId ?? '—'}</td>
+                        <td>{t(`project.cost.status.${a.status}`)}</td>
+                        <td className="muted" style={{ fontSize: 11 }}>{description}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -685,7 +735,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                     {DISCIPLINE_LABEL[d] ?? d}
                     {isBottleneck && <span className="badge danger" style={{ marginLeft: 6 }}>{t('project.execution.bottleneck')}</span>}
                   </div>
-                  <div className="value">{cap}</div>
+                  <div className="value">{new Intl.NumberFormat(store.locale, { maximumFractionDigits: 2 }).format(cap)}</div>
                 </div>
               )
             })}
@@ -693,7 +743,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
         </div>
       )}
 
-      <div className="panel">
+      <div className="panel" id="project-team">
         <h2>{t('project.teamAssignments')}</h2>
         <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
           {project.teamAssignments.length === 0
@@ -722,7 +772,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 const assign = project.teamAssignments.find(a => a.employeeId === emp.id)
                 return (
                   <tr key={emp.id}>
-                    <td>{emp.name}</td>
+                    <td>{employeeName(emp)}</td>
                     <td>{t(`employee.role.${emp.role}`)}</td>
                     <td>{emp.skillLevel}</td>
                     <td>{assign ? Math.round(assign.allocationRatio * 100) + '%' : '-'}</td>
@@ -732,7 +782,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                           className="btn btn-secondary btn-small"
                           onClick={() => {
                             const r = store.unassignEmployeeFromProject(emp.id, project.id)
-                            if (r.success) store.toast(`${emp.name} 已移出项目`, 'info')
+                            if (r.success) store.toast(t('project.team.unassigned').replace('{employee}', () => employeeName(emp)), 'info')
                           }}
                         >
                           {t('project.team.remove')}
@@ -759,7 +809,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
                 >
                   {availableEmployees.map(e => (
                     <option key={e.id} value={e.id}>
-                      {e.name} · {t(`employee.role.${e.role}`)} · Lv.{e.skillLevel}
+                      {employeeName(e)} · {t(`employee.role.${e.role}`)} · Lv.{e.skillLevel}
                     </option>
                   ))}
                 </select>
@@ -783,12 +833,13 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
 
       {/* P-07 / P-08（批次 07B）：问题处理与设计变更 + 测试与优化面板 */}
       <ChangeReworkPanel
+        execution={execution}
         project={project}
         isBankrupt={store.company?.status === 'bankrupt'}
         onOpenDescope={() => { setDescopeError(null); setDescopeOpen(true) }}
         onOpenTopUp={() => setTopUpOpen(true)}
       />
-      <QaOptimizationPanel project={project} execution={execution} />
+      <QaOptimizationPanel project={project} execution={execution} onDelivery={() => onNavigate('deliver', project.id)} />
 
       {/* 追加预算弹窗（金额 + 原因），确认后走 TopUpBudgetCmd，不直接改 budget 字段 */}
       {topUpOpen && (
@@ -845,7 +896,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           company={store.company}
           daily={dailyByDiscipline}
           dailyBurnCents={dailyBurnCents}
-          errorMessage={descopeError}
+          errorMessage={descopeError === null ? null : t(descopeError)}
           onClose={() => setDescopeOpen(false)}
           onConfirm={(ratio) => {
             const result = store.descopeProject(project.id, ratio)
@@ -853,7 +904,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               setDescopeOpen(false)
               setDescopeError(null)
             } else {
-              setDescopeError(result.message ?? t('error.unknown'))
+              setDescopeError((result.errorCode && ERROR_I18N[result.errorCode]) || 'error.unknown')
             }
           }}
         />
@@ -863,7 +914,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
           project={project}
           company={store.company}
           employees={employees}
-          errorMessage={delayError}
+          errorMessage={delayError === null ? null : t(delayError)}
           onClose={() => setDelayOpen(false)}
           onConfirm={(days) => {
             const result = store.delayLaunch(project.id, days)
@@ -871,7 +922,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate }) => {
               setDelayOpen(false)
               setDelayError(null)
             } else {
-              setDelayError(result.message ?? t('error.unknown'))
+              setDelayError((result.errorCode && ERROR_I18N[result.errorCode]) || 'error.unknown')
             }
           }}
         />

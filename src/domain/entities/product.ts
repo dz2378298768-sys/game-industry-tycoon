@@ -12,6 +12,10 @@ export interface Product {
   name: string
   genreId: string
   audienceSegmentIds: string[]
+  /** P2：冻结蓝图中的模块组合，供市场反馈与第二款产品复盘使用。 */
+  moduleTemplateIds?: string[]
+  /** P2：模块组合对消费者细分的亲和度，键为 segmentId，值为 0..1。 */
+  moduleAffinityBySegment?: Record<string, number>
   supportedPlatformIds: string[]
   launchDay: number              // 真实上市日（actualLaunchDay）
   /** 上市价；null 表示未定价（上市时一律为 null，M2-D 由玩家首次定价写入） */
@@ -35,6 +39,17 @@ export interface Product {
   awarenessByScope?: Record<string, number>
   /** M2：按日销售记录（唯一销售记录来源）；新上市产品初始化为 [] */
   salesByPeriod: SalesRecord[]
+  /** P2：最近一次需求池反馈，随产品保存，避免冷重载后解释消失。 */
+  latestMarketFeedback?: {
+    dayIndex: number
+    addressableUnits: number
+    purchaseIntentReductionUnits: number
+    allocationReductionUnits: number
+    marketingAddedIntentUnits: number
+    priorDayMarketingSpendCents?: number
+    soldUnits: number
+    bySegment: Record<string, { addressableUnits: number; soldUnits: number }>
+  }
   status: ProductStatus
   /** C1 重整清仓折扣（0–50）；正常产品缺省 */
   clearanceDiscountRatePercent?: number

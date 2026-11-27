@@ -157,9 +157,15 @@ export class RefundService {
     const dueIds = new Set(due.map((b) => b.id))
     const affectedProducts = new Set(due.map((b) => b.productId))
     const recordIds = new Set(due.map((b) => b.salesRecordId))
+    const batchById = new Map<string, RefundBatch>()
     const draft: WorldState = {
       ...world,
-      refundBatches: world.refundBatches.map((b) => (dueIds.has(b.id) ? { ...b } : b)),
+      refundBatches: world.refundBatches.map((batch) => {
+        if (!dueIds.has(batch.id)) return batch
+        const copy = { ...batch }
+        batchById.set(copy.id, copy)
+        return copy
+      }),
       products: world.products.map((p) =>
         affectedProducts.has(p.id)
           ? {
@@ -171,7 +177,6 @@ export class RefundService {
       events: [...world.events],
       transactions: [...world.transactions],
     }
-    const batchById = new Map(draft.refundBatches.map((b) => [b.id, b]))
     this.seedPostedUnits(world)
     const postedBatchIds: string[] = []
     const rejectedBatchIds: string[] = []
@@ -256,7 +261,7 @@ export class RefundService {
     }
 
     const key = refundBatchIdempotencyKey(batch.id)
-    const existing = this.findRefundTransaction(draft, key)
+    const existing = this.findRefundTransaction(draft, key, product.companyId)
     if (existing !== undefined) {
       this.assertExistingTransaction(existing, batch)
       this.countPosted(batch)
@@ -456,7 +461,7 @@ export class RefundService {
     }
 
     const key = refundBatchIdempotencyKey(batch.id)
-    const existing = this.findRefundTransaction(world, key)
+    const existing = this.findRefundTransaction(world, key, product.companyId)
 
     if (existing !== undefined) {
       this.assertExistingTransaction(existing, batch)
@@ -493,14 +498,9 @@ export class RefundService {
   }
 
   /** 第二/第三判据：幂等索引或持久化流水命中 */
-  private findRefundTransaction(world: WorldState, key: string): Transaction | undefined {
+  private findRefundTransaction(world: WorldState, key: string, companyId: string): Transaction | undefined {
     // 生产 FinanceService 有全量幂等索引：undefined 即"确实不存在"，不再全表扫描证明缺席。
     if (this.deps.finance.getTransactionByKey !== undefined) {
-      // P3-05：优先按公司作用域查询（批次 → 产品 → 公司），找不到公司时退回全局签名。
-      const productId = world.refundBatches.find((b) => refundBatchIdempotencyKey(b.id) === key)?.productId
-      const companyId = productId === undefined
-        ? undefined
-        : world.products.find((p) => p.id === productId)?.companyId
       return this.deps.finance.getTransactionByKey(key, companyId)
     }
     // 兼容测试注入的轻量 mock（无索引），保留旧路径

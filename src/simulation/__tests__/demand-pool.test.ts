@@ -2,13 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   allocateScope,
   buildDailyDemand,
-  computeAttraction,
   computeAudienceUnits,
   computeAwareness01,
   computeLaunchAwarenessFloor,
   computeMarketingLift,
   computePurchaseIntent,
-  computeValue,
   scopeKeyOf,
 } from '@simulation/services/demand-pool'
 import type { DemandProductInput, DemandScopeInput } from '@simulation/services/demand-pool'
@@ -59,15 +57,58 @@ describe('DemandPool Stage 0 (C1-T3)', () => {
     expect(computeAudienceUnits(scope({ marketShare: 0.2, segmentShare: 0.125 }))).toBeCloseTo(base / 4, 9)
   })
 
-  it('D03 purchaseIntent 不含价格', () => {
-    const p = product()
-    const intent = computePurchaseIntent(p, 's1', 'p1')
-    const cheaper = product({ effectivePriceCents: 1000 })
-    expect(computePurchaseIntent(cheaper, 's1', 'p1')).toBe(intent)
+  it('REC-05 keeps the reference-price audience and rejects unavailable pricing', () => {
+    expect(computePurchaseIntent(product(), 's1', 'p1')).toBe(0.8)
+    expect(computePurchaseIntent(product({ referencePriceCents: Number.NaN }), 's1', 'p1')).toBe(0)
+    expect(computePurchaseIntent(product({ effectivePriceCents: 0 }), 's1', 'p1')).toBe(0)
+  })
 
-    const expensive = computeAttraction({ awareness01: 0.5, quality01: 0.8, value: computeValue(2000, 2000), fit: 0.8, brand01: 0.5 })
-    const cheap = computeAttraction({ awareness01: 0.5, quality01: 0.8, value: computeValue(2000, 1000), fit: 0.8, brand01: 0.5 })
-    expect(cheap).toBeGreaterThan(expensive)
+  it('REC-05 caps deep discount intent at twice the reference-price intent', () => {
+    const target = product({ genreAffinityBySegment: { s1: 0.25 } })
+    const extremeDiscount = { ...target, effectivePriceCents: 1 }
+    expect(computePurchaseIntent(extremeDiscount, 's1', 'p1')).toBe(0.5)
+  })
+
+  it('REC-05 adjusts the absolute demand of competing products once and preserves audience limits', () => {
+    const result = buildDailyDemand({
+      dayIndex: 1,
+      scopes: [scope()],
+      products: [
+        product({ productId: 'a', effectivePriceCents: 1000 }),
+        product({ productId: 'b', effectivePriceCents: 2500 }),
+      ],
+    })
+    const resultScope = result.scopes[0]!
+    const [cheaper, expensive] = resultScope.rows
+    expect(cheaper!.share).toBe(0.5)
+    expect(expensive!.share).toBe(0.5)
+    expect(cheaper!.poolUnits).toBe(resultScope.audienceUnits)
+    expect(cheaper!.allocatedUnits).toBeGreaterThan(expensive!.allocatedUnits)
+    expect(resultScope.allocatedUnitsTotal).toBeLessThanOrEqual(resultScope.audienceUnits)
+  })
+
+  it('paid promotion grows one competitor’s reachable purchase volume within the shared market', () => {
+    const market = scope({ installBaseUnits: 10_000 })
+    const promoted = product({ productId: 'a', paidMarketingLift: 2 })
+    const competitor = product({ productId: 'b' })
+    const baseline = buildDailyDemand({
+      dayIndex: 1,
+      scopes: [market],
+      products: [product({ productId: 'a' }), competitor],
+    }).scopes[0]!
+    const result = buildDailyDemand({
+      dayIndex: 1,
+      scopes: [market],
+      products: [promoted, competitor],
+    }).scopes[0]!
+    const promotedRow = result.rows[0]!
+    const competitorRow = result.rows[1]!
+    expect(promotedRow.allocatedUnits).toBeGreaterThan(baseline.rows[0]!.allocatedUnits)
+    expect(competitorRow.allocatedUnits).toBe(baseline.rows[1]!.allocatedUnits)
+    expect(promotedRow.marketingAddedIntentUnits).toBeGreaterThan(0)
+    expect(competitorRow.marketingAddedIntentUnits).toBe(0)
+    expect(result.allocatedUnitsTotal).toBeLessThanOrEqual(result.audienceUnits)
+    expect(result.rows.every((row) => row.allocatedUnits <= Math.floor(row.poolUnits))).toBe(true)
   })
 
   it('D04 同 scope 守恒：Σ allocated ≤ audience', () => {

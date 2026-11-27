@@ -19,6 +19,7 @@ export type EmployeeRole =
   | 'designer'
   | 'programmer'
   | 'artist'
+  | 'audio_designer'
   | 'qa'
   | 'producer'
   | 'manager'

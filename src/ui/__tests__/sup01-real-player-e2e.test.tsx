@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** 内存存档：真机链路 save/load 不触碰 IndexedDB（沿用既有 e2e 口径）。 */
@@ -15,16 +15,16 @@ import { useGameStore, t } from '@ui/state/game-store'
 import { createGameWorld } from '@application/factories/create-game-world'
 
 /**
- * P2 SUP-01：真实玩家 UI 交付→上市全链（非夹具）。
+ * REC-04/SUP-01：自动化集成覆盖交付→上市接线，不替代真实浏览器体验。
  *
  * 与 07B REVISION2 的关键区别：
  *  - 本文件**不** import evaluateDeliveryGate / baseContext / p1Templates，
  *  - 本文件**不**调用 registerDeliveryGateEvaluation 注入快照；
  *  - gate 快照由生产代码 `GameWorld.refreshDeliveryGateEvaluation` 从真实运行状态
  *    派生 EvaluationContext、调用领域 evaluateDeliveryGate 后登记。
- * 断言 products 0→1 是真点击（fireEvent.click）后内核真实执行的结果。
+ * 本用例不手写生命周期状态，但用应用命令推进日期与组队；真实浏览器体验另见 BLOCKED 报告。
  */
-describe('P2 SUP-01 真实玩家路径：立项→组队→推进→交付→上市（非夹具）', () => {
+describe('REC-04/SUP-01 自动化集成：立项→自然推进→交付→上市（非手写状态）', () => {
   beforeEach(() => {
     mem.clear()
     const gw = createGameWorld(42)
@@ -33,7 +33,7 @@ describe('P2 SUP-01 真实玩家路径：立项→组队→推进→交付→上
     useGameStore.getState().refresh()
   })
 
-  it('真点击全链 products 0→1，且快照由生产路径真实内核计算并登记', () => {
+  it('覆盖交付与上市接线，且快照由生产路径真实内核计算并登记', () => {
     expect(useGameStore.getState().products).toHaveLength(0)
     const game = useGameStore.getState().game!
     // 观察生产登记调用：测试本身不注入任何 gate 快照。
@@ -43,7 +43,8 @@ describe('P2 SUP-01 真实玩家路径：立项→组队→推进→交付→上
     const shell = render(<GameShell />)
 
     // —— 1. 立项：真实 UI 点击（输入名称 / 勾选受众 / 锁定 / 确认）——
-    fireEvent.click(screen.getByText(t('nav.newProject')))
+    const nav = screen.getByRole('navigation')
+    fireEvent.click(within(nav).getByRole('button', { name: t('nav.newProject') }))
     fireEvent.change(screen.getByTestId('product-name'), { target: { value: 'SUP01 真机游戏' } })
     const segment = screen.getByTestId('segment-multiselect').querySelector('input[type="checkbox"]') as HTMLInputElement
     expect(segment).not.toBeNull()
@@ -55,20 +56,39 @@ describe('P2 SUP-01 真实玩家路径：立项→组队→推进→交付→上
     const projectId = useGameStore.getState().projects[0]!.id
 
     // —— 2. 组队：真实 UI 点击候选人 → 确认招聘 ——
-    fireEvent.click(screen.getByText(t('nav.hire')))
+    fireEvent.click(within(nav).getByRole('button', { name: t('nav.hire') }))
     fireEvent.click(screen.getAllByTestId('candidate-card')[0]!)
     fireEvent.click(screen.getByTestId('recruit-confirm'))
     fireEvent.click(screen.getByTestId('recruit-confirm')) // 二次确认：UI 要求显式确认后才招聘
-    expect(useGameStore.getState().employees.length).toBeGreaterThan(0)
+    const pendingArrivalDay = game.world.pendingHires?.[0]?.arrivalDay
+    expect(pendingArrivalDay).toBeTypeOf('number')
+    expect(useGameStore.getState().employees.length).toBe(0)
 
-    // —— 3. 推进：执行态进入可交付态（内核执行推进与 UI 生命周期未接线，OPEN-P09-DELIVERY-WIRING，
-    //    属 SUP-07 范围，报告标 NOT_VERIFIED；此处仅设置真实执行态，不注入任何评估快照）——
+    // 为自然推进提供完整的五学科团队；岗位招聘走同一应用命令，随后分配到玩家项目。
+    for (const role of ['designer', 'programmer', 'artist', 'audio_designer', 'qa'] as const) {
+      const hired = game.hireEmployee({ name: `SUP-${role}`, role, skillLevel: 5, salaryMonthlyCents: 1_000 })
+      expect(hired.success).toBe(true)
+      expect(game.assignEmployeeToProject(hired.result!.id, projectId, 1, 'generalist').success).toBe(true)
+    }
+    game.advanceSimulation(pendingArrivalDay! - game.world.currentDayIndex)
+    useGameStore.getState().refresh()
+    expect(useGameStore.getState().employees.length).toBeGreaterThan(0)
+    const phaseAfterArrival = game.world.projects.find((project) => project.id === projectId)?.phase
+    if (phaseAfterArrival === 'CONCEPT' || phaseAfterArrival === 'PRE_PRODUCTION') {
+      expect(game.advanceProjectPhase(projectId).success).toBe(true)
+    }
+    const phaseAfterFirstAdvance = game.world.projects.find((project) => project.id === projectId)?.phase
+    if (phaseAfterFirstAdvance === 'PRE_PRODUCTION') {
+      expect(game.advanceProjectPhase(projectId).success).toBe(true)
+    }
+    game.advanceSimulation(365)
+    useGameStore.getState().refresh()
     const execution = game.getExecutionProject(projectId)!
-    execution.project.state = 'READY_TO_DELIVER'
+    expect(execution.project.state).toBe('READY_TO_DELIVER')
     expect(registerSpy).not.toHaveBeenCalled()
 
     // 通过 UI 进入项目详情 → 点击交付入口
-    fireEvent.click(screen.getByText(t('nav.projects')))
+    fireEvent.click(within(nav).getByRole('button', { name: t('nav.projects') }))
     fireEvent.click(screen.getByText('SUP01 真机游戏'))
     fireEvent.click(screen.getByTestId('project-open-deliver'))
 
@@ -94,11 +114,8 @@ describe('P2 SUP-01 真实玩家路径：立项→组队→推进→交付→上
     expect(delivered.builds).toHaveLength(1)
     expect(delivered.builds[0]!.buildId).toBeTruthy()
 
-    // —— 5. 上市：真点击详情页上市按钮（legacy phase 守卫按既有 UI 口径就绪）——
-    const legacy = useGameStore.getState().projects[0]!
-    legacy.phase = 'READY_TO_LAUNCH'
-    legacy.plannedLaunchDay = 0
-    fireEvent.click(screen.getByText(t('nav.projects')))
+    // —— 5. 上市：真点击详情页上市按钮（自然阶段投影 + 计划日守卫就绪）——
+    fireEvent.click(within(nav).getByRole('button', { name: t('nav.projects') }))
     fireEvent.click(screen.getByText('SUP01 真机游戏'))
     fireEvent.click(screen.getByText(t('project.actions.launch')))
 

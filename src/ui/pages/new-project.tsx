@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useGameStore, t, formatMoney, formatDay, ERROR_I18N } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
-import { availablePlatforms, availableSegments, yearOfDay } from '@content/queries'
+import { availablePlatforms, availableSegments, getCity, yearOfDay } from '@content/queries'
 import { TUNING } from '@content/tuning'
 import { STUDIO_RESEARCH } from '@content/studio-research'
 import { REC03_MODULES, REC03_CONTENT_PACKS } from '@content/rec03-content'
@@ -9,6 +9,10 @@ import type { BlueprintDraftInput } from '@application/mediators/game-world'
 
 import { moduleLabel } from '@ui/components/module-label'
 import { formatUnitPrice } from '@ui/components/money-format'
+import { ConceptCard, ConceptEditor } from '@ui/components/concept-editor'
+import { DEFAULT_CONCEPT, type StudioConcept } from '@domain/entities/studio-concept'
+import { conceptRequirements, prototypeForGenre } from '@content/studio-concepts'
+import { earlyArcadeDemand } from '@content/opening-regions'
 
 interface Props {
   onNavigate: (route: string, id?: string) => void
@@ -48,11 +52,16 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
   const previousProduct = predecessor ?? allProducts
     .filter((product) => product.companyId === company?.id)
     .sort((a, b) => b.launchDay - a.launchDay)[0]
+  const [concept, setConcept] = useState<StudioConcept>(predecessor?.studioConcept ?? DEFAULT_CONCEPT)
 
   const year = yearOfDay(dayIndex)
   const platforms = availablePlatforms(dayIndex)
   const segments = availableSegments(dayIndex)
   const effectivePlatformId = platformId || platforms[0]?.id || ''
+  const prototypeKind = prototypeForGenre(genreId)
+  const requirements = prototypeKind ? conceptRequirements(concept, effectivePlatformId, company?.researchCompletionDays ?? {}, dayIndex) : []
+  const homeMarket = company ? getCity(company.cityId)?.regionId : undefined
+  const homePreference = earlyArcadeDemand(homeMarket, effectivePlatformId)?.featuredGenre
   const contentName = (entry: { displayName: string; displayNameZh: string }) =>
     locale === 'zh-CN' ? entry.displayNameZh : entry.displayName
   const chosenSegments = segments.filter((segment) => segmentIds.includes(segment.id)).map(contentName)
@@ -82,18 +91,18 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
   const availableCash = financial?.availableCashCents ?? 0
   const displayBudget = (cents: number) => cents % 100 === 0 ? formatMoney(cents) : formatUnitPrice(cents)
   const scopeIntensity = scopeMode === 'recommended' ? 1 : 3
-  const requestId = ['new-project', productName.trim(), genreId, effectivePlatformId, segmentIds.join(','), coreModule, supportModules.join(','), scopeMode, hrb, budgetCapacityCents, predecessor?.id].join('|')
   const segmentTags: Record<string, string> = { arcade_enthusiasts: 'SEG-YOUTH', online_gamers: 'SEG-COMPETITIVE', pc_gamers: 'SEG-HARDCORE', home_players: 'SEG-MASS_MARKET' }
   const selectedSegmentTags = segmentIds.map((id) => segmentTags[id] ?? id).filter((id) => id.startsWith('SEG-'))
-  const draftInput = (): BlueprintDraftInput => ({
+  const draftInput = (selectedConcept = concept): BlueprintDraftInput => ({
     kind: 'draft',
-    requestId,
+    requestId: ['new-project', productName.trim(), genreId, effectivePlatformId, segmentIds.join(','), coreModule, supportModules.join(','), scopeMode, hrb, budgetCapacityCents, predecessor?.id, prototypeKind && JSON.stringify(selectedConcept)].join('|'),
     workingTitle: productName.trim(),
     genreId,
     primaryTypeId: genreId,
     targetSegmentClaims: selectedSegmentTags,
     platformTargets: effectivePlatformId ? [effectivePlatformId === 'arcade' ? 'PLT-ARCADE' : effectivePlatformId] : [],
     scopePolicy: scopeMode,
+    ...(prototypeKind && { studioConcept: selectedConcept }),
     ...(predecessor && { predecessorProductId: predecessor.id }),
     modules: [
       { templateId: coreModule, slotId: 'REC03-SLOT-CORE', instanceId: 'rec03-core', intensity: scopeIntensity, depthSelection: 'standard', optionSelections: {}, contentPackId: null },
@@ -175,6 +184,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
     // R-COM-7：E-EMPTY/E-EMPTY-CONTENT/E-USP 逐条报因，禁止锁定
     if (!productName.trim()) { setErrorKey('error.emptyContent'); return }
     if (segmentIds.length === 0) { setErrorKey('error.emptyContent'); return }
+    if (requirements.length > 0) { setErrorKey('editor.requirements'); return }
     setLocked(true)
     setStep(2)
   }
@@ -224,6 +234,12 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
                   <option key={g.id} value={g.id}>{t(`genre.${g.id}`)}</option>
                 ))}
               </select>
+              {!prototypeKind && <div className="flex-gap" style={{ flexWrap: 'wrap', marginTop: 8 }}>
+                {['fighting', 'shooter', 'puzzle'].map((genre) => <button key={genre} type="button" className="btn btn-secondary btn-small"
+                  onClick={() => { setGenreId(genre); setErrorKey(null) }}>
+                  {t('editor.tryGenre').replace('{genre}', t(`genre.${genre}`))}
+                </button>)}
+              </div>}
             </div>
             <div className="form-row">
               <label htmlFor="new-project-platform">{t('newProject.form.platform')}</label>
@@ -239,6 +255,14 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
                 </select>
               )}
             </div>
+          </div>
+          {prototypeKind && <ConceptEditor key={prototypeKind} kind={prototypeKind} name={productName} concept={concept}
+            onChange={(next) => { setConcept(next); setErrorKey(null) }} requirements={requirements} audience={chosenSegments}
+            marketPreference={homePreference} work={previewWork} previewWork={(candidate) => {
+              const outcome = canLock ? previewExecutionProject(draftInput(candidate)) : null
+              return outcome?.preview?.estimates?.workUnits.byDiscipline
+            }} />}
+          <div style={{ maxWidth: 560 }}>
             <div className="form-row">
               <label>{t('newProject.form.segmentsMulti')}</label>
               {segments.length === 0 ? (
@@ -271,6 +295,12 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
                     const inheritedCore = previousProduct.moduleTemplateIds?.find((id) => id.startsWith('MOD-CORE-'))
                     if (inheritedCore !== undefined) setCoreModule(inheritedCore)
                   }}>{t('studio.reuseModule')}</button>
+                  {previousProduct.studioConcept && prototypeForGenre(previousProduct.genreId) && <button type="button" className="btn btn-secondary btn-small" onClick={() => {
+                    if (!previousProduct.studioConcept) return
+                    setGenreId(previousProduct.genreId)
+                    setConcept(previousProduct.studioConcept)
+                    setErrorKey(null)
+                  }}>{t('editor.reuse')}</button>}
                   <p className="muted">{t('newProject.inherit.scopeHint')}</p>
                 </div>
               )}
@@ -313,8 +343,8 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
               <button
                 className="btn"
                 onClick={handleLock}
-                disabled={isBankrupt || !canLock}
-                aria-disabled={isBankrupt || !canLock}
+                disabled={isBankrupt || !canLock || requirements.length > 0}
+                aria-disabled={isBankrupt || !canLock || requirements.length > 0}
                 title={isBankrupt ? t('finance.bankrupt.blocked.create') : undefined}
                 data-testid="lock-snapshot"
               >{t('newProject.lock')}</button>
@@ -328,6 +358,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initia
         <>
           <div style={{ maxWidth: 560 }}>
             <h3>{productName.trim()}</h3>
+            {prototypeKind && <ConceptCard concept={concept} kind={prototypeKind} />}
             <div className="form-row">
               <label htmlFor="new-project-budget">{t('newProject.budget.amount')} ($)</label>
               <input

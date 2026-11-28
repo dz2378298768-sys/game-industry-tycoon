@@ -5,6 +5,8 @@ import type { DeliveryForm, ExpectationBandLevel } from '@domain/entities/produc
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
 import { referencePriceCents } from '@content/c1-content'
 import { ModalShell } from '@ui/components/modal-shell'
+import { ConceptCard } from '@ui/components/concept-editor'
+import { prototypeForGenre } from '@content/studio-concepts'
 
 /**
  * P-09 交付与上市（S09，批次 07B）——交付闸门闸门页。
@@ -141,6 +143,7 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
     else setSubmissionError(outcome.message ?? t('error.unknown'))
   }
 
+  const prototypeKind = prototypeForGenre(project.genreId)
   return (
     <div>
       <div className="panel">
@@ -153,6 +156,7 @@ export const Deliver: React.FC<Props> = ({ projectId, onNavigate }) => {
         </p>
       </div>
 
+      {prototypeKind && project.studioConcept && <ConceptCard kind={prototypeKind} concept={project.studioConcept} />}
       {/* 三形式资格区（demo 不渲染，A-26） */}
       <div className="panel" data-testid="deliver-qualification">
         <h2 style={{ marginTop: 0 }}>{t('deliver.section.qualification')}</h2>

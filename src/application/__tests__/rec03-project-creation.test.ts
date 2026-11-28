@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createGameWorld } from '@application/factories/create-game-world'
 import type { BlueprintDraftInput } from '@application/mediators/game-world'
 import { parseSave } from '@infrastructure/storage/save-schema'
+import { DEFAULT_CONCEPT } from '@domain/entities/studio-concept'
 
 function setup() {
   const world = createGameWorld(73)
@@ -24,6 +25,36 @@ function draft(overrides: Partial<Extract<BlueprintDraftInput, { kind: 'draft' }
 }
 
 describe('REC-03 project creation contract', () => {
+  it('freezes the editor choices, decomposes their work, and restores the concept', () => {
+    const world = setup()
+    const input = draft({ genreId: 'fighting', primaryTypeId: 'fighting' })
+    const base = world.previewExecutionProject(input).result!
+    const concept = { ...DEFAULT_CONCEPT, loop: 'pressure', effects: 'impact' } as const
+    const edited = { ...input, studioConcept: concept }
+    const preview = world.previewExecutionProject(edited).result!
+    expect(preview.estimates!.workUnits.byDiscipline.code).toBeGreaterThan(base.estimates!.workUnits.byDiscipline.code)
+    expect(preview.snapshot?.frozenBlueprint.positioning.studioConcept).toEqual(concept)
+    expect(world.createExecutionProject(edited).success).toBe(true)
+    const project = world.world.projects[0]!
+    expect(world.getExecutionProject(project.id)?.workPackages.map((wp) => wp.baselineWorkUnits))
+      .toEqual(preview.workPackages.map((wp) => wp.baselineWorkUnits))
+    const save = parseSave(structuredClone(world.serialize()))
+    if (!save.ok) throw new Error(save.errorMessage)
+    const loaded = setup()
+    loaded.restore(save.state)
+    expect(loaded.world.projects[0]?.studioConcept).toEqual(concept)
+  })
+
+  it('enforces studio tools and platform requirements at the project command', () => {
+    const world = setup()
+    const input = draft({ genreId: 'fighting', primaryTypeId: 'fighting', studioConcept: { ...DEFAULT_CONCEPT, scope: 'bespoke' } })
+    expect(world.createExecutionProject(input).errorCode).toBe('STUDIO_CONCEPT_REQUIREMENTS')
+    expect(world.startStudioResearch('spriteTools').success).toBe(true)
+    world.advanceSimulation(30)
+    expect(world.previewExecutionProject(input).success).toBe(true)
+    expect(world.createExecutionProject({ ...input, studioConcept: { ...DEFAULT_CONCEPT, soundtrack: 'adaptive' } }).errorCode)
+      .toBe('STUDIO_CONCEPT_REQUIREMENTS')
+  })
   it('uses the personnel growth rule for mentoring, charges once, and preserves training after loading', () => {
     const world = setup()
     const mentor = world.hireEmployee({ name: 'Mentor', role: 'artist', skillLevel: 5, salaryMonthlyCents: 10_000 }).result!

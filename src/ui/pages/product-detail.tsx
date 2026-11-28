@@ -1,4 +1,6 @@
 import { moduleLabel } from '@ui/components/module-label'
+import { ConceptCard } from '@ui/components/concept-editor'
+import { prototypeForGenre } from '@content/studio-concepts'
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import { displayPriceCents, netRevenueCents } from '@ui/components/product-metrics'
@@ -94,6 +96,7 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
   }
 
   const retired = product.status === 'retired'
+  const prototypeKind = prototypeForGenre(product.genreId)
   const expansionMarkets = new Set(buildDemandScopesForDay({ dayIndex,
     platformIds: product.supportedPlatformIds, segmentIds: product.audienceSegmentIds,
   }).map((scope) => scope.marketId))
@@ -209,6 +212,7 @@ export const ProductDetail: React.FC<Props> = ({ productId, onNavigate }) => {
         <button className="btn btn-secondary btn-small" onClick={() => onNavigate('review')}>{t('nav.review')}</button>
       </div>
       <h2>{product.name}</h2>
+      {prototypeKind && product.studioConcept && <ConceptCard kind={prototypeKind} concept={product.studioConcept} />}
       {product.predecessorProductId && products.find((item) => item.id === product.predecessorProductId) && (
         <p>{t('catalog.sequelOf').replace('{name}', products.find((item) => item.id === product.predecessorProductId)!.name)}</p>
       )}

@@ -1,4 +1,6 @@
 import { moduleLabel } from '@ui/components/module-label'
+import { ConceptCard } from '@ui/components/concept-editor'
+import { prototypeForGenre } from '@content/studio-concepts'
 import React from 'react'
 import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import { monthKeyOf } from '@domain/value-objects/finance-commitment'
@@ -48,6 +50,7 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
   }, [transactions])
 
   const latestProduct = latestCompanyRelease(products, company?.id)
+  const prototypeKind = latestProduct && prototypeForGenre(latestProduct.genreId)
   const sourceProject = projects.find((project) => project.id === latestProduct?.sourceProjectId)
   const deliveredQuality = sourceProject === undefined ? undefined
     : store.game?.getExecutionProject(sourceProject.id)?.builds.at(-1)?.deliveryDecision
@@ -125,6 +128,7 @@ export const Review: React.FC<Props> = ({ onNavigate }) => {
         </div>
       )}
 
+      {prototypeKind && latestProduct?.studioConcept && <ConceptCard kind={prototypeKind} concept={latestProduct.studioConcept} name={latestProduct.name} />}
       {/* 经营结果汇总 */}
       <div className="panel" data-testid="p12-summary">
         <h2 style={{ marginTop: 0 }}>{t('p12.section.summary')}</h2>

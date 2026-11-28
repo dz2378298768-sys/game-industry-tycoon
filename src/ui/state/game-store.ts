@@ -89,6 +89,7 @@ export const ERROR_I18N: Record<string, string> = {
   E_EMPTY_CONTENT: 'error.emptyContent',
   E_USP: 'error.uspMissing',
   REC03_INPUT_INVALID: 'newProject.error.invalidBlueprint',
+  STUDIO_CONCEPT_REQUIREMENTS: 'editor.requirements',
   REC03_BLUEPRINT_VIOLATION: 'newProject.error.invalidBlueprint',
   REC03_TEMPLATE_UNKNOWN: 'newProject.error.contentUnavailable',
   REC03_CONTENT_PACK_INVALID: 'newProject.error.contentUnavailable',

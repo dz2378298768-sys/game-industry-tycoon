@@ -48,6 +48,26 @@ describe('P-03/P-04 立项两步向导', () => {
     fireEvent.click(inputs[2]!)
   }
 
+  it('plays the fighting prototype, compares an art change, and switches prototype families', () => {
+    boot()
+    render(<NewProject onNavigate={vi.fn()} initialGenreId="fighting" />)
+    const editor = within(screen.getByRole('region', { name: '游戏设计台' }))
+    fireEvent.click(editor.getByRole('button', { name: /攻击/ }))
+    expect(editor.getByText('对手准备出招。')).toBeTruthy()
+    fireEvent.click(editor.getByRole('button', { name: /防守/ }))
+    expect(editor.getByText(/1\/3/)).toBeTruthy()
+    fireEvent.click(editor.getByRole('button', { name: '保存为方案 A' }))
+    fireEvent.change(editor.getByLabelText('画风'), { target: { value: 'silhouette' } })
+    const stage = editor.getByLabelText(/样机画面/)
+    expect(stage.getAttribute('data-art')).toBe('silhouette')
+    fireEvent.click(editor.getByRole('button', { name: '试玩 A' }))
+    expect(editor.getByLabelText(/样机画面/).getAttribute('data-art')).toBe('pixel')
+    fireEvent.change(screen.getByLabelText('游戏类型'), { target: { value: 'shooter' } })
+    expect(screen.getByLabelText(/样机画面/).getAttribute('data-kind')).toBe('shooter')
+    fireEvent.change(screen.getByLabelText('游戏类型'), { target: { value: 'puzzle' } })
+    expect(screen.getByLabelText(/样机画面/).getAttribute('data-kind')).toBe('puzzle')
+  })
+
   it('P-03：默认用推荐范围，保留设计摘要和快照', () => {
     boot()
     render(<NewProject onNavigate={vi.fn()} />)

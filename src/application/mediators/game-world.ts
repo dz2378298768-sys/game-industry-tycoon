@@ -52,6 +52,8 @@ import {
 import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
 import { createOpeningMarketProducts, seedRegionalLaunchAwareness } from '@content/opening-market'
 import { STUDIO_RESEARCH } from '@content/studio-research'
+import { conceptRequirements, conceptWork, prototypeForGenre } from '@content/studio-concepts'
+import { CONCEPT_OPTIONS, type StudioConcept } from '@domain/entities/studio-concept'
 import { buildDemandScopesForDay } from '@content/c1-content'
 import { CATALOG_UPDATE_COST_CENTS, CATALOG_UPDATE_COOLDOWN_DAYS, REGIONAL_CAMPAIGN_COST_CENTS } from '@content/catalog-maintenance'
 import { MENTORSHIP_COOLDOWN_DAYS, MENTORSHIP_COST_CENTS } from '@content/studio-mentorship'
@@ -182,7 +184,7 @@ export interface ExecutionProjectPreview {
 }
 
 export type BlueprintDraftInput =
-  | { kind: 'draft'; requestId: string; workingTitle: string; genreId: string; primaryTypeId: string; targetSegmentClaims: string[]; platformTargets: string[]; modules: Array<{ templateId: string; slotId: string; instanceId: string; intensity: 1 | 2 | 3 | 4 | 5; depthSelection: import('@domain/entities/product-blueprint').DepthSelection; optionSelections: Record<string, string>; contentPackId: string | null }>; deliveryForm: ReleaseForm; hrb: number; budgetCapacityCents: number; scopePolicy?: 'recommended' | 'custom'; predecessorProductId?: string }
+  | { kind: 'draft'; requestId: string; workingTitle: string; genreId: string; primaryTypeId: string; targetSegmentClaims: string[]; platformTargets: string[]; modules: Array<{ templateId: string; slotId: string; instanceId: string; intensity: 1 | 2 | 3 | 4 | 5; depthSelection: import('@domain/entities/product-blueprint').DepthSelection; optionSelections: Record<string, string>; contentPackId: string | null }>; deliveryForm: ReleaseForm; hrb: number; budgetCapacityCents: number; scopePolicy?: 'recommended' | 'custom'; predecessorProductId?: string; studioConcept?: StudioConcept }
   | { kind: 'snapshotRef'; requestId: string; snapshotId: string; versionId: string; workingTitle: string; genreId: string; plannedLaunchDay: number; hrb: number; budgetCapacityCents: number }
 
 interface Rec03SnapshotEntry {
@@ -1158,21 +1160,34 @@ export class GameWorld {
     const support = modules.filter((m) => m.slotId === 'REC03-SLOT-SUPPORT')
     if (core.length !== 1 || content.length !== 1 || support.length > 2 || new Set(modules.map((m) => m.instanceId)).size !== modules.length) return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'REC03 requires one core, one content, and at most two support modules' }
     const completionDays = this.getPlayerCompany()?.researchCompletionDays ?? {}
+    const concept = params.studioConcept
+    if (concept !== undefined && (!prototypeForGenre(params.genreId) || Object.entries(CONCEPT_OPTIONS).some(([key, options]) =>
+      !(options as readonly string[]).includes(concept[key as keyof StudioConcept])))) {
+      return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'invalid studio concept' }
+    }
+    if (concept && params.platformTargets.some((platform) => conceptRequirements(concept, platform, completionDays, this.dayIndex).length > 0)) {
+      return { success: false, errorCode: 'STUDIO_CONCEPT_REQUIREMENTS', message: 'unmet studio concept requirements' }
+    }
+    const extraWork = concept ? conceptWork(concept) : undefined
     const completedResearch = STUDIO_RESEARCH.filter((research) => (completionDays[research.id] ?? Infinity) <= this.dayIndex)
     const applyResearch = (work: typeof REC03_MODULES[number]['baseWorkUnits']) => {
       const adjusted = { ...work }
       for (const research of completedResearch) adjusted[research.discipline] *= research.workFactor
       return adjusted
     }
-    const templatesById = Object.fromEntries(REC03_MODULES.map((module) => [
-      module.templateId, { ...module, baseWorkUnits: applyResearch(module.baseWorkUnits) },
-    ]))
+    const templatesById = Object.fromEntries(REC03_MODULES.map((module) => {
+      const work = { ...module.baseWorkUnits }
+      if (extraWork && module.templateId === core[0]?.templateId) {
+        for (const discipline of DISCIPLINE_ORDER) work[discipline] += extraWork[discipline]
+      }
+      return [module.templateId, { ...module, baseWorkUnits: applyResearch(work) }]
+    }))
     if (modules.some((m) => { const t = templatesById[m.templateId]; const slot = REC03_SLOTS.find((s) => s.slotId === m.slotId); return t === undefined || slot === undefined || !t.allowedSlotKinds.includes(slot.slotKind) })) return { success: false, errorCode: 'REC03_TEMPLATE_UNKNOWN', message: 'unknown REC03 module template or invalid slot' }
     const instances: ModuleInstance[] = modules.map((m) => { const t = templatesById[m.templateId]!; return { instanceId: m.instanceId, templateId: m.templateId, slotId: m.slotId, displayLabel: t.name, domain: t.domain, intensity: m.intensity, depthSelection: m.depthSelection, optionSelections: { ...m.optionSelections }, contentPackId: m.contentPackId, state: 'active', sourceOrigin: 'player' } })
     const packs = modules.filter((m) => m.contentPackId !== null).map((m) => REC03_CONTENT_PACKS.find((p) => p.packId === m.contentPackId)).filter((p): p is typeof REC03_CONTENT_PACKS[number] => p !== undefined)
       .map((pack) => ({ ...pack, workUnitsPerTier: applyResearch(pack.workUnitsPerTier) }))
     if (packs.length !== content.length) return { success: false, errorCode: 'REC03_CONTENT_PACK_INVALID', message: 'content module requires a valid REC03 content pack' }
-    const positioning: PositioningProfile = { primaryTypeId, secondaryTypeIds: [], settingIds: [], perspectiveId: 'side_scroll', structureId: 'linear', targetSegmentClaims: targetTags, sellingPoints: [], platformTargets: [...platformTargets], commercialPositioning: 'premium', presetId: null }
+    const positioning: PositioningProfile = { primaryTypeId, secondaryTypeIds: [], settingIds: [], perspectiveId: 'side_scroll', structureId: 'linear', targetSegmentClaims: targetTags, sellingPoints: [], platformTargets: [...platformTargets], commercialPositioning: 'premium', presetId: null, ...(concept && { studioConcept: { ...concept } }) }
     const slots = REC03_SLOTS.map((s) => ({ ...s, domainAcceptance: [...s.domainAcceptance], bindings: instances.filter((i) => i.slotId === s.slotId).map((i) => i.instanceId), outsourcingEligible: false }))
     const frozen: FrozenBlueprint = { positioning, slots, instances, contentPacks: packs.map((p) => ({ ...p, workUnitsPerTier: { ...p.workUnitsPerTier } })) }
     const composition = checkCompositionRules(frozen, templatesById, { combineRules: [], requireRules: [], conflictRules: [] } as CompositionRules, DEFAULT_BLUEPRINT_TUNING)
@@ -1249,6 +1264,7 @@ export class GameWorld {
     }
     this.executionProjects.set(projectId, execution); this.executionProjects.set(legacy.result.id, execution)
     if (predecessorId !== undefined) legacy.result.predecessorProductId = predecessorId
+    if (params.studioConcept) legacy.result.studioConcept = { ...params.studioConcept }
     this.alignLegacyProjectWorkload(legacy.result.id, execution)
     this.rec03Snapshots.set(built.snapshot.snapshotId, { snapshot: built.snapshot, decomposition: { ...built.decomposition, projectId }, projectId: legacy.result.id, name: built.name, genreId: built.genreId, plannedLaunchDay: built.plannedLaunchDay })
     const commitmentId = execution.project.commitmentIds[0] ?? ''
@@ -2231,6 +2247,7 @@ export class GameWorld {
     const launched = this.world.projects.find((p) => p.id === projectId)
     const launchedProduct = result.result.product
     if (before?.predecessorProductId !== undefined) launchedProduct.predecessorProductId = before.predecessorProductId
+    if (before?.studioConcept !== undefined) launchedProduct.studioConcept = { ...before.studioConcept }
     const designSnapshot = execution === undefined
       ? undefined
       : this.rec03Snapshots.get(execution.project.snapshotId)?.snapshot

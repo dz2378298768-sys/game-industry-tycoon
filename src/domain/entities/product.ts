@@ -9,6 +9,7 @@ export interface Product {
   id: string
   sourceProjectId: string
   predecessorProductId?: string
+  studioConcept?: import('./studio-concept').StudioConcept
   lastMaintenanceDay?: number
   companyId: string
   name: string

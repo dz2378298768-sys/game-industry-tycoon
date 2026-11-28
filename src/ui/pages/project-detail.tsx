@@ -15,6 +15,8 @@ import { CANCEL_BANNER_KEY, projectCancelledDay, resolveCancelReason, resolvePro
 import { ChangeReworkPanel } from '@ui/components/change-rework-panel'
 import { QaOptimizationPanel } from '@ui/components/qa-optimization-panel'
 import { personLabel } from '@ui/components/personnel-display'
+import { ConceptCard } from '@ui/components/concept-editor'
+import { prototypeForGenre } from '@content/studio-concepts'
 
 interface Props {
   projectId: string
@@ -68,6 +70,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate, focusSec
     remainingCapCents: project.remainingCapCents ?? 0,
   }
   const remainingCapCents = recomputeRemaining(budget).remainingCapCents
+  const prototypeKind = prototypeForGenre(project.genreId)
   const usageRatio = budgetUsageRatio(budget)
   const usagePct = usageRatio * 100
   const costAllocations: ProjectCostAllocation[] = project.costAllocations ?? []
@@ -328,6 +331,7 @@ export const ProjectDetail: React.FC<Props> = ({ projectId, onNavigate, focusSec
         </div>
       </div>
 
+      {prototypeKind && project.studioConcept && <ConceptCard kind={prototypeKind} concept={project.studioConcept} />}
       {/* 状态横幅：预算耗尽 / 手动暂停 / 超时取消，图标 + 文案 + 颜色三重区分 */}
       {isExhausted && (
         <div className="panel" style={{ borderColor: '#e8912d', background: 'rgba(232,145,45,0.10)' }}>

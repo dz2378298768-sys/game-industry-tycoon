@@ -9,6 +9,7 @@
 | P1 是否完成、还留下什么 | [P1 验收清单](review/P1阶段验收清单.md)、[收口与问题台账](review/P1_阶段收口与问题台账_2026-11-27.md)、[收尾桌面复验](review/P1_收尾桌面复验.md) |
 | P2 当前开发任务 | [P2 正式阶段实施计划](tasks/P2_正式阶段实施计划_V1.0.md)、[P2-01 产品模块与市场差异纵向切片](tasks/P2-01_产品模块与市场差异纵向切片.md)、[正式阶段基线](baseline/02_版本路线图/01_开发阶段与验收门槛.md) |
 | P2–P5 深度商业模拟设计输入 | [深度商业模拟设计方案](design/深度商业模拟设计方案_讨论稿.md)、[二次规划基线](GameIndustryTycoon_二次规划基线_V1.1.md) |
+| 立项前的玩法、画风、声音与技术设计 | [游戏编辑器设计方案](design/游戏编辑器设计方案.md) |
 | 做什么、怎么做 | [二次规划与范围](GameIndustryTycoon_二次规划基线_V1.1.md)、[已批准的恢复路线](../GAME_INDUSTRY_TYCOON_PROJECT_RECOVERY_AND_ROADMAP.md)、[执行任务](tasks/)、[项目指挥台](项目指挥台_二次规划.html) |
 | 游戏规则、设计与裁定 | [产品基线](baseline/README.md)、[设计规格](design/)、[设计裁定](decisions/)、[早期工程规格](design/milestone-specs/) |
 | 工作室首页、经营详情、产业视图与美术主题 | [主界面与美术主题设计](design/主界面与美术主题设计_V0.1.md) |

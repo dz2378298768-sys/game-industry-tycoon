@@ -5,6 +5,7 @@ import type {
   CancellationReason,
 } from '@domain/enums'
 import type { ProjectCostAllocation } from './project-cost-allocation'
+import type { StudioConcept } from './studio-concept'
 import type {
   RangeItem,
   TeamAssignment,
@@ -18,6 +19,7 @@ export interface Project {
   name: string
   genreId: string
   predecessorProductId?: string
+  studioConcept?: StudioConcept
   audienceSegmentIds: string[]
   targetPlatformIds: string[]
   phase: ProjectPhase

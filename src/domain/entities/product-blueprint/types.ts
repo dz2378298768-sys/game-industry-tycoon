@@ -115,6 +115,7 @@ export interface PositioningProfile {
   primaryTypeId: string
   secondaryTypeIds: string[]
   settingIds: string[]
+  studioConcept?: import('../studio-concept').StudioConcept
   perspectiveId: PerspectiveId
   structureId: StructureId
   targetSegmentClaims: string[]

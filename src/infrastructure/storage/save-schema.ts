@@ -1,4 +1,14 @@
 import { z } from 'zod'
+import { CONCEPT_OPTIONS } from '@domain/entities/studio-concept'
+
+const studioConceptSchema = z.object({
+  loop: z.enum(CONCEPT_OPTIONS.loop),
+  art: z.enum(CONCEPT_OPTIONS.art),
+  music: z.enum(CONCEPT_OPTIONS.music),
+  effects: z.enum(CONCEPT_OPTIONS.effects),
+  scope: z.enum(CONCEPT_OPTIONS.scope),
+  soundtrack: z.enum(CONCEPT_OPTIONS.soundtrack),
+})
 import type { WorldState } from '@simulation/services/world-state'
 import { migrateSave } from './save-migrations'
 import { isTerminalProjectPhase } from '@simulation/systems/phase-rules'
@@ -116,6 +126,7 @@ const projectSchema = z
     name: z.string().min(1),
     genreId: z.string().min(1),
     predecessorProductId: z.string().min(1).optional(),
+    studioConcept: studioConceptSchema.optional(),
     phase: z.enum([
       'CONCEPT',
       'PRE_PRODUCTION',
@@ -232,6 +243,7 @@ const productSchema = z
     launchDay: z.number().int().nonnegative(),
     predecessorProductId: z.string().min(1).optional(),
     lastMaintenanceDay: z.number().int().nonnegative().optional(),
+    studioConcept: studioConceptSchema.optional(),
     launchPriceCents: z.number().int().nullable(),
     moduleTemplateIds: z.array(z.string().min(1)).optional(),
     moduleAffinityBySegment: z.record(z.string(), z.number()).optional(),

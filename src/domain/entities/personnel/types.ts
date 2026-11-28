@@ -11,13 +11,13 @@ import type { EmployeeRole, ProjectRole } from '@domain/enums'
 
 // ===== 学科枚举（§3.3，D-01 §6.7 五元素；代码别名 programming ≡ code） =====
 
-/** 规格五元素学科（权威口径）。`audio` 为真实缺口：P1 无音频岗位，等级恒 0（OPEN-D03-2）。 */
+/** 规格五元素学科（权威口径）。 */
 export type D03Discipline = 'design' | 'code' | 'art' | 'audio' | 'qa'
 
 export const D03_DISCIPLINES: readonly D03Discipline[] = ['design', 'code', 'art', 'audio', 'qa']
 
-/** 候选生成固定 4 学科（ADJ-2026-11-22-12 S5-1；audio 无代码枚举值不参与生成）。 */
-export const D03_POOL_DISCIPLINES: readonly D03Discipline[] = ['design', 'code', 'art', 'qa']
+/** 候选池覆盖全部五学科，与领域岗位一一映射。 */
+export const D03_POOL_DISCIPLINES: readonly D03Discipline[] = ['design', 'code', 'art', 'audio', 'qa']
 
 /** 代码侧存储别名 → 规格学科（§15 DisciplineMap：programming ≡ code）。 */
 export function toD03Discipline(codeDiscipline: string): D03Discipline | null {
@@ -32,14 +32,14 @@ export function toD03Discipline(codeDiscipline: string): D03Discipline | null {
   }
 }
 
-/** 规格学科 → 代码侧存储别名（audio 无对应值，返回 null）。 */
-export function toCodeDiscipline(d: D03Discipline): 'design' | 'programming' | 'art' | 'qa' | null {
+/** 规格学科 → 代码侧存储别名。 */
+export function toCodeDiscipline(d: D03Discipline): 'design' | 'programming' | 'art' | 'audio_designer' | 'qa' | null {
   switch (d) {
     case 'design': return 'design'
     case 'code': return 'programming'
     case 'art': return 'art'
     case 'qa': return 'qa'
-    case 'audio': return null
+    case 'audio': return 'audio_designer'
   }
 }
 
@@ -175,13 +175,38 @@ export interface Candidate {
   candidateId: string
   personId: string
   regionId: string
-  /** 主学科（S5-1：固定 4 学科随机分配）。 */
+  /** 主学科（S5-1：五学科随机分配）。 */
   discipline: D03Discipline
   /** 主学科等级（S5-1：D-03 现值区间 0..5 均匀分布）。 */
   skillLevel: number
   askingSalaryCents: number
   availableFromDay: number
   expiresAtDay: number
+}
+
+/** REC-04B：候选确认后、正式到岗前的招聘预留。不得伪装成 Employment。 */
+export interface PendingHire {
+  pendingHireId: string
+  employmentId: string
+  personId: string
+  companyId: string
+  candidateId: string
+  role: EmployeeRole
+  discipline: D03Discipline
+  skillLevel: number
+  seniority: 'junior' | 'senior'
+  negotiatedSalaryCents: number
+  askingSalaryCents: number
+  initialTermMonths: number
+  hireConfirmDay: number
+  /** 候选最初可入职日；用于取消后无参数漂移地恢复候选。 */
+  candidateAvailableFromDay: number
+  arrivalDay: number
+  candidateExpiresAtDay: number
+  salaryCommitmentId: string
+  recruitFeeCommitmentId: string
+  state: 'pending' | 'arrived' | 'cancelled'
+  cancelledAtDay: number | null
 }
 
 // ===== §11 S7 版本与参数快照（C13 必存项） =====
@@ -227,6 +252,8 @@ export const D03_ERROR = {
   CANDIDATE_NOT_FOUND: 'D03_CANDIDATE_NOT_FOUND',
   NOTICE_REQUIRED: 'D03_NOTICE_REQUIRED',
   SALARY_COMMITMENT_MISSING: 'D03_SALARY_COMMITMENT_MISSING',
+  HIRE_PENDING: 'D03_HIRE_PENDING',
+  HIRE_ALREADY_ARRIVED: 'D03_HIRE_ALREADY_ARRIVED',
   DATA_REPAIR: 'D03_DATA_REPAIR',
 } as const
 

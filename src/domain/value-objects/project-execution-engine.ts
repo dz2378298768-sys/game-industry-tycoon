@@ -348,10 +348,11 @@ export function estimateCost(
   rTech: number,
   rScope: number,
   params: ProjectFormulaParams,
+  work: 'total' | 'remaining' = 'total',
 ): CostEstimateResult {
   return estimateProjectCost(
     {
-      workload: workloadOf(state.workPackages),
+      workload: work === 'remaining' ? remainingOf(state.workPackages) : workloadOf(state.workPackages),
       members,
       day,
       budgetCapacityCents: state.project.budgetCapacityCents,
@@ -650,7 +651,9 @@ export function planRework(
   input: StartReworkInput,
   params: ProjectFormulaParams,
 ): ReworkPlan {
-  if (state.project.state !== 'ACTIVE') {
+  const validReadyRework = state.project.state === 'READY_TO_DELIVER' &&
+    input.targetSnapshotId !== state.project.snapshotId
+  if (state.project.state !== 'ACTIVE' && !validReadyRework) {
     throw new ProjectError(PROJ_ERROR.INVALID_STATE_TRANSITION, `rework requires ACTIVE, got ${state.project.state}`)
   }
   if (input.category === 'A') {
@@ -802,6 +805,8 @@ export interface CompleteReworkInput {
   gate: GateOutcome
   /** R2（P1-1）：新快照分学科 W_d，**必填**（类型层面不可省）；缺参/学科残缺抛 PROJ_SNAPSHOT_SWITCH_BLOCKED。 */
   newWorkload: DisciplineWorkload
+  /** Decomposition of the frozen target, when supplied by the blueprint owner. */
+  targetWorkPackages?: readonly WorkPackage[]
 }
 
 /**
@@ -854,6 +859,10 @@ export function completeRework(
 
   const targetSnapshotId = session.targetSnapshotId
   // R2：rebaseline 先行（可能抛 PROJ_REBASELINE_UNBALANCED）；抛错时 next 被丢弃，原状态干净
+  if (input.targetWorkPackages !== undefined) {
+    next.workPackages = rebaseToTargetPackages(next.workPackages, input.targetWorkPackages, input.newWorkload, targetSnapshotId)
+    next.project.workPackageIds = next.workPackages.map((wp) => wp.workPackageId)
+  } else {
   const reb = rebaselineWorkPackages(next.workPackages, input.newWorkload, targetSnapshotId)
   // R3：守恒断言对**传入的 W_d(new)**（禁止自证）；失败 ⇒ 整个切换回滚
   if (!checkRemainingInvariant(reb, input.newWorkload)) {
@@ -878,7 +887,9 @@ export function completeRework(
   }
   // ——原子提交：以下全部成功才对外返回——
   next.workPackages = reb.workPackages
+  }
   next.project.snapshotId = targetSnapshotId
+  next.project.versionId = session.targetDraftVersionId
   next.project.state = transitionProjectState('ACTIVE', 'rework_complete')
   // 返工 WP 随之归档（剩余清零）
   next.workPackages = next.workPackages.map((wp) =>
@@ -895,6 +906,48 @@ export function completeRework(
     next.project.state = transitionProjectState('ACTIVE', 'all_work_packages_done')
   }
   return { state: next, switched: true, gate: gateResult }
+}
+
+function rebaseToTargetPackages(
+  existing: readonly WorkPackage[],
+  target: readonly WorkPackage[],
+  workload: DisciplineWorkload,
+  snapshotId: string,
+): WorkPackage[] {
+  const targetIds = new Set(target.map((wp) => wp.workPackageId))
+  if (targetIds.size !== target.length || target.some((wp) =>
+    wp.snapshotId !== snapshotId || wp.kind !== 'NORMAL' ||
+    !Number.isFinite(wp.baselineWorkUnits) || wp.baselineWorkUnits < 0 ||
+    wp.blockedBy.some((id) => !targetIds.has(id)))) {
+    throw new ProjectError(PROJ_ERROR.REBASELINE_UNBALANCED, 'Invalid target work packages')
+  }
+  for (const discipline of DISCIPLINE_ORDER) {
+    const units = target.filter((wp) => wp.discipline === discipline)
+      .reduce((sum, wp) => sum + wp.baselineWorkUnits, 0)
+    if (Math.abs(units - workload[discipline]) > 1e-6) {
+      throw new ProjectError(PROJ_ERROR.REBASELINE_UNBALANCED, `Unbalanced target workload for ${discipline}`)
+    }
+  }
+  const previous = new Map(existing.filter((wp) => wp.state !== 'DEACTIVATED').map((wp) => [wp.workPackageId, wp]))
+  const live = target.map((wp): WorkPackage => {
+    const deliveredWorkUnits = Math.min(wp.baselineWorkUnits, previous.get(wp.workPackageId)?.deliveredWorkUnits ?? 0)
+    const remaining = wp.baselineWorkUnits - deliveredWorkUnits
+    return {
+      ...wp,
+      deliveredWorkUnits,
+      remainingWorkUnits: remaining <= 1e-9 ? 0 : remaining,
+      progress: wp.baselineWorkUnits === 0 ? 1 : deliveredWorkUnits / wp.baselineWorkUnits,
+      state: remaining <= 1e-9 ? 'DONE' : 'READY',
+    }
+  })
+  const unfinished = new Set(live.filter((wp) => wp.state !== 'DONE').map((wp) => wp.workPackageId))
+  return [
+    ...live.map((wp): WorkPackage => wp.state !== 'DONE' && wp.blockedBy.some((id) => unfinished.has(id))
+      ? { ...wp, state: 'BLOCKED' }
+      : wp),
+    ...existing.filter((wp) => !targetIds.has(wp.workPackageId)).map((wp): WorkPackage =>
+      wp.kind === 'REWORK' ? wp : { ...wp, state: 'DEACTIVATED' }),
+  ]
 }
 
 /** §4.5 撤销返工：丢弃目标草稿，旧快照继续生效（权威不变）。 */
@@ -949,6 +1002,7 @@ export interface SubmitDeliveryInput {
   actualCostCents: number
   deliveredTier: number
   qualitySnapshotRef?: string | null
+  deliveryDecision?: Build['deliveryDecision']
   defectListRefs?: string[]
   /** 计数用：项目累计支出（来自 expenseTxIds 关联的交易）。 */
   expenseTotalCents?: number
@@ -996,6 +1050,7 @@ export function submitDelivery(
     deliveryForm: input.deliveryForm,
     deliveryGateResult: { pass: true, violationCodes: [] },
     qualitySnapshotRef: input.qualitySnapshotRef ?? null,
+    ...(input.deliveryDecision === undefined ? {} : { deliveryDecision: input.deliveryDecision }),
     defectListRefs: [...(input.defectListRefs ?? [])],
     deliveredTier: input.deliveredTier,
     actualCostCents: input.actualCostCents,

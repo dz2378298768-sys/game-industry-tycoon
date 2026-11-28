@@ -3,6 +3,7 @@ import type { Project } from '@domain/entities/project'
 import { useGameStore, t } from '@ui/state/game-store'
 import { ModalShell } from '@ui/components/modal-shell'
 import type { ReworkCategory } from '@domain/entities/project-execution'
+import type { ExecutionSummary } from '@application/mediators/game-world'
 
 type Category = ReworkCategory
 
@@ -10,6 +11,7 @@ const CATEGORIES: Category[] = ['A', 'B', 'C', 'D', 'E']
 
 interface Props {
   project: Project
+  execution?: ExecutionSummary | null
   isBankrupt: boolean
   onOpenDescope: () => void
   onOpenTopUp: () => void
@@ -25,25 +27,36 @@ interface Props {
  * 预估不可用时 fail-closed 显示具体原因，绝不伪造数值。
  * 缩减范围 / 追加预算复用 07A 已交付的 DescopeDialog + topUp 弹窗。
  */
-export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpenDescope, onOpenTopUp }) => {
+export const ChangeReworkPanel: React.FC<Props> = ({ project, execution, isBankrupt, onOpenDescope, onOpenTopUp }) => {
   const [category, setCategory] = React.useState<Category>('B')
   const [delta, setDelta] = React.useState(15)
   const [estimateOpen, setEstimateOpen] = React.useState(false)
+  const [intensity, setIntensity] = React.useState<number | null>(null)
 
   const getReworkEstimate = useGameStore((s) => s.getReworkEstimate)
   const confirmRework = useGameStore((s) => s.confirmRework)
-  const estimate = React.useMemo(
-    // 测试夹具可能以部分 store setState 替换（不含新增转发方法）；此时 fail-closed 为 null。
-    () => (typeof getReworkEstimate === 'function' ? getReworkEstimate(project.id, category, delta) : null),
-    [getReworkEstimate, project.id, category, delta],
-  )
-
+  const currentIntensity = execution?.coreIntensity
+  const modern = currentIntensity !== undefined
   const terminal = project.phase === 'LAUNCHED' || project.phase === 'CANCELLED'
-  const inDevelopment = project.phase === 'PRODUCTION' || project.phase === 'QA'
-  const blocked = isBankrupt || !inDevelopment
+  const delivery = useGameStore((s) => s.getDeliveryStatus?.(project.id))
+  const getDeliveryGate = useGameStore((s) => s.getDeliveryGateEvaluation)
+  const correctableCore = modern && delivery?.state === 'READY_TO_DELIVER'
+    ? getDeliveryGate?.(project.id, 'full', true)?.coreIntensityGap
+    : undefined
+  const targetIntensity = intensity ?? correctableCore?.required ?? (currentIntensity === 5 ? 4 : (currentIntensity ?? 1) + 1)
+  const changeCategory = modern ? 'C' : category
+  const changeInput = modern ? targetIntensity : delta
+  const estimate = estimateOpen ? getReworkEstimate?.(project.id, changeCategory, changeInput) : null
+  const canCorrectDelivery = modern && delivery?.state === 'READY_TO_DELIVER' &&
+    (delivery.lastDeliveryFailure !== null || correctableCore !== undefined)
+  const inDevelopment = project.phase === 'PRODUCTION' || project.phase === 'QA' || canCorrectDelivery
+  const reworkActive = execution?.reworkStatus === 'active' || execution?.reworkStatus === 'blocked'
+  const blocked = isBankrupt || !inDevelopment || reworkActive || project.isPaused
   const blockReason = isBankrupt
     ? t('finance.bankrupt.blocked.change')
-    : inDevelopment ? undefined : t('p07.notActive')
+    : project.isPaused ? t('project.actions.resume')
+      : !inDevelopment ? t('p07.notActive')
+        : reworkActive ? t(execution?.reworkStatus === 'blocked' ? 'p07.rework.blocked' : 'p07.rework.running') : undefined
 
   const available = estimate?.available === true
   // 档位优先用内核 breakdown.mode；预估不可用时才退回本地 δ 判定（仅用于展示，不伪造成本）。
@@ -54,8 +67,11 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
 
   const handleConfirm = () => {
     if (typeof confirmRework !== 'function') return
-    const r = confirmRework(project.id, category, delta)
-    if (r.success) setEstimateOpen(false)
+    const r = confirmRework(project.id, changeCategory, changeInput)
+    if (r.success) {
+      setEstimateOpen(false)
+      setIntensity(null)
+    }
   }
 
   const unitsText = available && estimate!.disciplineUnits.length > 0
@@ -74,15 +90,27 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
     : t('p07.estimate.unavailable')
 
   return (
-    <div className="panel" data-testid="p07-change-panel">
+    <div className="panel" id="project-design-changes" tabIndex={-1} data-testid="p07-change-panel">
       <h2 style={{ marginTop: 0 }}>{t('p07.title')}</h2>
       <p className="muted" style={{ fontSize: 12 }}>{t('p07.intro')}</p>
 
       {blocked && (
         <p className="negative" style={{ fontSize: 12 }} role="alert">⛔ {blockReason}</p>
       )}
+      {execution?.reworkStatus === 'completed' && (
+        <p role="status" data-testid="p07-rework-completed">{t('p07.rework.finished')}</p>
+      )}
 
       {/* 变更类别 A–E 单选（D-01 §15 五类判定；A 类元数据不返工） */}
+      {modern ? (
+        <div className="form-row" style={{ maxWidth: 320 }}>
+          <label htmlFor="p07-core-intensity">{t('p07.coreIntensity')}</label>
+          <select id="p07-core-intensity" disabled={blocked} value={targetIntensity} onChange={(event) => setIntensity(Number(event.target.value))}>
+            {[1, 2, 3, 4, 5].map((level) => <option key={level} value={level} disabled={level === currentIntensity}>{level}</option>)}
+          </select>
+          <p className="muted">{t('p07.coreIntensity.current').replace('{level}', String(currentIntensity))}</p>
+        </div>
+      ) : <>
       <fieldset style={{ border: '1px solid var(--border)', borderRadius: 4, marginBottom: 12 }} data-testid="p07-change-categories">
         <legend style={{ fontSize: 13, padding: '0 6px' }}>{t('p07.category.legend')}</legend>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -115,6 +143,7 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
           {t('p07.delta.hint')} · {t(`p07.band.${band}`)}
         </p>
       </div>
+      </>}
 
       <div className="flex-gap" style={{ flexWrap: 'wrap', marginTop: 8 }}>
         <button
@@ -127,9 +156,9 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
         >
           {t('p07.estimate.open')}
         </button>
-        <button className="btn btn-secondary" disabled={blocked} aria-disabled={blocked} title={blockReason} onClick={onOpenDescope}>
+        {!modern && <button className="btn btn-secondary" disabled={blocked} aria-disabled={blocked} title={blockReason} onClick={onOpenDescope}>
           {t('p07.descope')}
-        </button>
+        </button>}
         <button className="btn btn-secondary" disabled={blocked} aria-disabled={blocked} title={blockReason} onClick={onOpenTopUp}>
           {t('p07.topUp')}
         </button>
@@ -146,7 +175,7 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
                 className="btn"
                 disabled={!available}
                 aria-disabled={!available}
-                title={available ? undefined : (estimate?.unavailableReason ?? t('p07.estimate.unavailable'))}
+                title={available ? undefined : t(modern ? 'p07.rework.blocked' : 'p07.estimate.unavailable')}
                 onClick={handleConfirm}
                 data-testid="p07-rework-confirm"
               >
@@ -181,10 +210,12 @@ export const ChangeReworkPanel: React.FC<Props> = ({ project, isBankrupt, onOpen
             </tbody>
           </table>
           {!available && (
-            <p className="negative" style={{ fontSize: 12 }}>{estimate?.unavailableReason ?? t('p07.estimate.unavailable')}</p>
+            <p className="negative" style={{ fontSize: 12 }}>{t(modern ? 'p07.rework.blocked' : 'p07.estimate.unavailable')}</p>
           )}
           <p className="muted" style={{ fontSize: 11 }}>
-            {t('p07.category.legend')}: {t(`p07.category.${category}`)} · {t('p07.delta')} {delta}% · δ={band}
+            {modern
+              ? `${t('p07.coreIntensity')} ${currentIntensity} → ${targetIntensity}`
+              : `${t('p07.category.legend')}: ${t(`p07.category.${category}`)} · ${t('p07.delta')} ${delta}% · δ=${band}`}
           </p>
         </ModalShell>
       )}

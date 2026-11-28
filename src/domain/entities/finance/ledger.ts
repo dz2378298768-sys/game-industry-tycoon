@@ -166,6 +166,8 @@ function settlementCategory(item: PayableReceivable): TransactionCategory {
 
 export class UnifiedLedger {
   private transactions: LedgerTransaction[] = []
+  /** Derived from posted transactions and rebuilt on replay. */
+  private readonly cashByCompany = new Map<string, Cents>()
   private readonly transactionById = new Map<string, LedgerTransaction>()
   /** 复合键（companyId + idempotencyKey）：幂等判定与查询的唯一索引（P1-01 / P3-05）。 */
   private readonly transactionByCompanyKey = new Map<string, LedgerTransaction>()
@@ -201,7 +203,7 @@ export class UnifiedLedger {
       ledgerAccountId: `ledger:${companyId}`,
       companyId,
       currency: 'USD',
-      cashBalanceCents: this.sumTransactions(companyId),
+      cashBalanceCents: this.getCashBalance(companyId),
       accountType: 'operating_cash',
       openedAt,
       state: this.sandboxCompanies.has(companyId) ? 'frozen' : 'active',
@@ -224,7 +226,7 @@ export class UnifiedLedger {
 
   /** 权威余额读源（UI 唯一读源，§7.2）。 */
   getCashBalance(companyId: string): Cents {
-    return this.sumTransactions(companyId)
+    return this.cashByCompany.get(companyId) ?? 0
   }
 
   getSnapshot(companyId: string): LedgerSnapshot {
@@ -232,7 +234,7 @@ export class UnifiedLedger {
     for (const tx of this.transactions) if (tx.companyId === companyId) count++
     return {
       companyId,
-      cashBalanceCents: this.sumTransactions(companyId),
+      cashBalanceCents: this.getCashBalance(companyId),
       transactionCount: count,
       commitments: this.getCommitments(companyId),
     }
@@ -277,7 +279,7 @@ export class UnifiedLedger {
       )
     }
 
-    const balanceBefore = this.sumTransactions(input.companyId)
+    const balanceBefore = this.getCashBalance(input.companyId)
     const balanceAfter = balanceBefore + input.amountCents
     if (balanceAfter < 0 && options.allowNegativeBalance !== true) {
       return fail(
@@ -297,7 +299,11 @@ export class UnifiedLedger {
   ): CommandResult<PostLedgerTxResult[]> {
     const startLen = this.transactions.length
     const results: PostLedgerTxResult[] = []
+    const priorCashByCompany = new Map<string, Cents>()
     for (const input of inputs) {
+      if (!priorCashByCompany.has(input.companyId)) {
+        priorCashByCompany.set(input.companyId, this.getCashBalance(input.companyId))
+      }
       const r = this.postTransaction(input, options)
       if (!r.success || !r.result) {
         // 回滚到批前状态：删除本批新增交易及其索引（P3-05：一律按复合键删除）。
@@ -308,6 +314,7 @@ export class UnifiedLedger {
           this.idempotencyDay.delete(companyScopedKey(tx.companyId, tx.idempotencyKey))
         }
         this.transactions.length = startLen
+        for (const [companyId, cash] of priorCashByCompany) this.cashByCompany.set(companyId, cash)
         return fail(r.errorCode ?? FIN_ERROR.LEDGER_INCONSISTENT, r.errorMessage ?? 'bulk post failed')
       }
       results.push(r.result)
@@ -605,6 +612,7 @@ export class UnifiedLedger {
       )
     }
     this.transactions = []
+    this.cashByCompany.clear()
     this.transactionById.clear()
     this.transactionByCompanyKey.clear()
     this.idempotencyDay.clear()
@@ -632,6 +640,7 @@ export class UnifiedLedger {
       )
       this.idempotencyDay.set(companyScopedKey(rebuilt.companyId, rebuilt.idempotencyKey), rebuilt.day)
       running.set(tx.companyId, next)
+      this.cashByCompany.set(tx.companyId, next)
     }
     // D 段：承诺集合同样随读档重建（与交易同等对待，不依赖调用方的临时数组）。
     for (const c of commitments) {
@@ -655,7 +664,7 @@ export class UnifiedLedger {
    * 不一致时抛 `CashMismatchError`（fail-loud），**不做任何静默对齐**。
    */
   assertLedgerInvariant(companyId: string, declaredCashBalanceCents: Cents): void {
-    const actual = this.sumTransactions(companyId)
+    const actual = this.getCashBalance(companyId)
     if (actual !== declaredCashBalanceCents) {
       throw new CashMismatchError(companyId, declaredCashBalanceCents, actual)
     }
@@ -943,6 +952,7 @@ export class UnifiedLedger {
       postedAt: input.postedAt ?? input.day,
     }
     this.transactions.push(tx)
+    this.cashByCompany.set(tx.companyId, balanceAfter)
     this.transactionById.set(tx.transactionId, tx)
     this.transactionByCompanyKey.set(companyScopedKey(tx.companyId, tx.idempotencyKey), tx)
     this.idempotencyDay.set(companyScopedKey(tx.companyId, tx.idempotencyKey), tx.day)
@@ -970,7 +980,7 @@ export class UnifiedLedger {
       }
       return { success: true, result: hit, idempotent: true }
     }
-    const prev = this.sumTransactions(target.companyId)
+    const prev = this.getCashBalance(target.companyId)
     if (prev + signedAmount < 0 && options.allowNegativeBalance !== true) {
       return fail(FIN_ERROR.LEDGER_INCONSISTENT, 'Reversal would violate balance guard')
     }

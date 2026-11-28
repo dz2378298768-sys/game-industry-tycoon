@@ -101,7 +101,7 @@ describe('CompanyAlertBanner 危机四分支（CODE-07A 全局层）', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('critical 分支：role=alert、原因码逐条 + 承诺占用 + 补救窗口 fail-closed — + 三补救按钮', () => {
+  it('critical 分支呈现原因、每日现金检查口径和补救页入口', () => {
     const onNavigate = vi.fn()
     render(
       <CompanyAlertBanner
@@ -114,14 +114,13 @@ describe('CompanyAlertBanner 危机四分支（CODE-07A 全局层）', () => {
     expect(alert.textContent).toContain('财务危机')
     expect(alert.textContent).toContain('低跑道')
     expect(alert.textContent).toContain('低现金')
-    // OPEN-FIN-CRISIS-WIRING：补救窗口剩余天数 fail-closed '—'
-    expect(alert.textContent).toContain('补救窗口剩余天数: —')
+    expect(alert.textContent).toContain('每日结算后检查账面现金')
     const buttons = screen.getAllByRole('button')
     expect(buttons).toHaveLength(3)
     buttons[0]!.click()
     expect(onNavigate).toHaveBeenCalledWith('projects')
     buttons[2]!.click()
-    expect(onNavigate).toHaveBeenCalledWith('hire')
+    expect(onNavigate).toHaveBeenCalledWith('employees')
   })
 
   it('critical 优先于 cash_warning：现金低于警告线但派生 critical 时仍显示 critical', () => {

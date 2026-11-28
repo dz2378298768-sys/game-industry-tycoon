@@ -1,4 +1,14 @@
-import { formatMoney } from '@i18n'
+import { formatMoney, getLocale } from '@i18n'
+
+/** Unit prices should retain cents so nearby price choices stay distinguishable. */
+export function formatUnitPrice(cents: number): string {
+  const locale = getLocale() === 'zh-CN' ? 'zh-CN' : 'en-US'
+  const value = (Math.abs(cents) / 100).toLocaleString(locale, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+  return `${cents < 0 ? '-' : ''}$${value}`
+}
 
 /**
  * 金额展示（DESIGN-UI-LAYER §5.5 / REV R-13）：

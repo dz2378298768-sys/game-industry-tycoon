@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createGameWorld } from '@application/factories/create-game-world'
 import type { BlueprintDraftInput } from '@application/mediators/game-world'
+import { parseSave } from '@infrastructure/storage/save-schema'
 
 function setup() {
   const world = createGameWorld(73)
@@ -23,6 +24,60 @@ function draft(overrides: Partial<Extract<BlueprintDraftInput, { kind: 'draft' }
 }
 
 describe('REC-03 project creation contract', () => {
+  it('uses the personnel growth rule for mentoring, charges once, and preserves training after loading', () => {
+    const world = setup()
+    const mentor = world.hireEmployee({ name: 'Mentor', role: 'artist', skillLevel: 5, salaryMonthlyCents: 10_000 }).result!
+    const trainee = world.hireEmployee({ name: 'Trainee', role: 'artist', skillLevel: 1, salaryMonthlyCents: 10_000 }).result!
+    const personId = world.world.employments!.find((employment) => employment.employmentId === trainee.id)!.personId
+    const cash = world.getPlayerCompany()!.cashBalanceCents
+    expect(world.runMentorship(trainee.id, mentor.id, 'art').errorCode).toBe('mentorship.invalid')
+    expect(world.runMentorship(mentor.id, trainee.id, 'art').success).toBe(true)
+    expect(world.getPlayerCompany()!.cashBalanceCents).toBe(cash - 100_000)
+    const save = parseSave(structuredClone(world.serialize()))
+    if (!save.ok) throw new Error(save.errorMessage)
+    const restored = setup()
+    restored.restore(save.state)
+    expect(restored.world.persons!.find((person) => person.personId === personId)?.skills.exp.art).toBeGreaterThan(0)
+    expect(restored.runMentorship(mentor.id, trainee.id, 'art').errorCode).toBe('mentorship.cooldown')
+  })
+
+  it.each(['san_francisco', 'london', 'tokyo'])('cold-loads the competitive opening in %s and settles the same sales', (cityId) => {
+    const world = createGameWorld(42, { aiCompetition: true })
+    world.createCompany({ name: 'Release test', cityId })
+    world.advanceSimulation(1)
+    const save = parseSave(structuredClone(world.serialize()))
+    if (!save.ok) throw new Error(save.errorMessage)
+    const restored = createGameWorld(42, { aiCompetition: true })
+    restored.restore(save.state)
+    expect(restored.world.products).toHaveLength(3)
+    world.advanceSimulation(1)
+    restored.advanceSimulation(1)
+    expect(restored.world.products.map((product) => product.salesByPeriod))
+      .toEqual(world.world.products.map((product) => product.salesByPeriod))
+  })
+
+  it('applies research to new work after completion and survives a save and reload', () => {
+    const world = setup()
+    const workload = (game: ReturnType<typeof setup>) =>
+      game.previewExecutionProject(draft()).result!.estimates!.workUnits.byDiscipline
+    const before = workload(world)
+    const cash = world.getPlayerCompany()!.cashBalanceCents
+    expect(world.startStudioResearch('spriteTools').success).toBe(true)
+    expect(world.startStudioResearch('spriteTools').idempotent).toBe(true)
+    expect(world.startStudioResearch('soundTools').errorCode).toBe('research.busy')
+    expect(world.getPlayerCompany()!.cashBalanceCents).toBe(cash - 300_000)
+    expect(workload(world)).toEqual(before)
+
+    const save = parseSave(structuredClone(world.serialize()))
+    if (!save.ok) throw new Error(save.errorMessage)
+    const restored = setup()
+    restored.restore(save.state)
+    restored.advanceSimulation(30)
+    expect(workload(restored).art).toBeLessThan(before.art)
+    expect(workload(restored).code).toBe(before.code)
+    expect(restored.startStudioResearch('soundTools').success).toBe(true)
+  })
+
   it('derives work and audience affinity from the selected module combination', () => {
     const world = setup()
     const withProgression = world.previewExecutionProject(draft())
@@ -78,5 +133,98 @@ describe('REC-03 project creation contract', () => {
     const world = setup()
     const result = world.previewExecutionProject(draft({ genreId: 'genre-does-not-exist' }))
     expect(result).toMatchObject({ success: false, errorCode: 'REC03_INPUT_INVALID' })
+  })
+
+  it('advances all five-discipline work through simulated days until naturally ready to deliver', () => {
+    const world = setup()
+    const input = draft({ budgetCapacityCents: 10_000_000 })
+    const preview = world.previewExecutionProject(input)
+    expect(preview.success).toBe(true)
+    expect(preview.result!.estimates!.workUnits.byDiscipline.audio).toBeGreaterThan(0)
+    const created = world.createExecutionProject(input)
+    expect(created.success).toBe(true)
+    const projectId = world.world.projects[0]!.id
+    for (const role of ['designer', 'programmer', 'artist', 'audio_designer', 'qa'] as const) {
+      const hired = world.hireEmployee({ name: role, role, skillLevel: 5, salaryMonthlyCents: 1_000 })
+      expect(hired.success).toBe(true)
+      expect(world.assignEmployeeToProject(hired.result!.id, projectId, 1, 'generalist').success).toBe(true)
+    }
+    const audioEmployee = world.world.employees.find((employee) => employee.role === 'audio_designer')!
+    const audioPerson = world.world.persons?.find((person) => person.currentEmploymentId === audioEmployee.id)
+    if (audioPerson === undefined) throw new Error('audio employee person projection missing')
+    expect(audioPerson.skills.level.audio).toBe(5)
+    expect(world.getExecutionSummary(projectId)!.capacityByDiscipline.audio).toBeCloseTo(1.4)
+    expect(world.getExecutionSummary(projectId)!.costEstInfinite).toBe(false)
+    expect(world.advanceProjectPhase(projectId).success).toBe(true)
+    expect(world.advanceProjectPhase(projectId).success).toBe(true)
+
+    const initial = world.getExecutionProject(projectId)!
+    expect(initial.project.state).toBe('ACTIVE')
+    expect(initial.workPackages.some((wp) => wp.state === 'DONE')).toBe(false)
+    for (let day = 0; day < 365 && world.getExecutionProject(projectId)!.project.state !== 'READY_TO_DELIVER'; day += 1) {
+      world.advanceSimulation(1)
+    }
+
+    const advanced = world.getExecutionProject(projectId)!
+    expect(advanced.workPackages.every((wp) => wp.state === 'DONE' || wp.state === 'DEACTIVATED')).toBe(true)
+    expect(advanced.project.state).toBe('READY_TO_DELIVER')
+    expect(advanced.worklogs.length).toBeGreaterThan(0)
+    expect(world.world.projects[0]!.phase).toBe('READY_TO_LAUNCH')
+    expect(world.launchProject(projectId)).toMatchObject({ success: false, errorCode: 'PRJ_DELIVERY_REQUIRED' })
+
+    const gate = world.getDeliveryGateEvaluation(projectId, 'full', true)
+    expect(gate.pass).toBe(true)
+    const delivered = world.submitDeliveryForProject(projectId, gate.gate, 'full', true)
+    expect(delivered.success).toBe(true)
+    expect(world.getExecutionProject(projectId)!.project.state).toBe('COMPLETED')
+    world.advanceSimulation(220)
+    const launched = world.launchProject(projectId)
+    expect(launched.success).toBe(true)
+    expect(world.world.products).toHaveLength(1)
+  })
+
+  it('publishes a new frozen intensity only after work completes, including across a save', () => {
+    let world = setup()
+    const created = world.createExecutionProject(draft({ requestId: 'rec03-rework', budgetCapacityCents: 10_000_000 }))
+    expect(created.success).toBe(true)
+    const projectId = world.world.projects[0]!.id
+    const executionId = created.result!.projectId
+    const snapshotId = world.getExecutionProject(projectId)!.project.snapshotId
+    const initialIntensity = world.getExecutionSummary(projectId)!.coreIntensity!
+    const intensity = initialIntensity === 5 ? 4 : initialIntensity + 1
+    for (const role of ['designer', 'programmer', 'artist', 'audio_designer', 'qa'] as const) {
+      const hired = world.hireEmployee({ name: role, role, skillLevel: 5, salaryMonthlyCents: 1_000 })
+      expect(hired.success).toBe(true)
+      expect(world.assignEmployeeToProject(hired.result!.id, projectId, 1, 'generalist').success).toBe(true)
+    }
+    world.advanceSimulation(10)
+    expect(world.getReworkEstimate(projectId, 'C', intensity)).toMatchObject({ available: true, costInfinite: false })
+    expect(world.confirmRework(projectId, 'C', intensity).success).toBe(true)
+    expect(world.getExecutionProject(projectId)!.project.snapshotId).toBe(snapshotId)
+    const saved = JSON.parse(JSON.stringify(world.serialize()))
+    world = createGameWorld(saved.saveSeed)
+    world.restore(saved)
+    for (let day = 0; day < 365 && world.getExecutionSummary(projectId)!.reworkStatus === 'active'; day++) {
+      world.advanceSimulation(1)
+    }
+    expect(world.getExecutionSummary(projectId)).toMatchObject({ coreIntensity: intensity, reworkStatus: 'completed' })
+    expect(world.getExecutionProject(projectId)!.project.snapshotId).not.toBe(snapshotId)
+    expect(world.getExecutionProject(executionId)).toBe(world.getExecutionProject(projectId))
+    for (let day = 0; day < 365 && world.getExecutionProject(projectId)!.project.state !== 'READY_TO_DELIVER'; day++) {
+      world.advanceSimulation(1)
+    }
+    expect(world.getDeliveryGateEvaluation(projectId, 'full', true).pass).toBe(true)
+  })
+
+  it('mirrors legacy cancellation into the execution lifecycle and releases future work', () => {
+    const world = setup()
+    const created = world.createExecutionProject(draft({ requestId: 'rec03-cancel-test', budgetCapacityCents: 2_000_000 }))
+    expect(created.success).toBe(true)
+    const projectId = world.world.projects[0]!.id
+    expect(world.getExecutionProject(projectId)!.project.state).toBe('ACTIVE')
+    expect(world.cancelProject(projectId).success).toBe(true)
+    world.advanceSimulation(1)
+    expect(world.world.projects[0]!.phase).toBe('CANCELLED')
+    expect(world.getExecutionProject(projectId)!.project.state).toBe('CANCELLED')
   })
 })

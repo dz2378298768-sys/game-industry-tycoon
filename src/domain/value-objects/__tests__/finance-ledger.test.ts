@@ -8,6 +8,30 @@ import { FIN_ERROR, FinanceError, LedgerInconsistentError } from '@domain/entiti
 import { makeLedger, makeInput, postAdvance, DAY } from './finance-fixtures'
 
 describe('TC-01 / INV-1：唯一现金入口与派生余额（F-01 方案 a）', () => {
+  it('跨公司批次失败后，余额索引和流水一起回滚', () => {
+    const ledger = makeLedger()
+    ledger.registerCompany('c2')
+    postAdvance(ledger, 'c1', 1_000, 0)
+    const credit = makeInput({
+      companyId: 'c1', idempotencyKey: 'asset:sale', amountCents: 300, category: 'asset_sale', day: 1, description: 'Asset sale',
+    })
+    const debit = makeInput({
+      companyId: 'c2', idempotencyKey: 'asset:purchase', amountCents: -300, category: 'asset_sale', day: 1, description: 'Asset purchase',
+    })
+
+    expect(ledger.bulkPostTransactions([credit, debit]).success).toBe(false)
+    expect(ledger.getCashBalance('c1')).toBe(ledger.sumTransactions('c1'))
+    expect(ledger.getCashBalance('c1')).toBe(1_000)
+    expect(ledger.getCashBalance('c2')).toBe(0)
+
+    postAdvance(ledger, 'c2', 500, 0)
+    expect(ledger.bulkPostTransactions([credit, debit]).success).toBe(true)
+    const restored = new UnifiedLedger()
+    restored.replay(ledger.getAllTransactions(), ['c1', 'c2'])
+    expect(restored.getCashBalance('c1')).toBe(1_300)
+    expect(restored.getCashBalance('c2')).toBe(200)
+  })
+
   it('所有现金变动均经 postTransaction；cashBalanceCents == Σ全部 amountCents', () => {
     const ledger = makeLedger()
     postAdvance(ledger, 'c1', 12_000_000, 0) // $120,000 = 12_000_000 cents

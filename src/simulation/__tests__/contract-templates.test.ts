@@ -253,6 +253,20 @@ describe('M3-B 合同三模板', () => {
     expect(parsed.ok).toBe(true)
     if (!parsed.ok) return
     expect(parsed.state.publishingContracts[0]!.template).toBe('channel')
+    const { svc } = setup({ ...world, publishingContracts: [] })
+    const signed = svc.signTemplate({ ...world, publishingContracts: [] }, {
+      productId: D_PRODUCT_ID,
+      template: 'co_marketing',
+      partnerId: 'global-star',
+      ratePercent: 35,
+      durationDays: 30,
+      marketingCommitmentCents: 10_000,
+    }, 0)
+    expect(signed.ok).toBe(true)
+    expect(parseSave(JSON.parse(JSON.stringify(signed.world)))).toMatchObject({
+      ok: true,
+      state: { publishingContracts: [{ template: 'co_marketing', ratePercent: 35 }] },
+    })
   })
 
   it('C07 签署前模拟：同口径历史窗口估算与实际 12 个月偏差 ≤ 20%', () => {
@@ -276,6 +290,11 @@ describe('M3-B 合同三模板', () => {
       partnerId: 'global-star',
     }
     const estimate = estimateContractProceeds(world, cmd, 91)
+    expect(estimateContractProceeds(world, { ...cmd, durationDays: 30 }, 91)).toMatchObject({
+      horizonDays: 30,
+      projectedNetCents: 30 * 1_000_000,
+      projectedPlayerProceedsCents: 6 * 1_000_000,
+    })
     expect(estimate.projectedNetCents).toBe(365 * 1_000_000)
     expect(estimate.worstNetCents).toBe(Math.round(365 * 1_000_000 * 0.5))
     const signed = svc.signTemplate(world, cmd, 91)

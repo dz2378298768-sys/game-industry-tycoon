@@ -6,12 +6,19 @@ import { completionRatio } from '@simulation/systems/project-progress'
 interface Props { onNavigate: (route: string) => void }
 
 export const Overview: React.FC<Props> = ({ onNavigate }) => {
-  const { company, employees, projects, products } = useGameStore()
+  const { company, employees, projects, products, locale } = useGameStore()
 
   const activeProjects = projects.filter(p => p.phase !== 'LAUNCHED' && p.phase !== 'CANCELLED')
   const hiredEmployees = employees.filter(e => e.status === 'hired')
 
   const city = content.cities.find(c => c.id === company?.cityId)
+  const firstProjectStep = company?.status === 'active' && products.length === 0
+    ? activeProjects.length === 0
+      ? { hint: 'overview.first.plan', route: 'newProject', action: 'nav.newProject' }
+      : hiredEmployees.length === 0
+        ? { hint: 'overview.first.hire', route: 'hire', action: 'nav.hire' }
+        : { hint: 'overview.first.progress', route: 'projects', action: 'nav.projects' }
+    : null
 
   return (
     <div>
@@ -20,7 +27,7 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
         {company ? (
           <>
             <p className="muted mb-16" style={{ fontSize: 13 }}>
-              {company.name} · {city?.displayNameZh ?? city?.displayName ?? company.cityId}
+              {company.name} · {(locale === 'zh-CN' ? city?.displayNameZh : city?.displayName) ?? company.cityId}
             </p>
             <div className="kpi-grid">
               <div className="kpi-card">
@@ -41,6 +48,15 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
           <p className="muted">{t('error.noCompany')}</p>
         )}
       </div>
+
+      {firstProjectStep && (
+        <div className="panel">
+          <p className="mb-16">{t(firstProjectStep.hint)}</p>
+          <button type="button" className="btn btn-small" onClick={() => onNavigate(firstProjectStep.route)}>
+            {t(firstProjectStep.action)}
+          </button>
+        </div>
+      )}
 
       <div className="panel">
         <h2>{t('overview.recentEmployees')}</h2>
@@ -131,7 +147,7 @@ export const Overview: React.FC<Props> = ({ onNavigate }) => {
               {products.map(p => (
                 <tr key={p.id}>
                   <td>{p.name}</td>
-                  <td>{p.genreId}</td>
+                  <td>{t(`genre.${p.genreId}`)}</td>
                   {/* FIX-1：不合成平均分，五维逐项展示；D-02 产品五维向量尚未接线 → fail-closed '—' */}
                   <td data-testid="quality-design">—</td>
                   <td data-testid="quality-implementation">—</td>

@@ -1,0 +1,2 @@
+export const MENTORSHIP_COST_CENTS = 100_000
+export const MENTORSHIP_COOLDOWN_DAYS = 30

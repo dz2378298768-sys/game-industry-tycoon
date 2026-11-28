@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-ssr/
+artifacts/pc-build/
 
 # build / type info
 *.tsbuildinfo
@@ -14,6 +15,7 @@ dist-ssr/
 # logs
 *.log
 npm-debug.log*
+artifacts/local-logs/
 
 # editor / OS
 .DS_Store

@@ -19,6 +19,7 @@ import {
   applyAwarenessDecay,
   MARKETING_BUDGET_MAX_CENTS,
   MARKETING_BUDGET_MIN_CENTS,
+  productMarketingSpendKey,
   splitBudgetAcrossMarkets,
 } from '@domain/value-objects'
 import { marketingScaleKeyOf } from './sales-formulas'
@@ -316,7 +317,7 @@ export function tickMarketing(world: WorldState, day: number, deps: MarketingDep
     const product = productsById.get(campaign.productId)
     if (product === undefined || !isInvestable(product)) continue
 
-    const key = `marketing:${product.id}:${campaign.channel}:${day}`
+    const key = productMarketingSpendKey(product.id, campaign.channel, day)
     const posted = deps.finance.postTransaction({
       idempotencyKey: key,
       companyId: product.companyId,

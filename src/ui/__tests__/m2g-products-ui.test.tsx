@@ -140,7 +140,7 @@ describe('M2-G 产品详情', () => {
 
   it('G09 营销预算三渠道按元→分提交', () => {
     render(<ProductDetail productId="PROJ-001" onNavigate={vi.fn()} />)
-    const inputs = screen.getAllByPlaceholderText('预算（元/天）')
+    const inputs = screen.getAllByPlaceholderText('预算（美元/天）')
     fireEvent.change(inputs[0]!, { target: { value: '100' } })
     fireEvent.click(screen.getAllByText('应用')[0]!)
     expect(mockStore.setMarketingBudget).toHaveBeenCalledWith('PROJ-001', 'social', 10_000)

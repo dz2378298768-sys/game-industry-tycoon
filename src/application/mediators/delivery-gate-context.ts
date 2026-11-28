@@ -14,18 +14,21 @@
  *    genre→archetype 映射是确定性的游戏规则，不是随机或手写 pass。
  */
 import { createP1Catalog, loadVocabulary } from '@content/d04-vocabulary'
-import { REC03_MODULES } from '@content/rec03-content'
+import { REC03_BASELINE_CAPABILITIES, REC03_MODULES } from '@content/rec03-content'
 import genreSegmentAffinity from '@content/genre-segment-affinity.json'
 import { DEFAULT_COMPLETENESS_TUNING } from '@domain/value-objects/product-completeness-tuning'
-import { buildP1ChecklistTemplates } from '@domain/value-objects/product-completeness-checklists'
-import { evaluateDeliveryGate } from '@domain/value-objects/product-completeness-gate'
-import { deriveModuleContributions } from '@domain/value-objects/product-completeness-classification'
+import { buildP1ChecklistTemplates, getActiveChecklist } from '@domain/value-objects/product-completeness-checklists'
+import { buildDeliveryDecisionRecord } from '@domain/value-objects/product-completeness-gate'
+import { deriveSnapshotContentTier } from '@domain/value-objects/product-completeness-quality'
+import { coreIntensity, deriveModuleContributions, resolveArchetypeClass } from '@domain/value-objects/product-completeness-classification'
 import { checkHrbFeasibility } from '@domain/value-objects/product-blueprint-hrb'
 import { revalidationGate } from '@domain/value-objects/product-blueprint-revalidation'
 import { frozenPayloadHash } from '@domain/value-objects/product-blueprint-lifecycle'
 import { DEFAULT_BLUEPRINT_TUNING } from '@domain/value-objects/product-blueprint-tuning'
+import { estimateTechRisk } from '@domain/value-objects/product-blueprint-estimation'
 import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
-import type { EvaluationContext, DeliveryGateResult } from '@domain/entities/product-completeness'
+import type { UnifiedLedger } from '@domain/entities/finance'
+import type { EvaluationContext, DeliveryGateResult, DeliveryDecisionRecord } from '@domain/entities/product-completeness'
 import type {
   ContentPack,
   DesignVersionSnapshot,
@@ -40,6 +43,7 @@ import type {
 } from '@domain/entities/product-blueprint'
 import type { Project } from '@domain/entities/project'
 import type { DeliveryForm } from '@domain/entities/project-execution'
+import { inspectExecutionQa } from '@application/queries/execution-qa'
 
 export type FieldProvenanceKind = 'production' | 'degraded'
 
@@ -52,6 +56,8 @@ export interface FieldProvenance {
 export interface RuntimeGateInput {
   execution: ProjectExecutionState
   project: Project
+  /** 账本只读投影；用于从 expenseTxIds 派生交付前实际成本。 */
+  ledger?: UnifiedLedger
   /** 真实日历日（GameWorld.dayIndex），用于 assessedAt / 快照 takenAt。 */
   dayIndex: number
   /** UI 披露勾选（G-9）；仅在玩家确认提交后为 true。 */
@@ -61,11 +67,22 @@ export interface RuntimeGateInput {
   snapshot?: DesignVersionSnapshot | undefined
 }
 
+export interface RuntimeBuildFacts {
+  /** D-02 交付前/交付时冻结的内容档位。 */
+  deliveredTier: number | null
+  plannedTier: number | null
+  costEst: number | null
+  /** 账本没有可追溯支出时为 null，禁止用 0 代替。 */
+  actualCost: number | null
+}
+
 export interface RuntimeGateEvaluation {
   context: EvaluationContext
   result: DeliveryGateResult
+  decision: DeliveryDecisionRecord
   provenance: readonly FieldProvenance[]
   form: DeliveryForm
+  coreIntensityGap?: { current: number; required: number }
 }
 
 /** D02 公式版本常量（与 DEFAULT_COMPLETENESS_TUNING.formulaVersion 同源）。 */
@@ -261,6 +278,76 @@ function deriveHrbVerdict(execution: ProjectExecutionState) {
   ).verdict
 }
 
+/** 冻结快照的计划内容档位：所有绑定内容包 tier 的确定性总和。 */
+function plannedTierFromSnapshot(snapshot: DesignVersionSnapshot): number | null {
+  const tier = deriveSnapshotContentTier(snapshot)
+  return Number.isSafeInteger(tier) && tier >= 0 ? tier : null
+}
+
+/**
+ * REC-05 BuildFacts 唯一运行时来源。
+ *
+ * 交付前 READY_TO_DELIVER 表示正常 WP 已完成，因此交付档位等于冻结快照的
+ * 计划档位。实际成本只读取 ExecutionProject.expenseTxIds 对应的账本支出；
+ * 任一交易不可追溯即返回 null，交由提交层 fail-closed。
+ */
+export function deriveRuntimeBuildFacts(
+  execution: ProjectExecutionState,
+  snapshot: DesignVersionSnapshot | null,
+  ledger?: UnifiedLedger,
+): RuntimeBuildFacts {
+  // 旧版 open-content-modules 项目没有 REC-03 快照；其空内容结构的权威档位为 0。
+  // 该兼容分支不影响 REC-03 canonical 项目，canonical 项目必须传入冻结快照。
+  const plannedTier = snapshot === null
+    ? execution.project.formulaVersion === 'open-content-modules' ? 0 : null
+    : plannedTierFromSnapshot(snapshot)
+  const costEst = Number.isSafeInteger(execution.project.costEstCents) && execution.project.costEstCents >= 0
+    ? execution.project.costEstCents
+    : null
+
+  let actualCost: number | null = null
+  const legacy = execution.project.formulaVersion === 'open-content-modules'
+  const ids = new Set(execution.expenseTxIds)
+  if (ledger !== undefined && ids.size === execution.expenseTxIds.length &&
+      (legacy ? ids.size > 0 : execution.worklogs.length > 0)) {
+    const expected = new Map<string, number>()
+    for (const log of execution.worklogs) {
+      if (log.capacityAppliedCents <= 0) continue
+      const key = `${log.day}:${log.workPackageId}`
+      expected.set(key, (expected.get(key) ?? 0) + log.capacityAppliedCents)
+    }
+    let total = 0
+    let valid = true
+    for (const txId of ids) {
+      const tx = ledger.getTransactionById(txId)
+      if (
+        tx === undefined ||
+        tx.companyId !== execution.project.companyId ||
+        tx.category !== 'project_expense' ||
+        tx.reversedBy !== null ||
+        !Number.isSafeInteger(tx.amountCents) ||
+        tx.amountCents >= 0
+      ) {
+        valid = false
+        break
+      }
+      const key = `${tx.day}:${tx.referenceId}`
+      if (!legacy && expected.get(key) !== -tx.amountCents) {
+        valid = false
+        break
+      }
+      expected.delete(key)
+      total += -tx.amountCents
+    }
+    if (valid && Number.isSafeInteger(total) && (legacy || expected.size === 0)) actualCost = total
+  }
+
+  const deliveredTier = execution.project.state === 'READY_TO_DELIVER' || execution.project.state === 'COMPLETED'
+    ? plannedTier
+    : null
+  return { deliveredTier, plannedTier, costEst, actualCost }
+}
+
 /**
  * 生产路径求值入口：真实状态 → EvaluationContext → evaluateDeliveryGate。
  * 返回完整 provenance，供实施报告逐项标注 production / degraded(NOT_VERIFIED)。
@@ -316,7 +403,20 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
     },
   }
 
-  const snapshot: DesignVersionSnapshot = {
+  const frozenSnapshot = input.snapshot
+  const capabilities = frozenSnapshot === undefined ? {} : REC03_BASELINE_CAPABILITIES
+  const oldEstimates = frozenSnapshot?.estimates
+  const currentTechRisk = oldEstimates === undefined || oldEstimates === null ? null : estimateTechRisk({
+    structure: frozen,
+    templatesById,
+    archetype: null,
+    capabilities,
+    platformTechStandards: catalog.platforms
+      .filter((platform) => frozen.positioning.platformTargets.includes(platform.platformId))
+      .flatMap((platform) => platform.techStandards),
+    synergyPenaltySum: 0,
+  }, oldEstimates.workUnits, DEFAULT_BLUEPRINT_TUNING)
+  const snapshot: DesignVersionSnapshot = frozenSnapshot === undefined ? {
     snapshotId: execution.project.snapshotId,
     versionId: execution.project.versionId,
     payloadHash: frozenPayloadHash(frozen),
@@ -324,7 +424,19 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
     templateRevisionRefs: {},
     estimates,
     takenAt: execution.project.createdAt,
+  } : currentTechRisk === null ? frozenSnapshot : {
+    ...frozenSnapshot,
+    estimates: {
+      ...oldEstimates!,
+      techRisk: { ...oldEstimates!.techRisk, gates: currentTechRisk.gates, unsatisfied: currentTechRisk.unsatisfied, rTech: currentTechRisk.rTech,
+        maxRisk: Math.max(currentTechRisk.rTech, oldEstimates!.techRisk.rSynergy, oldEstimates!.techRisk.rScope),
+        riskLevel: oldEstimates!.techRisk.rSynergy > currentTechRisk.maxRisk ? oldEstimates!.techRisk.riskLevel : currentTechRisk.riskLevel,
+      },
+    },
   }
+
+  const runtimeBuildFacts = deriveRuntimeBuildFacts(execution, input.snapshot ?? null, input.ledger)
+  const qaReport = input.snapshot === undefined ? null : inspectExecutionQa(execution, input.snapshot)
 
   // revalidation 用真实领域闸门对派生结构求值（fail-closed，不伪造 pass）。
   const revalidationResult = revalidationGate({
@@ -340,14 +452,20 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
     snapshot,
     templatesById,
     moduleContributions: deriveModuleContributions(snapshot),
-    // QA 缺陷明细无生产来源：空数组是诚实缺省（NOT_VERIFIED，E 级缺陷检测不可用）。
-    defects: [],
-    // 首次交付无 Build；已交付则来自真实构建记录（P2 重交付路径）。
-    buildFacts: null,
+    defects: qaReport?.findings ?? [],
+    // 交付前使用同一冻结快照 + 账本派生事实；不依赖尚未创建的 Build。
+    buildFacts: runtimeBuildFacts.deliveredTier !== null
+      ? {
+          deliveredTier: runtimeBuildFacts.deliveredTier,
+          ...(runtimeBuildFacts.plannedTier !== null ? { plannedTier: runtimeBuildFacts.plannedTier } : {}),
+          costEst: runtimeBuildFacts.costEst,
+          actualCost: runtimeBuildFacts.actualCost,
+        }
+      : null,
     archiveSimilarity: 'unavailable_p1',
     marketProfile: null,
     platforms: catalog.platforms,
-    capabilities: {},
+    capabilities,
     revalidation: { pass: revalidationResult.pass },
     hrbVerdict: deriveHrbVerdict(execution),
     productFields: { finalTitle: project.name },
@@ -357,23 +475,46 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
     formulaVersion: D02_FORMULA_VERSION,
   }
 
-  const result = evaluateDeliveryGate(
-    context,
-    buildP1ChecklistTemplates(DEFAULT_COMPLETENESS_TUNING),
-    form,
-    DEFAULT_COMPLETENESS_TUNING,
-  )
+  const tuning = DEFAULT_COMPLETENESS_TUNING
+  const templates = buildP1ChecklistTemplates(tuning)
+  const decision = buildDeliveryDecisionRecord(context, templates, form, tuning)
+  const { archetypeClass } = resolveArchetypeClass(context, tuning)
+  const checklist = getActiveChecklist(templates, archetypeClass, form)
+  const coreRequirement = decision.gateResult.blockingUnmet.includes('N-01')
+    ? checklist.items.find((item) => item.itemId === 'N-01')?.predicate
+    : undefined
+  const coreIntensityGap = coreRequirement?.kind === 'depthAtLeast' && coreRequirement.alternativeMinIntensity !== undefined
+    ? { current: coreIntensity(context), required: coreRequirement.alternativeMinIntensity }
+    : undefined
 
   const provenance: FieldProvenance[] = [
-    { field: 'snapshot', kind: 'production', source: 'ExecutionProject.snapshotId/versionId + 真实项目名/原型/平台目录派生' },
-    { field: 'templatesById', kind: 'production', source: 'D04 已发布原型 typeAffinity 派生' },
+    { field: 'snapshot', kind: input.snapshot === undefined ? 'degraded' : 'production', source: input.snapshot === undefined ? '旧版设计投影' : '立项或返工时冻结的设计快照' },
+    { field: 'templatesById', kind: 'production', source: input.snapshot === undefined ? 'D04 已发布原型 typeAffinity 派生' : 'REC-03 模块目录' },
     { field: 'moduleContributions', kind: 'production', source: 'deriveModuleContributions(snapshot) 真实派生' },
-    { field: 'defects', kind: 'degraded', source: 'QA 缺陷明细无生产来源；NOT_VERIFIED（E 级缺陷检测不可用）' },
-    { field: 'buildFacts', kind: 'degraded', source: '首次交付无 Build；重交付路径待接（NOT_VERIFIED）' },
-    { field: 'archiveSimilarity', kind: 'production', source: "P1 定义常量 'unavailable_p1'" },
-    { field: 'marketProfile', kind: 'production', source: 'C1 genre-segment-affinity 真实数据（经 snapshot.estimates.marketFit）' },
+    {
+      field: 'defects',
+      kind: qaReport?.status === 'verified' ? 'production' : 'degraded',
+      source: qaReport?.status === 'verified' ? '冻结模块、工作包与实际 QA 产出记录' : '无完成的冻结版本 QA 检查（UNAVAILABLE）',
+    },
+    {
+      field: 'buildFacts.deliveredTier',
+      kind: runtimeBuildFacts.deliveredTier === null ? 'degraded' : 'production',
+      source: runtimeBuildFacts.deliveredTier === null
+        ? 'READY_TO_DELIVER 前缺少可用冻结快照（UNAVAILABLE）'
+        : 'READY_TO_DELIVER + 冻结快照 contentPacks Σ tier',
+    },
+    {
+      field: 'buildFacts.actualCost',
+      kind: runtimeBuildFacts.actualCost === null ? 'degraded' : 'production',
+      source: runtimeBuildFacts.actualCost === null
+        ? 'expenseTxIds 无完整账本支出来源（UNAVAILABLE；提交阻断）'
+        : 'ExecutionProject.expenseTxIds → UnifiedLedger 负向支出汇总',
+    },
+    { field: 'buildFacts.costEst', kind: runtimeBuildFacts.costEst === null ? 'degraded' : 'production', source: 'ExecutionProject.costEstCents（非有限值为 UNAVAILABLE）' },
+    { field: 'archiveSimilarity', kind: 'degraded', source: 'P1 不计算档案相似度' },
+    { field: 'marketProfile', kind: 'production', source: input.snapshot === undefined ? '旧版 C1 类型与客群亲和数据' : '冻结快照的 D-01 市场估算' },
     { field: 'platforms', kind: 'production', source: 'D04 已发布平台目录' },
-    { field: 'capabilities', kind: 'degraded', source: 'D-06 能力等级无生产来源；NOT_VERIFIED' },
+    { field: 'capabilities', kind: frozenSnapshot === undefined ? 'degraded' : 'production', source: 'P1 工作室基础二维工具，进阶领域尚无能力数据' },
     { field: 'revalidation', kind: 'production', source: 'revalidationGate() 对派生结构真实求值' },
     { field: 'hrbVerdict', kind: 'production', source: 'checkHrbFeasibility() 对玩家 HRB/预算/成本真实求值' },
     { field: 'productFields.finalTitle', kind: 'production', source: 'legacy Project.name（玩家立项输入）' },
@@ -383,5 +524,8 @@ export function evaluateRuntimeDeliveryGate(input: RuntimeGateInput): RuntimeGat
     { field: 'formulaVersion', kind: 'production', source: 'DEFAULT_COMPLETENESS_TUNING.formulaVersion' },
   ]
 
-  return { context, result, provenance, form }
+  return {
+    context, result: decision.gateResult, decision, provenance, form,
+    ...(coreIntensityGap === undefined ? {} : { coreIntensityGap }),
+  }
 }

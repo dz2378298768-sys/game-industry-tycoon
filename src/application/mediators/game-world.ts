@@ -12,18 +12,29 @@ import { seedInitialAwareness } from '@content/market-inputs'
 import { awarenessByScopeOf } from '@simulation/services/product-awareness'
 import { dayIndexToGregorian } from '@domain/value-objects/day-index'
 import { computeAvailableCash, computeRunwayMonths, annotateCommitmentsForRunway, computeCashForecast } from '@domain/value-objects/finance-formulas'
-import { evaluateRuntimeDeliveryGate } from './delivery-gate-context'
+import { deriveRuntimeBuildFacts, evaluateRuntimeDeliveryGate } from './delivery-gate-context'
+import { currentMarketCompetitors } from '@application/queries/market-feedback'
+import { inspectExecutionQa, type ExecutionQaReport } from '@application/queries/execution-qa'
 import { DEFAULT_FINANCE_TUNING } from '@domain/value-objects/finance-tuning'
 import { reasonCodesForSignals } from '@domain/value-objects/finance-crisis'
 import {
   createProjectExecution,
   setupBudgetCommitment,
   estimateCost,
+  cancelProject as cancelExecutionProject,
+  advanceProjectDay,
+  pauseProject as pauseExecutionProject,
+  resumeProject as resumeExecutionProject,
   planRework,
   beginRework,
+  cancelRework,
+  completeRework,
   submitDelivery,
 } from '@domain/value-objects/project-execution-engine'
+import { progressVector } from '@domain/value-objects/project-execution-daily'
 import type { ProjectExecutionState } from '@domain/value-objects/project-execution-engine'
+import { isTerminalState } from '@domain/entities/project-execution'
+import type { TeamMember } from '@domain/entities/project-execution'
 import {
   computeChangeWorkUnits,
   computeReworkCostBreakdown,
@@ -31,14 +42,19 @@ import {
   type ReworkAffectedItemInput,
 } from '@domain/value-objects/project-execution-rework'
 import { DEFAULT_PROJECT_FORMULA_PARAMS, DISCIPLINE_ORDER } from '@domain/value-objects/project-execution-tuning'
-import { ProjectError } from '@domain/entities/project-execution'
+import { PROJ_ERROR, ProjectError } from '@domain/entities/project-execution'
 import type { ReworkCategory, ReworkMode, Discipline as ExecutionDiscipline } from '@domain/entities/project-execution'
 import type { CrisisLevel } from '@domain/entities/finance'
 import {
   createCompanyAssetSoldEvent,
   createProductLifecycleChangedEvent,
 } from '@domain/events'
-import { AI_COMPANIES, createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
+import { createAiStaff, findAiSpec, seedDueAiCompanies } from '@content/ai-companies'
+import { createOpeningMarketProducts, seedRegionalLaunchAwareness } from '@content/opening-market'
+import { STUDIO_RESEARCH } from '@content/studio-research'
+import { buildDemandScopesForDay } from '@content/c1-content'
+import { CATALOG_UPDATE_COST_CENTS, CATALOG_UPDATE_COOLDOWN_DAYS, REGIONAL_CAMPAIGN_COST_CENTS } from '@content/catalog-maintenance'
+import { MENTORSHIP_COOLDOWN_DAYS, MENTORSHIP_COST_CENTS } from '@content/studio-mentorship'
 import { P1_UI_TUNING } from '@content/p1-ui-tuning'
 import genreSegmentAffinity from '@content/genre-segment-affinity.json'
 import genresContent from '@content/genres.json'
@@ -50,6 +66,10 @@ import { DailyScheduler } from '@simulation/phase/daily-scheduler'
 import { PersonnelService, D03_SCHEMA_VERSION } from '@simulation/services/personnel-service'
 import { migrateEmployees } from '@domain/value-objects/personnel-migration'
 import { DEFAULT_PERSONNEL_PARAMS, createPersonnelSnapshot } from '@domain/value-objects/personnel-tuning'
+import { recruitLeadDays } from '@domain/value-objects/personnel-candidates'
+import { contractEndDayOf } from '@domain/value-objects/personnel-status'
+import { countDistinctMonths, monthKeyOf } from '@domain/value-objects/finance-commitment'
+import { startOfMonthDay } from '@domain/value-objects/personnel-salary'
 import { RefundService, type PlayerRefundRequest, type RefundRequestResult } from '@simulation/services/refund-service'
 import {
   ProductPricingService,
@@ -61,7 +81,7 @@ import {
 import { MarketingService } from '@simulation/services/marketing-service'
 import type { MarketingChannel } from '@domain/value-objects/marketing-response'
 import { hasFullControl, estimateContractProceeds, type ContractEstimate } from '@simulation/services/contract-estimate'
-import { ContractService } from '@simulation/services/contract-service'
+import { ContractService, templateRateRange, validateTemplateContract, type SignTemplateCmd } from '@simulation/services/contract-service'
 import { uuid } from '@domain/types'
 import { createNewCompany } from '@domain/entities/company'
 import { TUNING } from '@content/tuning'
@@ -78,19 +98,22 @@ import { defectLevelOf } from '@simulation/systems/qa-quality'
 import type { Company } from '@domain/entities/company'
 import type { Employee } from '@domain/entities/employee'
 import type { Project } from '@domain/entities/project'
+import type { D03Discipline } from '@domain/entities/personnel'
+import type { Rec04RecruitingGuard } from '@simulation/services/world-state'
 import type { Product } from '@domain/entities/product'
 import type { DomainEvent } from '@domain/events'
 import type { EmployeeRole, Discipline, ProjectRole } from '@domain/enums'
 import type { TeamAssignment } from '@domain/value-objects'
 import { topUpIdempotencyKey, createTopUpChangeLogEntry } from '@domain/value-objects'
-import { REC03_CONTENT_PACKS, REC03_FORMULA_VERSION, REC03_MODULES, REC03_SEGMENT_MAP, REC03_SLOTS, validateRec03Catalog } from '@content/rec03-content'
+import { REC03_BASELINE_CAPABILITIES, REC03_CONTENT_PACKS, REC03_FORMULA_VERSION, REC03_MODULES, REC03_SEGMENT_MAP, REC03_SLOTS, validateRec03Catalog } from '@content/rec03-content'
 import { createP1Catalog } from '@content/d04-vocabulary'
 import { estimateFourChannels } from '@domain/value-objects/product-blueprint-estimation'
 import { checkCompositionRules, type CompositionRules } from '@domain/value-objects/product-blueprint-composition'
+import { revalidationGate } from '@domain/value-objects/product-blueprint-revalidation'
 import { DEFAULT_BLUEPRINT_TUNING } from '@domain/value-objects/product-blueprint-tuning'
 import { lockVersion } from '@domain/value-objects/product-blueprint-lifecycle'
 import type { BlueprintVersion, DesignVersionSnapshot, FrozenBlueprint, ModuleInstance, PositioningProfile, ReleaseForm } from '@domain/entities/product-blueprint'
-import { type DecompositionInput } from '@domain/value-objects/project-execution-decomposition'
+import { decomposeWorkPackages, type DecompositionInput } from '@domain/value-objects/project-execution-decomposition'
 
 export interface CommandOutcome<T = undefined> {
   success: boolean
@@ -126,6 +149,9 @@ export interface RecruitImpactPreview {
   after: GameFinancialOverview
   feeCents: number
   salaryMonthlyCents: number
+  /** REC-04B：确认时冻结的预计到岗日与候选有效期，供确认卡复用同一领域计算。 */
+  arrivalDay: number
+  candidateExpiresAtDay: number
 }
 
 /** CODE-07B P-02：市场调研结果卡（ADJ-16 R-6 竞品档案条数 + 需求方向标签）。 */
@@ -156,8 +182,17 @@ export interface ExecutionProjectPreview {
 }
 
 export type BlueprintDraftInput =
-  | { kind: 'draft'; requestId: string; workingTitle: string; genreId: string; primaryTypeId: string; targetSegmentClaims: string[]; platformTargets: string[]; modules: Array<{ templateId: string; slotId: string; instanceId: string; intensity: 1 | 2 | 3 | 4 | 5; depthSelection: import('@domain/entities/product-blueprint').DepthSelection; optionSelections: Record<string, string>; contentPackId: string | null }>; deliveryForm: ReleaseForm; hrb: number; budgetCapacityCents: number }
+  | { kind: 'draft'; requestId: string; workingTitle: string; genreId: string; primaryTypeId: string; targetSegmentClaims: string[]; platformTargets: string[]; modules: Array<{ templateId: string; slotId: string; instanceId: string; intensity: 1 | 2 | 3 | 4 | 5; depthSelection: import('@domain/entities/product-blueprint').DepthSelection; optionSelections: Record<string, string>; contentPackId: string | null }>; deliveryForm: ReleaseForm; hrb: number; budgetCapacityCents: number; scopePolicy?: 'recommended' | 'custom'; predecessorProductId?: string }
   | { kind: 'snapshotRef'; requestId: string; snapshotId: string; versionId: string; workingTitle: string; genreId: string; plannedLaunchDay: number; hrb: number; budgetCapacityCents: number }
+
+interface Rec03SnapshotEntry {
+  snapshot: DesignVersionSnapshot
+  decomposition: DecompositionInput
+  projectId?: string
+  name: string
+  genreId: string
+  plannedLaunchDay: number
+}
 
 /** P-06：研发推进摘要（WP/Cap_d 瓶颈/Cost_est ratio verdict，内核同源派生）。 */
 export interface ExecutionSummary {
@@ -169,6 +204,12 @@ export interface ExecutionSummary {
   workPackages: Array<{ workPackageId: string; discipline: string; state: string; kind: string; baselineWorkUnits: number; remainingWorkUnits: number }>
   capacityByDiscipline: Record<string, number>
   bottleneckDiscipline: string | null
+  unstaffedDisciplines?: string[]
+  earliestCompletionDays?: number
+  remainingCostEstCents?: number
+  coreIntensity?: ModuleInstance['intensity']
+  reworkStatus?: 'active' | 'completed' | 'blocked'
+  qaReport?: ExecutionQaReport
 }
 
 /**
@@ -217,8 +258,16 @@ export interface DeliveryGateEvaluation {
   gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> }
   /** 失败 / 不可用原因码，逐条供 UI fail-closed 展示（U3 不回退）。 */
   reasonCodes: readonly string[]
+  /** D-02 表单资格和未满足清单，由真实 evaluateDeliveryGate 产物派生。 */
+  formQualification?: import('@domain/entities/product-completeness').DeliveryFormQualification
+  blockingUnmet: readonly string[]
+  coreIntensityGap?: { current: number; required: number }
+  /** 输入来源审计；degraded 字段仍需按当前披露口径处理。 */
+  provenance?: readonly import('./delivery-gate-context').FieldProvenance[]
   /** 不可用的结构化原因；可用时为 null。 */
   unavailableReason: string | null
+  unavailableReasonKey?: string
+  decision?: import('@domain/entities/product-completeness').DeliveryDecisionRecord
   /** 判定来源（'d02-evaluateDeliveryGate' | 'unavailable'）。 */
   source: string
   checkedAt: number | null
@@ -229,6 +278,11 @@ export interface DeliveryGateEvaluationInput {
   pass: boolean
   violations: ReadonlyArray<{ code: string; severity: string }>
   reasonCodes?: readonly string[]
+  formQualification?: import('@domain/entities/product-completeness').DeliveryFormQualification
+  blockingUnmet?: readonly string[]
+  coreIntensityGap?: { current: number; required: number }
+  provenance?: readonly import('./delivery-gate-context').FieldProvenance[]
+  decision?: import('@domain/entities/product-completeness').DeliveryDecisionRecord
   checkedAt?: number
   source?: string
 }
@@ -251,7 +305,8 @@ export class GameWorld {
   private readonly salesInputs: MarketInputProvider
   /** P-03/P-04：ExecutionProject 状态（内存暂存；存档序列化未包含 → OPEN-PROJ-EXEC-PERSIST） */
   private readonly executionProjects = new Map<string, ProjectExecutionState>()
-  private readonly rec03Snapshots = new Map<string, { snapshot: DesignVersionSnapshot; decomposition: DecompositionInput; projectId?: string; name: string; genreId: string; plannedLaunchDay: number }>()
+  private rec04RecruitingGuardByCompany: Record<string, Rec04RecruitingGuard> = {}
+  private readonly rec03Snapshots = new Map<string, Rec03SnapshotEntry>()
   private readonly rec03Requests = new Map<string, { hash: string; result: { projectId: string; snapshotId: string; versionId: string; commitmentId: string } }>()
   /**
    * 07B REVISION2：D-02 交付闸门评估判定快照（key=projectId::form）。
@@ -311,6 +366,8 @@ export class GameWorld {
     this.contracts = new ContractService(this.finance)
     this.scheduler = new DailyScheduler({
       finance: this.finance,
+      isExecutionProject: (projectId) => this.executionProjects.has(projectId),
+      advanceExecutionProjects: this.advanceProjectsBeforeCashCheck,
       sales: this.sales,
       refunds: this.refunds,
       pricing: this.pricing,
@@ -384,6 +441,7 @@ export class GameWorld {
       employments: this.world.employments ?? [],
       candidates: this.world.candidates ?? [],
       personEvents: this.world.personEvents ?? [],
+      pendingHires: this.world.pendingHires ?? [],
     }, this.world.personnelFormulaSnapshot)
     try {
       return fn()
@@ -393,9 +451,58 @@ export class GameWorld {
       this.world.employments = slice.employments
       this.world.candidates = slice.candidates
       this.world.personEvents = slice.personEvents
+      this.world.pendingHires = slice.pendingHires
       this.world.personnelFormulaSnapshot = slice.snapshot
       this.world.d03SchemaVersion = slice.d03SchemaVersion
     }
+  }
+
+  private syncRec04RecruitingGuardStates(state: WorldState = this.world): void {
+    for (const company of state.companies) {
+      const guard = this.rec04RecruitingGuardByCompany[company.id]
+      if (guard?.state !== 'active' || guard.projectId === null) continue
+      const project = state.projects.find((p) => p.id === guard.projectId || this.executionProjects.get(p.id)?.project.projectId === guard.projectId)
+      if (project?.phase === 'CANCELLED') {
+        guard.state = 'cancelled'
+        continue
+      }
+      const covered = new Set<D03Discipline>()
+      for (const employment of state.employments ?? []) {
+        if (employment.companyId !== company.id || !employment.occupiesPerson) continue
+        const discipline: D03Discipline | undefined = employment.role === 'designer' ? 'design'
+          : employment.role === 'programmer' ? 'code'
+            : employment.role === 'artist' ? 'art'
+              : employment.role === 'audio_designer' ? 'audio'
+                : employment.role === 'qa' ? 'qa' : undefined
+        if (discipline !== undefined && guard.requiredDisciplines.includes(discipline)) covered.add(discipline)
+      }
+      if (guard.requiredDisciplines.every((discipline) => covered.has(discipline))) guard.state = 'completed'
+    }
+    state.rec04RecruitingGuardByCompany = this.rec04RecruitingGuardByCompany
+  }
+
+  private refreshPlayerCandidatesImmediately(company: Company, projectId: string): void {
+    this.withPersonnel(() => {
+      const guard = this.rec04RecruitingGuardByCompany[company.id]
+      if (guard === undefined) return
+      if (guard.state !== 'eligible') return
+      guard.state = 'active'
+      guard.projectId = projectId
+      guard.supplementSequence = this.personnel.refreshCandidatePool(
+        this.dayIndex,
+        () => this.marketSalaryForCity(company.cityId),
+        'default',
+        { seedKey: guard.seedKey, requiredDisciplines: guard.requiredDisciplines, supplementSequence: guard.supplementSequence },
+      )
+    })
+    this.world.rec04RecruitingGuardByCompany = this.rec04RecruitingGuardByCompany
+  }
+
+  private activeCandidateGuard(company: Company): { seedKey: string; requiredDisciplines: D03Discipline[]; supplementSequence: number } | undefined {
+    const guard = this.rec04RecruitingGuardByCompany[company.id]
+    return guard?.state === 'active' && guard.projectId !== null
+      ? { seedKey: guard.seedKey, requiredDisciplines: guard.requiredDisciplines, supplementSequence: guard.supplementSequence }
+      : undefined
   }
 
   /**
@@ -424,6 +531,7 @@ export class GameWorld {
     state.persons = migration.persons
     state.employments = migration.employments
     state.personEvents = migration.personEvents
+    state.pendingHires = state.pendingHires ?? []
     state.candidates = []
     state.d03SchemaVersion = D03_SCHEMA_VERSION
     state.personnelFormulaSnapshot = createPersonnelSnapshot(state.currentDayIndex)
@@ -436,6 +544,7 @@ export class GameWorld {
       employments: this.world.employments ?? [],
       candidates: this.world.candidates ?? [],
       personEvents: this.world.personEvents ?? [],
+      pendingHires: this.world.pendingHires ?? [],
     }, this.world.personnelFormulaSnapshot)
     this.world.employees = this.personnel.reconcileEmployeeView(this.world.employees)
   }
@@ -460,16 +569,53 @@ export class GameWorld {
       employments: state.employments ?? [],
       candidates: state.candidates ?? [],
       personEvents: state.personEvents ?? [],
+      pendingHires: state.pendingHires ?? [],
     }, state.personnelFormulaSnapshot)
+    this.rec04RecruitingGuardByCompany = state.rec04RecruitingGuardByCompany ?? this.rec04RecruitingGuardByCompany
+    this.syncRec04RecruitingGuardStates(state)
     // S5-1：候选池每游戏日刷新一次（§12）
     const playerCompany = state.companies.find((c) => c.isPlayer)
     if (playerCompany !== undefined) {
-      this.personnel.refreshCandidatePool(
+      const guard = this.rec04RecruitingGuardByCompany[playerCompany.id]
+      const nextSequence = this.personnel.refreshCandidatePool(
         dayIndex,
         () => this.marketSalaryForCity(playerCompany.cityId),
         'default',
+        guard?.state === 'active' && guard.projectId !== null
+          ? { seedKey: guard.seedKey, requiredDisciplines: guard.requiredDisciplines, supplementSequence: guard.supplementSequence }
+          : undefined,
       )
+      if (guard?.state === 'active') guard.supplementSequence = nextSequence
     }
+    const arrivals = this.personnel.processPendingArrivals(
+      dayIndex,
+      (companyId) => state.companies.find((company) => company.id === companyId)?.status ?? 'dissolved',
+    )
+    for (const arrival of arrivals) {
+      if (state.employees.some((employee) => employee.id === arrival.employment.employmentId)) continue
+      state.employees.push({
+        id: arrival.employment.employmentId,
+        companyId: arrival.employment.companyId,
+        name: arrival.pendingHire.personId === arrival.employment.personId
+          ? (this.personnel.getPerson(arrival.employment.personId)?.displayName ?? arrival.employment.personId)
+          : arrival.employment.personId,
+        role: arrival.employment.role,
+        primarySkill: 'gameplay',
+        skillLevel: arrival.pendingHire.skillLevel,
+        salaryMonthlyCents: arrival.employment.salaryMonthlyCents,
+        contractStartDay: arrival.employment.startDay,
+        contractEndDay: arrival.employment.endDay,
+        morale: this.personnel.getPerson(arrival.employment.personId)?.baseMorale ?? TUNING.employee.startingMorale,
+        fatigue: TUNING.employee.startingFatigue,
+        experience: 0,
+        status: 'hired',
+        hireDay: arrival.employment.startDay,
+        version: 1,
+        createdAt: arrival.employment.startDay,
+        updatedAt: arrival.employment.startDay,
+      })
+    }
+    if (arrivals.length > 0) this.syncEmployeesFromWorld()
     const activeEmploymentIds = new Set<string>()
     let anyProjectInProduction = false
     for (const p of state.projects) {
@@ -487,15 +633,18 @@ export class GameWorld {
       },
     })
     const slice = this.personnel.toSlice()
+    this.syncRec04RecruitingGuardStates(state)
     return {
       ...state,
       persons: slice.persons,
       employments: slice.employments,
       candidates: slice.candidates,
       personEvents: slice.personEvents,
+      pendingHires: slice.pendingHires,
       personnelFormulaSnapshot: slice.snapshot,
       d03SchemaVersion: slice.d03SchemaVersion,
       employees: this.personnel.reconcileEmployeeView(state.employees),
+      rec04RecruitingGuardByCompany: this.rec04RecruitingGuardByCompany,
     }
   }
 
@@ -525,6 +674,14 @@ export class GameWorld {
       monthlyFixedExpenseCents: 0,
     })
     this.world.companies.push(company)
+    if (company.isPlayer) {
+      this.rec04RecruitingGuardByCompany[company.id] = {
+        state: 'eligible', projectId: null,
+        seedKey: `rec04a:${this.world.saveSeed}:player:${this.world.companies.filter((c) => c.isPlayer).length}`,
+        requiredDisciplines: ['design', 'code', 'art', 'audio', 'qa'], supplementSequence: 0,
+      }
+      this.world.rec04RecruitingGuardByCompany = this.rec04RecruitingGuardByCompany
+    }
 
     // 初始余额 0；启动资金只能由这一笔 advance 交易入账（幂等）
     this.finance.registerCompany(company.id)
@@ -537,11 +694,76 @@ export class GameWorld {
       description: '公司启动资金',
     })
     this.syncCash(company)
+    if (company.isPlayer && this.aiCompetitionEnabled && dayIndex === 0 && this.world.products.length === 0) {
+      this.seedAiCompanies(dayIndex)
+      const openingProducts = createOpeningMarketProducts(this.world.companies, dayIndex)
+      this.world = { ...this.world, products: [...this.world.products, ...openingProducts] }
+    }
     return company
   }
 
   getPlayerCompany(): Company | undefined {
     return this.world.companies.find((c) => c.isPlayer && c.status === 'active')
+  }
+
+  startStudioResearch(id: string): CommandOutcome {
+    const company = this.getPlayerCompany()
+    const research = STUDIO_RESEARCH.find((item) => item.id === id)
+    if (!company || !research) return { success: false, errorCode: 'research.unavailable' }
+    const schedule = company.researchCompletionDays ?? {}
+    if (schedule[id] !== undefined) return { success: true, idempotent: true }
+    if (Object.values(schedule).some((day) => day > this.dayIndex)) {
+      return { success: false, errorCode: 'research.busy' }
+    }
+    if ((this.getFinancialOverview()?.availableCashCents ?? 0) < research.costCents) {
+      return { success: false, errorCode: 'research.cash' }
+    }
+
+    const posted = this.finance.postTransaction({
+      idempotencyKey: `research:${company.id}:${id}`,
+      companyId: company.id,
+      day: this.dayIndex,
+      category: 'project_expense',
+      amountCents: -research.costCents,
+      referenceId: id,
+      description: 'Studio research',
+    })
+    if (!posted.success) return { success: false, errorCode: 'research.cash' }
+    company.researchCompletionDays = { ...schedule, [id]: this.dayIndex + research.durationDays }
+    this.syncCash(company)
+    return { success: true }
+  }
+
+  runMentorship(mentorId: string, learnerId: string, discipline: D03Discipline): CommandOutcome {
+    const company = this.getPlayerCompany()
+    const day = this.dayIndex
+    const contracts = this.world.employments ?? []
+    const eligible = (id: string) => contracts.find((item) => item.employmentId === id && item.companyId === company?.id
+      && (item.status === 'active' || item.status === 'probation'))
+    const mentor = eligible(mentorId)
+    const learner = eligible(learnerId)
+    const people = this.world.persons ?? []
+    const mentorPerson = people.find((person) => person.personId === mentor?.personId)
+    const learnerPerson = people.find((person) => person.personId === learner?.personId)
+    if (!company || !mentorPerson || !learnerPerson || (mentorPerson.skills.level[discipline] ?? 0) <= (learnerPerson.skills.level[discipline] ?? 0)) {
+      return { success: false, errorCode: 'mentorship.invalid' }
+    }
+    if (this.world.events.some((event) => event.type === 'StaffMentored' && event.payload.personId === learnerPerson.personId
+      && day - event.day < MENTORSHIP_COOLDOWN_DAYS)) return { success: false, errorCode: 'mentorship.cooldown' }
+    if ((this.getFinancialOverview()?.availableCashCents ?? 0) < MENTORSHIP_COST_CENTS) {
+      return { success: false, errorCode: 'mentorship.cash' }
+    }
+    const id = `mentorship:${learnerPerson.personId}:${day}`
+    const expense = this.finance.postTransaction({
+      idempotencyKey: id, companyId: company.id, day, category: 'project_expense',
+      amountCents: -MENTORSHIP_COST_CENTS, description: 'Staff mentorship', referenceId: learnerId,
+    })
+    if (!expense.success) return { success: false, errorCode: 'mentorship.cash' }
+    this.withPersonnel(() => this.personnel.recordMentoring(learnerId, discipline, day))
+    this.world.events.push({ id, type: 'StaffMentored', day, payload: { companyId: company.id, mentorId, personId: learnerPerson.personId, discipline } })
+    this.syncCash(company)
+    this.reconcileEmployeeView()
+    return { success: true }
   }
 
   /** 返回玩家公司不考虑 status（用于破产命令守卫） */
@@ -574,11 +796,34 @@ export class GameWorld {
     let list = this.withPersonnel(() => this.personnel.listCandidates())
     if (list.length === 0) {
       list = this.withPersonnel(() => {
-        this.personnel.refreshCandidatePool(this.dayIndex, () => this.marketSalaryForCity(company.cityId), 'default')
+        const guard = this.rec04RecruitingGuardByCompany[company.id]
+        const nextSequence = this.personnel.refreshCandidatePool(
+          this.dayIndex,
+          () => this.marketSalaryForCity(company.cityId),
+          'default',
+          this.activeCandidateGuard(company),
+        )
+        if (guard?.state === 'active') guard.supplementSequence = nextSequence
         return this.personnel.listCandidates()
       })
+      this.world.rec04RecruitingGuardByCompany = this.rec04RecruitingGuardByCompany
     }
     return list
+  }
+
+  listPendingHires(): import('@domain/entities/personnel').PendingHire[] {
+    return this.withPersonnel(() => this.personnel.listPendingHires(this.getRawPlayerCompany()?.id))
+  }
+
+  cancelPendingHire(pendingHireId: string): CommandOutcome<import('@domain/entities/personnel').PendingHire> {
+    const guard = this.assertCompanyActive()
+    if (!('id' in guard)) return guard
+    const result = this.withPersonnel(() => this.personnel.cancelPendingHire(pendingHireId, this.dayIndex))
+    if (!result.ok || !result.value) {
+      return { success: false, errorCode: result.error?.code, message: result.error?.message ?? '取消待到岗招聘失败' }
+    }
+    this.syncCash(guard)
+    return { success: true, result: result.value }
   }
 
   /** D03 候选池招聘转发（P-05）：playerOffer = 候选 askingSalary（§6.3 区间内），headcount 用管理容量。 */
@@ -608,33 +853,8 @@ export class GameWorld {
     if (!r.ok || !r.value) {
       return { success: false, errorCode: r.error!.code, message: r.error!.message }
     }
-    // 派生 Employee 视图同步（双轨桥，与 hireEmployee 同口径）：
-    // 池招聘复用既有 Person（R-D03-1），legacy Employee 以 employmentId 为主键新建，
-    // 使 reconcileEmployeeView 后续可按 id 对齐（reconcile 只更新已存在的行）。
-    const employment = r.value.employment
-    const legacyEmp: Employee = {
-      id: employment.employmentId,
-      companyId: employment.companyId,
-      name: r.value.person.displayName,
-      role: employment.role,
-      primarySkill: 'gameplay',
-      skillLevel: Math.max(1, Math.min(5, candidate.skillLevel)),
-      salaryMonthlyCents: employment.salaryMonthlyCents,
-      contractStartDay: employment.startDay,
-      contractEndDay: employment.endDay,
-      morale: r.value.person.baseMorale,
-      fatigue: TUNING.employee.startingFatigue,
-      experience: 0,
-      status: 'hired',
-      hireDay: employment.startDay,
-      version: 1,
-      createdAt: employment.startDay,
-      updatedAt: employment.startDay,
-    }
-    this.world.employees.push(legacyEmp)
-    this.world.employees = this.personnel.reconcileEmployeeView(this.world.employees)
-    this.syncEmployeesFromWorld()
     this.syncCash(company)
+    this.syncRec04RecruitingGuardStates()
     return { success: true, result: { feeCents: r.value.feeCents, arrivalDay: r.value.arrivalDay } }
   }
 
@@ -653,9 +873,16 @@ export class GameWorld {
     const tuning = DEFAULT_FINANCE_TUNING
     const salaryMonthlyCents = candidate.askingSalaryCents
     const feeCents = Math.round(salaryMonthlyCents * DEFAULT_PERSONNEL_PARAMS.recruitFeeMonths)
+    const person = this.withPersonnel(() => this.personnel.getPerson(candidate.personId))
+    const seniority = person?.seniority ?? 'junior'
+    const arrivalDay = this.dayIndex + recruitLeadDays(seniority, DEFAULT_PERSONNEL_PARAMS)
     const commitments = this.finance.getLedger().getCommitments(company.id)
     const month = monthKeyFromOffsetForRunway(dayIndexToGregorian(this.dayIndex))
-    // 追加假设承诺：一次性中介费（当日兑现）+ 月薪承诺（当月起）
+    const termMonths = DEFAULT_PERSONNEL_PARAMS.p1DefaultTermMonths
+    const salaryStartAt = startOfMonthDay(arrivalDay)
+    const salaryEndAt = contractEndDayOf(arrivalDay, termMonths)
+    const salaryPeriodCount = countDistinctMonths(salaryStartAt, salaryEndAt)
+    // 追加假设承诺沿用招聘命令的实际到岗日、薪资起算月和合同期限。
     const withHypothetical = [
       ...commitments,
       {
@@ -667,8 +894,8 @@ export class GameWorld {
         period: 'one_off',
         periodCount: 1,
         totalPlannedCents: feeCents,
-        startAt: this.dayIndex,
-        endAt: this.dayIndex,
+        startAt: arrivalDay,
+        endAt: arrivalDay,
         realizedCents: 0,
         state: 'committed',
         linkedTxIds: [],
@@ -684,10 +911,10 @@ export class GameWorld {
         sourceRef: candidateId,
         amountCents: salaryMonthlyCents,
         period: 'monthly',
-        periodCount: Math.max(1, tuning.horizonMonths),
-        totalPlannedCents: salaryMonthlyCents * Math.max(1, tuning.horizonMonths),
-        startAt: this.dayIndex,
-        endAt: this.dayIndex + Math.round(tuning.horizonMonths * 30.44),
+        periodCount: salaryPeriodCount,
+        totalPlannedCents: salaryMonthlyCents * salaryPeriodCount,
+        startAt: salaryStartAt,
+        endAt: salaryEndAt,
         realizedCents: 0,
         state: 'committed',
         linkedTxIds: [],
@@ -715,7 +942,7 @@ export class GameWorld {
       committedCents: Math.max(0, before.cashBalanceCents - availableCashCents),
       runwayMonths,
     }
-    return { before, after, feeCents, salaryMonthlyCents }
+    return { before, after, feeCents, salaryMonthlyCents, arrivalDay, candidateExpiresAtDay: candidate.expiresAtDay }
   }
 
   /** 月薪承诺合计（P-05 employees 页 KPI）：sourceType=employment_salary 且 active 的月度承诺之和。 */
@@ -724,8 +951,9 @@ export class GameWorld {
     if (!company) return 0
     return this.finance
       .getLedger()
-      .getCommitments(company.id, { state: 'committed' })
-      .filter((c) => c.sourceType === 'employment_salary' && c.period === 'monthly')
+      .getCommitments(company.id)
+      .filter((c) => c.sourceType === 'employment_salary' && c.period === 'monthly' &&
+        (c.state === 'committed' || c.state === 'partially_realized'))
       .reduce((sum, c) => sum + c.amountCents, 0)
   }
 
@@ -823,6 +1051,7 @@ export class GameWorld {
     const guard = this.assertCompanyActive()
     if (!('id' in guard)) return guard
     const company = guard as Company
+    const shouldStartGuard = this.rec04RecruitingGuardByCompany[company.id]?.state === 'eligible'
     const availableCashCents = this.getFinancialOverview()?.availableCashCents ?? 0
     // ADJ-2026-11-24-30 §3.1：校验承诺额（hrb × 预算容量）≤ 可用现金，非整笔容量；纪律不放宽。
     const commitmentCents = Math.round(params.hrb * params.budgetCapacityCents)
@@ -894,6 +1123,7 @@ export class GameWorld {
       // 双索引：内核 projectId + legacy Project id（P-06 详情页按 legacy id 取 ExecutionProject）
       this.executionProjects.set(created.result.id, execution)
     }
+    if (shouldStartGuard) this.refreshPlayerCandidatesImmediately(company, projectId)
     return { success: true, result: { projectId } }
   }
 
@@ -927,17 +1157,27 @@ export class GameWorld {
     const content = modules.filter((m) => m.slotId === 'REC03-SLOT-CONTENT')
     const support = modules.filter((m) => m.slotId === 'REC03-SLOT-SUPPORT')
     if (core.length !== 1 || content.length !== 1 || support.length > 2 || new Set(modules.map((m) => m.instanceId)).size !== modules.length) return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'REC03 requires one core, one content, and at most two support modules' }
-    const templatesById = Object.fromEntries(REC03_MODULES.map((m) => [m.templateId, m]))
+    const completionDays = this.getPlayerCompany()?.researchCompletionDays ?? {}
+    const completedResearch = STUDIO_RESEARCH.filter((research) => (completionDays[research.id] ?? Infinity) <= this.dayIndex)
+    const applyResearch = (work: typeof REC03_MODULES[number]['baseWorkUnits']) => {
+      const adjusted = { ...work }
+      for (const research of completedResearch) adjusted[research.discipline] *= research.workFactor
+      return adjusted
+    }
+    const templatesById = Object.fromEntries(REC03_MODULES.map((module) => [
+      module.templateId, { ...module, baseWorkUnits: applyResearch(module.baseWorkUnits) },
+    ]))
     if (modules.some((m) => { const t = templatesById[m.templateId]; const slot = REC03_SLOTS.find((s) => s.slotId === m.slotId); return t === undefined || slot === undefined || !t.allowedSlotKinds.includes(slot.slotKind) })) return { success: false, errorCode: 'REC03_TEMPLATE_UNKNOWN', message: 'unknown REC03 module template or invalid slot' }
     const instances: ModuleInstance[] = modules.map((m) => { const t = templatesById[m.templateId]!; return { instanceId: m.instanceId, templateId: m.templateId, slotId: m.slotId, displayLabel: t.name, domain: t.domain, intensity: m.intensity, depthSelection: m.depthSelection, optionSelections: { ...m.optionSelections }, contentPackId: m.contentPackId, state: 'active', sourceOrigin: 'player' } })
     const packs = modules.filter((m) => m.contentPackId !== null).map((m) => REC03_CONTENT_PACKS.find((p) => p.packId === m.contentPackId)).filter((p): p is typeof REC03_CONTENT_PACKS[number] => p !== undefined)
+      .map((pack) => ({ ...pack, workUnitsPerTier: applyResearch(pack.workUnitsPerTier) }))
     if (packs.length !== content.length) return { success: false, errorCode: 'REC03_CONTENT_PACK_INVALID', message: 'content module requires a valid REC03 content pack' }
     const positioning: PositioningProfile = { primaryTypeId, secondaryTypeIds: [], settingIds: [], perspectiveId: 'side_scroll', structureId: 'linear', targetSegmentClaims: targetTags, sellingPoints: [], platformTargets: [...platformTargets], commercialPositioning: 'premium', presetId: null }
     const slots = REC03_SLOTS.map((s) => ({ ...s, domainAcceptance: [...s.domainAcceptance], bindings: instances.filter((i) => i.slotId === s.slotId).map((i) => i.instanceId), outsourcingEligible: false }))
     const frozen: FrozenBlueprint = { positioning, slots, instances, contentPacks: packs.map((p) => ({ ...p, workUnitsPerTier: { ...p.workUnitsPerTier } })) }
     const composition = checkCompositionRules(frozen, templatesById, { combineRules: [], requireRules: [], conflictRules: [] } as CompositionRules, DEFAULT_BLUEPRINT_TUNING)
     violations.push(...composition.violations)
-    const estimates = estimateFourChannels({ structure: frozen, templatesById, archetype: catalog.archetypes.find((a) => a.archetypeId === primaryTypeId) ?? null, capabilities: {}, platformTechStandards: [], synergyPenaltySum: composition.penaltySum }, DEFAULT_BLUEPRINT_TUNING)
+    const estimates = estimateFourChannels({ structure: frozen, templatesById, archetype: catalog.archetypes.find((a) => a.archetypeId === primaryTypeId) ?? null, capabilities: REC03_BASELINE_CAPABILITIES, platformTechStandards: catalog.platforms.filter((item) => platformTargets.includes(item.platformId)).flatMap((item) => item.techStandards), synergyPenaltySum: composition.penaltySum }, DEFAULT_BLUEPRINT_TUNING)
     const projectId = `preview-${params.requestId}`
     const sourceInstances = instances.map((instance) => {
       const template = templatesById[instance.templateId]!
@@ -984,6 +1224,11 @@ export class GameWorld {
     if ('success' in built) return { success: false, errorCode: built.errorCode, message: built.message }
     if (built.violations.some((v) => v.severity === 'E')) return { success: false, errorCode: 'REC03_BLUEPRINT_VIOLATION', message: built.violations.map((v) => v.message).join('; '), result: undefined }
     const company = this.getPlayerCompany(); if (company === undefined) return { success: false, errorCode: 'COMPANY_NOT_FOUND', message: 'company unavailable' }
+    const predecessorId = params.kind === 'draft' ? params.predecessorProductId : undefined
+    if (predecessorId !== undefined && !this.world.products.some((product) => product.id === predecessorId && product.companyId === company.id)) {
+      return { success: false, errorCode: 'REC03_INPUT_INVALID', message: 'invalid predecessor' }
+    }
+    const shouldStartGuard = this.rec04RecruitingGuardByCompany[company.id]?.state === 'eligible'
     if (params.kind === 'snapshotRef') {
       const saved = this.rec03Snapshots.get(params.snapshotId)!
       const execution = this.executionProjects.get(saved.projectId!)
@@ -1003,9 +1248,12 @@ export class GameWorld {
       return { success: false, errorCode: legacy.errorCode, message: legacy.message }
     }
     this.executionProjects.set(projectId, execution); this.executionProjects.set(legacy.result.id, execution)
+    if (predecessorId !== undefined) legacy.result.predecessorProductId = predecessorId
+    this.alignLegacyProjectWorkload(legacy.result.id, execution)
     this.rec03Snapshots.set(built.snapshot.snapshotId, { snapshot: built.snapshot, decomposition: { ...built.decomposition, projectId }, projectId: legacy.result.id, name: built.name, genreId: built.genreId, plannedLaunchDay: built.plannedLaunchDay })
     const commitmentId = execution.project.commitmentIds[0] ?? ''
     this.rec03Requests.set(params.requestId, { hash: payloadHash, result: { projectId, snapshotId: built.snapshot.snapshotId, versionId: built.snapshot.versionId, commitmentId } })
+    if (shouldStartGuard) this.refreshPlayerCandidatesImmediately(company, projectId)
     return { success: true, result: { projectId }, idempotent: prior !== undefined }
   }
 
@@ -1020,32 +1268,30 @@ export class GameWorld {
   getExecutionSummary(projectId: string): ExecutionSummary | null {
     const execution = this.executionProjects.get(projectId)
     if (execution === undefined) return null
-    const company = this.getPlayerCompany()
-    const members = company === undefined ? [] : this.world.employees
-      .filter((e) => e.companyId === company.id && e.status === 'hired')
-      .map((e) => ({
-        employmentId: e.id,
-        salaryCentsPerMonth: e.salaryMonthlyCents,
-        skillLevels: {},
-      }))
+    const project = this.world.projects.find((p) => p.id === projectId)
+      ?? this.world.projects.find((p) => p.id === execution.project.projectId)
+    const members = project === undefined ? [] : this.executionTeamFor(project)
     const est = estimateCost(execution, members, this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS)
+    const remainingEstimate = estimateCost(execution, members, this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS, 'remaining')
     const infinite = members.length === 0 || !Number.isFinite(est.costEstCents)
-    // Cap_d（§5.3-2）：按学科在职员工数近似产能（D-06 技能档 P1 未接线 → 计数口径，不造数值）
-    const capacityByDiscipline: Record<string, number> = { design: 0, code: 0, art: 0, audio: 0, qa: 0 }
-    for (const e of this.world.employees) {
-      if (e.companyId !== company?.id || e.status !== 'hired') continue
-      if (e.role === 'designer') capacityByDiscipline['design'] = (capacityByDiscipline['design'] ?? 0) + e.skillLevel
-      else if (e.role === 'programmer') capacityByDiscipline['code'] = (capacityByDiscipline['code'] ?? 0) + e.skillLevel
-      else if (e.role === 'artist') capacityByDiscipline['art'] = (capacityByDiscipline['art'] ?? 0) + e.skillLevel
-      else if (e.role === 'qa') capacityByDiscipline['qa'] = (capacityByDiscipline['qa'] ?? 0) + e.skillLevel
+    const capacityByDiscipline = est.capacity
+    const remaining = new Map<ExecutionDiscipline, number>()
+    for (const wp of execution.workPackages) {
+      if (wp.state !== 'DEACTIVATED' && wp.state !== 'DONE' && wp.remainingWorkUnits > DEFAULT_PROJECT_FORMULA_PARAMS.epsilon) {
+        remaining.set(wp.discipline, (remaining.get(wp.discipline) ?? 0) + wp.remainingWorkUnits)
+      }
     }
-    // 瓶颈 = 有 WP 工作量的学科中产能最小者；无 WP → null
-    const disciplinesWithWork = new Set(execution.workPackages.filter((wp) => wp.state !== 'DEACTIVATED').map((wp) => wp.discipline))
+    const unstaffedDisciplines: ExecutionDiscipline[] = []
     let bottleneckDiscipline: string | null = null
-    let minCap = Number.POSITIVE_INFINITY
-    for (const d of disciplinesWithWork) {
-      const cap = capacityByDiscipline[d] ?? 0
-      if (cap < minCap) { minCap = cap; bottleneckDiscipline = d }
+    let longest = 0
+    for (const [discipline, work] of remaining) {
+      const capacity = capacityByDiscipline[discipline]
+      const days = capacity <= DEFAULT_PROJECT_FORMULA_PARAMS.epsilon ? Infinity : work / capacity
+      if (days === Infinity) unstaffedDisciplines.push(discipline)
+      if (days > longest) {
+        longest = days
+        bottleneckDiscipline = discipline
+      }
     }
     return {
       costEstCents: infinite ? null : est.costEstCents,
@@ -1063,7 +1309,236 @@ export class GameWorld {
       })),
       capacityByDiscipline,
       bottleneckDiscipline,
+      unstaffedDisciplines,
+      ...(Number.isFinite(longest) ? { earliestCompletionDays: Math.ceil(longest) } : {}),
+      ...(Number.isFinite(remainingEstimate.costEstCents) ? { remainingCostEstCents: remainingEstimate.costEstCents } : {}),
+      ...this.executionReworkSummary(execution),
     }
+  }
+
+  private executionReworkSummary(execution: ProjectExecutionState): Pick<ExecutionSummary, 'coreIntensity' | 'reworkStatus' | 'qaReport'> {
+    const snapshot = this.rec03Snapshots.get(execution.project.snapshotId)?.snapshot
+    const coreSlot = snapshot?.frozenBlueprint.slots.find((slot) => slot.slotKind === 'core_loop')
+    const core = snapshot?.frozenBlueprint.instances.find((item) => item.state === 'active' && coreSlot?.bindings.includes(item.instanceId))
+    const session = execution.reworkSessions.at(-1)
+    return {
+      ...(core ? { coreIntensity: core.intensity } : {}),
+      ...(snapshot === undefined ? {} : { qaReport: inspectExecutionQa(execution, snapshot) }),
+      ...(session?.status === 'active'
+        ? { reworkStatus: session.gateResult?.pass === false ? 'blocked' : 'active' }
+        : session?.status === 'completed' ? { reworkStatus: 'completed' } : {}),
+    }
+  }
+
+  /** Build execution capacity from the same employees and allocation ratios assigned in the player-facing project. */
+  private executionTeamFor(project: Project): TeamMember[] {
+    const employeesById = new Map(this.world.employees.map((employee) => [employee.id, employee]))
+    return project.teamAssignments.flatMap((assignment) => {
+      const employee = employeesById.get(assignment.employeeId)
+      if (employee === undefined) return []
+      const discipline: ExecutionDiscipline | null = employee.role === 'designer' ? 'design'
+        : employee.role === 'programmer' ? 'code'
+          : employee.role === 'artist' ? 'art'
+            : employee.role === 'audio_designer' ? 'audio'
+            : employee.role === 'qa' ? 'qa' : null
+      const skillLevels: Partial<Record<ExecutionDiscipline, number>> = {}
+      const salaryWeight: Partial<Record<ExecutionDiscipline, number>> = {}
+      if (discipline !== null) {
+        skillLevels[discipline] = employee.skillLevel
+        salaryWeight[discipline] = assignment.allocationRatio
+      }
+      return [{
+        employmentId: employee.id,
+        salaryCentsPerMonth: employee.salaryMonthlyCents,
+        skillLevels,
+        salaryWeight,
+        available: () => employee.status === 'hired',
+      }]
+    })
+  }
+
+  /** Advance each registered execution project once per simulated day using its legacy project team as authority. */
+  private advanceProjectsBeforeCashCheck = (state: WorldState, dayIndex: number): WorldState => {
+    this.world = state
+    this.projects.reset(state.projects)
+    this.advanceExecutionProjects(dayIndex)
+    return this.world
+  }
+
+  private advanceExecutionProjects(dayIndex: number): void {
+    const advanced = new Set<string>()
+    for (const project of this.world.projects) {
+      const execution = this.executionProjects.get(project.id)
+      if (execution === undefined || advanced.has(execution.project.projectId)) continue
+      advanced.add(execution.project.projectId)
+      if (project.phase === 'CANCELLED' && !isTerminalState(execution.project.state)) {
+        this.releaseUnspentProjectReservations(execution)
+        this.setExecutionProject(project.id, cancelExecutionProject(execution, dayIndex))
+        continue
+      }
+      if (project.phase === 'LAUNCHED' || isTerminalState(execution.project.state)) continue
+      if (project.isPaused && execution.project.state !== 'PAUSED') {
+        this.setExecutionProject(project.id, pauseExecutionProject(execution, dayIndex, 'player'))
+        continue
+      }
+      if (!project.isPaused && execution.project.state === 'PAUSED') {
+        const resumed = resumeExecutionProject(execution, dayIndex, this.executionTeamFor(project), DEFAULT_PROJECT_FORMULA_PARAMS)
+        this.setExecutionProject(project.id, resumed.state)
+        continue
+      }
+      try {
+        const result = advanceProjectDay(execution, {
+          day: dayIndex,
+          members: this.executionTeamFor(project),
+          ledger: this.finance.getLedger(),
+          params: DEFAULT_PROJECT_FORMULA_PARAMS,
+        })
+        const next = this.completeReadyRework(result.state, dayIndex)
+        this.setExecutionProject(project.id, next)
+        this.syncLegacyProjectFromExecution(project.id, next)
+      } catch (error) {
+        if (!(error instanceof ProjectError) || error.code !== PROJ_ERROR.CASH_SHORTAGE) throw error
+        this.setExecutionProject(project.id, pauseExecutionProject(execution, dayIndex, 'player'))
+        this.world.projects = this.world.projects.map((item) => item.id === project.id ? {
+          ...item,
+          isPaused: true,
+          pausedDays: 0,
+          pauseReason: 'manual',
+          riskFlags: [...new Set([...item.riskFlags, 'development_cash_shortage'])],
+          updatedAt: dayIndex,
+          version: item.version + 1,
+        } : item)
+        this.projects.reset(this.world.projects)
+      }
+    }
+  }
+
+  private completeReadyRework(execution: ProjectExecutionState, day: number): ProjectExecutionState {
+    const id = execution.project.reworkSessionId
+    if (id === null || execution.project.state !== 'ACTIVE') return execution
+    const session = execution.reworkSessions.find((item) => item.sessionId === id && item.status === 'active')
+    if (session === undefined || session.gateResult?.pass === false) return execution
+    const work = execution.workPackages.filter((wp) => wp.reworkSessionId === id && wp.state !== 'DEACTIVATED')
+    if (work.length === 0 || work.some((wp) => wp.state !== 'DONE')) return execution
+    const target = this.rec03Snapshots.get(session.targetSnapshotId)
+    if (session.targetSnapshotId === session.baseSnapshotId) {
+      return cancelRework(execution, day)
+    }
+    if (target === undefined) {
+      return {
+        ...execution,
+        reworkSessions: execution.reworkSessions.map((item) => item === session
+          ? { ...item, gateResult: { pass: false, violationCodes: [PROJ_ERROR.SNAPSHOT_MISSING] } }
+          : item),
+      }
+    }
+    const validation = revalidationGate({
+      structure: target.snapshot.frozenBlueprint,
+      catalog: createP1Catalog(),
+      templatesById: Object.fromEntries(REC03_MODULES.map((template) => [template.templateId, template])),
+      rules: { requireRules: [], conflictRules: [], combineRules: [] },
+      tuning: DEFAULT_BLUEPRINT_TUNING,
+      mode: 'read',
+    })
+    try {
+      return completeRework(execution, {
+        day,
+        gate: validation,
+        newWorkload: target.decomposition.workload,
+        targetWorkPackages: decomposeWorkPackages(target.decomposition, DEFAULT_PROJECT_FORMULA_PARAMS).workPackages,
+      }, DEFAULT_PROJECT_FORMULA_PARAMS).state
+    } catch (error) {
+      if (!(error instanceof ProjectError)) throw error
+      return {
+        ...execution,
+        reworkSessions: execution.reworkSessions.map((item) => item === session
+          ? { ...item, gateResult: { pass: false, violationCodes: [error.code] } }
+          : item),
+      }
+    }
+  }
+
+  private setExecutionProject(projectId: string, next: ProjectExecutionState): void {
+    const prior = this.executionProjects.get(projectId)
+    for (const [key, value] of this.executionProjects) {
+      if (value === prior) this.executionProjects.set(key, next)
+    }
+    this.executionProjects.set(projectId, next)
+  }
+
+  /**
+   * Project is still the UI/lifecycle carrier while ExecutionProject owns actual work.
+   * Mirror execution progress into the legacy projection, then use its guarded service
+   * transitions so delivery and launch remain one player-visible lifecycle.
+   */
+  private syncLegacyProjectFromExecution(projectId: string, execution: ProjectExecutionState): void {
+    const project = this.world.projects.find((p) => p.id === projectId)
+      ?? this.world.projects.find((p) => p.id === execution.project.projectId)
+    if (project === undefined) return
+
+    const progress = progressVector(execution.workPackages)
+    const canonical = execution.project.formulaVersion === REC03_FORMULA_VERSION
+    const budgetSpentCents = canonical
+      ? execution.worklogs.reduce((sum, log) => sum + log.capacityAppliedCents, 0)
+      : project.budgetSpentCents
+    const workRemainingByDiscipline = { ...project.workRemainingByDiscipline }
+    for (const [legacyDiscipline, executionDiscipline] of [
+      ['design', 'design'],
+      ['programming', 'code'],
+      ['art', 'art'],
+      ['qa', 'qa'],
+    ] as const) {
+      const total = project.workTotalByDiscipline[legacyDiscipline]
+      workRemainingByDiscipline[legacyDiscipline] = Math.round(
+        Math.max(0, total * (1 - (progress[executionDiscipline] ?? 0))) * 100,
+      ) / 100
+    }
+    this.world.projects = this.world.projects.map((candidate) =>
+      candidate.id === project.id
+        ? {
+            ...candidate,
+            budgetSpentCents,
+            remainingCapCents: candidate.budgetTotalCapCents - candidate.budgetCommittedCents - budgetSpentCents,
+            workRemainingByDiscipline,
+            updatedAt: this.dayIndex,
+          }
+        : candidate,
+    )
+    this.projects.reset(this.world.projects)
+
+    const isReady = execution.project.state === 'READY_TO_DELIVER' || execution.project.state === 'COMPLETED'
+    if (!isReady && !(canonical && execution.worklogs.length > 0)) return
+    this.withProjects(() => {
+      let current = this.projects.getById(project.id)
+      while (current !== null) {
+        const startProduction = current.phase === 'CONCEPT' || current.phase === 'PRE_PRODUCTION'
+        const readyForNextPhase = isReady && (current.phase === 'PRODUCTION' || current.phase === 'QA')
+        if (!startProduction && !readyForNextPhase) break
+        const advanced = this.projects.advancePhaseGeneric(project.id, this.dayIndex)
+        if (!advanced.success || advanced.result === undefined) break
+        current = advanced.result
+      }
+    })
+  }
+
+  /** Align the legacy progress denominator with REC-03's execution work package workload. */
+  private alignLegacyProjectWorkload(projectId: string, execution: ProjectExecutionState): void {
+    const project = this.world.projects.find((p) => p.id === projectId)
+    if (project === undefined) return
+    const totals = { design: 0, programming: 0, art: 0, qa: 0 }
+    for (const wp of execution.workPackages) {
+      if (wp.discipline === 'design') totals.design += wp.baselineWorkUnits
+      else if (wp.discipline === 'code') totals.programming += wp.baselineWorkUnits
+      else if (wp.discipline === 'art') totals.art += wp.baselineWorkUnits
+      else if (wp.discipline === 'qa') totals.qa += wp.baselineWorkUnits
+    }
+    const next = {
+      ...project,
+      workTotalByDiscipline: totals,
+      workRemainingByDiscipline: { ...totals },
+    }
+    this.world.projects = this.world.projects.map((candidate) => candidate.id === projectId ? next : candidate)
+    this.projects.reset(this.world.projects)
   }
 
   // ===== CODE-07B REVISION / U4：返工预估 + 确认后执行（application 层接线内核纯函数） =====
@@ -1083,14 +1558,79 @@ export class GameWorld {
     affected: ReworkAffectedItemInput[]
     costPerUnit: number[]
     baseTotal: number
+    target?: Rec03SnapshotEntry
   } | { reason: string } {
     const execution = this.executionProjects.get(projectId)
     if (execution === undefined) return { reason: '项目未登记 ExecutionProject（未走立项向导或旧档），返工预估不可用' }
-    const company = this.getPlayerCompany()
-    const members = company === undefined ? [] : this.world.employees
-      .filter((e) => e.companyId === company.id && e.status === 'hired')
-      .map((e) => ({ employmentId: e.id, salaryCentsPerMonth: e.salaryMonthlyCents, skillLevels: {} }))
+    const previous = this.rec03Snapshots.get(execution.project.snapshotId)
+    const project = this.world.projects.find((item) => item.id === projectId || item.id === previous?.projectId)
+    const members = project === undefined ? [] : this.executionTeamFor(project)
     const est = estimateCost(execution, members, this.dayIndex, 0, 0, DEFAULT_PROJECT_FORMULA_PARAMS)
+    if (execution.project.formulaVersion === REC03_FORMULA_VERSION) {
+      const targetIntensity = deltaPercent
+      const blocking = { reason: 'PROJ_REWORK_SCOPE_UNKNOWN' }
+      const canRework = execution.project.state === 'ACTIVE' ||
+        (execution.project.state === 'READY_TO_DELIVER' && (execution.project.lastDeliveryFailure !== null ||
+          this.getDeliveryGateEvaluation(projectId, execution.project.deliveryFormTarget, true).coreIntensityGap !== undefined))
+      if (previous === undefined || project === undefined || project.isPaused ||
+          !canRework || execution.project.reworkSessionId !== null ||
+          category !== 'C' || !Number.isInteger(targetIntensity) || targetIntensity < 1 || targetIntensity > 5) {
+        return blocking
+      }
+      const structure = previous.snapshot.frozenBlueprint
+      const coreSlot = structure.slots.find((slot) => slot.slotKind === 'core_loop')
+      const core = structure.instances.find((item) => item.state === 'active' && coreSlot?.bindings.includes(item.instanceId))
+      if (core === undefined || core.intensity === targetIntensity) return blocking
+      const plan = this.rec03Draft({
+        kind: 'draft',
+        requestId: `rework-${execution.project.projectId}-${execution.project.reworkCount + 1}`,
+        workingTitle: project.name,
+        genreId: project.genreId,
+        primaryTypeId: structure.positioning.primaryTypeId,
+        targetSegmentClaims: structure.positioning.targetSegmentClaims,
+        platformTargets: structure.positioning.platformTargets,
+        modules: structure.instances.map((item) => ({
+          templateId: item.templateId,
+          slotId: item.slotId,
+          instanceId: item.instanceId,
+          intensity: (item === core ? targetIntensity : item.intensity) as Extract<BlueprintDraftInput, { kind: 'draft' }>['modules'][number]['intensity'],
+          depthSelection: item.depthSelection,
+          optionSelections: item.optionSelections,
+          contentPackId: item.contentPackId,
+        })),
+        deliveryForm: execution.project.deliveryFormTarget,
+        hrb: execution.project.hrb,
+        budgetCapacityCents: execution.project.budgetCapacityCents,
+      })
+      if ('success' in plan || plan.violations.some((item) => item.severity === 'E')) return blocking
+      const normal = execution.workPackages.filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DEACTIVATED')
+      const affected = DISCIPLINE_ORDER.flatMap((discipline) => {
+        const oldWorkUnits = previous.decomposition.workload[discipline]
+        const newWorkUnits = plan.decomposition.workload[discipline]
+        if (oldWorkUnits === newWorkUnits) return []
+        const deliveredWorkUnits = normal.filter((wp) => wp.discipline === discipline)
+          .reduce((sum, wp) => sum + wp.deliveredWorkUnits, 0)
+        return [{ instanceId: core.instanceId, discipline, oldWorkUnits, newWorkUnits, deliveredWorkUnits }]
+      })
+      const baseTotal = normal.reduce((sum, wp) => sum + wp.baselineWorkUnits, 0)
+      const params = DEFAULT_PROJECT_FORMULA_PARAMS
+      if (computeChangeWorkUnits({ category, affected, workTotal: baseTotal }, params) <= 0) return blocking
+      const units = affected.map(({ discipline }) => est.costPerWorkUnit[discipline])
+      return {
+        execution,
+        affected,
+        baseTotal,
+        costPerUnit: units.every(Number.isFinite) ? units : [],
+        target: {
+          snapshot: plan.snapshot,
+          decomposition: { ...plan.decomposition, projectId: execution.project.projectId },
+          projectId: project.id,
+          name: project.name,
+          genreId: project.genreId,
+          plannedLaunchDay: project.plannedLaunchDay,
+        },
+      }
+    }
     const loaded = new Set(
       execution.workPackages
         .filter((wp) => wp.kind === 'NORMAL' && wp.state !== 'DEACTIVATED' && wp.baselineWorkUnits > 0)
@@ -1188,7 +1728,7 @@ export class GameWorld {
     if ('reason' in scope) {
       return { success: false, errorCode: 'PROJ_REWORK_SCOPE_UNKNOWN', message: scope.reason }
     }
-    const { execution, affected, costPerUnit } = scope
+    const { execution, affected, costPerUnit, target } = scope
     const sessionId = `rw-${uuid()}`
     const changeId = `chg-${sessionId}`
     try {
@@ -1198,8 +1738,8 @@ export class GameWorld {
           sessionId,
           category,
           affected,
-          targetDraftVersionId: execution.project.versionId,
-          targetSnapshotId: execution.project.snapshotId,
+          targetDraftVersionId: target?.snapshot.versionId ?? execution.project.versionId,
+          targetSnapshotId: target?.snapshot.snapshotId ?? execution.project.snapshotId,
           changes: [{ changeId, instanceIds: affected.map((a) => a.instanceId) }],
           day: this.dayIndex,
           costPerUnit,
@@ -1207,11 +1747,19 @@ export class GameWorld {
         DEFAULT_PROJECT_FORMULA_PARAMS,
       )
       const next = beginRework(execution, plan, this.dayIndex)
+      if (target !== undefined) this.rec03Snapshots.set(target.snapshot.snapshotId, target)
       // 双索引同步：内核 projectId + legacy Project id 两键都指向更新后的状态。
       for (const [key, value] of this.executionProjects) {
         if (value === execution) this.executionProjects.set(key, next)
       }
       this.executionProjects.set(projectId, next)
+      const legacyProjectId = target?.projectId
+      if (legacyProjectId !== undefined && execution.project.state === 'READY_TO_DELIVER') {
+        this.world.projects = this.world.projects.map((item) => item.id === legacyProjectId
+          ? { ...item, phase: 'PRODUCTION', updatedAt: this.dayIndex, version: item.version + 1 }
+          : item)
+        this.projects.reset(this.world.projects)
+      }
       return { success: true, result: { sessionId, reworkWorkUnits: plan.breakdown.reworkWorkUnits } }
     } catch (error) {
       if (error instanceof ProjectError) {
@@ -1229,10 +1777,40 @@ export class GameWorld {
     projectId: string,
     gate: { pass: boolean; violations: ReadonlyArray<{ code: string; severity: string }> },
     deliveryForm: import('@domain/entities/project-execution').DeliveryForm = 'full',
+    disclosureProvided = false,
   ): CommandOutcome<{ completed: boolean; buildId: string | null }> {
     const execution = this.executionProjects.get(projectId)
     if (execution === undefined) {
       return { success: false, errorCode: 'PROJ_NOT_FOUND', message: '项目未登记 ExecutionProject' }
+    }
+    let decision: DeliveryGateEvaluation['decision']
+    if (execution.project.formulaVersion === REC03_FORMULA_VERSION &&
+        execution.project.state === 'READY_TO_DELIVER') {
+      const evaluation = this.getDeliveryGateEvaluation(projectId, deliveryForm, disclosureProvided)
+      if (!evaluation.available) {
+        return { success: false, errorCode: 'D02_EVALUATION_UNAVAILABLE' }
+      }
+      gate = evaluation.gate
+      decision = evaluation.decision
+    }
+    // 失败闸门仍必须进入内核，以记录 deliveryFailures / lastDeliveryFailure；
+    // BuildFacts 只在可能创建 Build 的 PASS 路径上要求完整。
+    const gateCanCreateBuild = gate.pass === true && gate.violations.every((violation) => violation.severity !== 'E')
+    const canonicalSnapshot = gateCanCreateBuild
+      ? this.rec03Snapshots.get(execution.project.snapshotId)?.snapshot
+      : undefined
+    const legacyOpenModules = execution.project.formulaVersion === 'open-content-modules'
+    const buildFacts = gateCanCreateBuild && (canonicalSnapshot !== undefined || legacyOpenModules)
+      ? deriveRuntimeBuildFacts(execution, canonicalSnapshot ?? null, this.finance.getLedger())
+      : null
+    if (gateCanCreateBuild && (buildFacts === null || buildFacts.actualCost === null || buildFacts.deliveredTier === null)) {
+      return {
+        success: false,
+        errorCode: 'D02_BUILD_FACTS_UNAVAILABLE',
+        message: canonicalSnapshot === undefined && !legacyOpenModules
+          ? '交付事实不可用：缺少冻结设计快照。'
+          : '交付事实不可用：缺少可追溯账本成本或内容档位。',
+      }
     }
     try {
       const result = submitDelivery(execution, {
@@ -1240,9 +1818,14 @@ export class GameWorld {
         gate,
         versionLabel: execution.project.versionId,
         deliveryForm,
-        actualCostCents: 0,
-        deliveredTier: 0,
+        actualCostCents: buildFacts?.actualCost ?? 0,
+        deliveredTier: buildFacts?.deliveredTier ?? 0,
+        ...(decision === undefined ? {} : { deliveryDecision: decision }),
+        ...(canonicalSnapshot === undefined ? {} : { defectListRefs: inspectExecutionQa(execution, canonicalSnapshot).findings.map((finding) => finding.defectId) }),
       })
+      if (result.completed && execution.project.formulaVersion === REC03_FORMULA_VERSION) {
+        this.releaseUnspentProjectReservations(execution)
+      }
       this.executionProjects.set(projectId, result.state)
       for (const [key, value] of this.executionProjects) {
         if (value === execution && key !== projectId) this.executionProjects.set(key, result.state)
@@ -1271,12 +1854,14 @@ export class GameWorld {
     form: import('@domain/entities/project-execution').DeliveryForm = 'full',
     disclosureProvided = false,
   ): DeliveryGateEvaluation {
-    const fail = (unavailableReason: string): DeliveryGateEvaluation => ({
+    const fail = (unavailableReason: string, unavailableReasonKey = 'deliver.state.unavailable'): DeliveryGateEvaluation => ({
       available: false,
       pass: false,
       gate: { pass: false, violations: [] },
       reasonCodes: [],
+      blockingUnmet: [],
       unavailableReason,
+      unavailableReasonKey,
       source: 'unavailable',
       checkedAt: null,
     })
@@ -1284,7 +1869,7 @@ export class GameWorld {
     const exec = this.executionProjects.get(projectId)
     if (exec === undefined) return fail('项目未登记 ExecutionProject')
     if (exec.project.state !== 'READY_TO_DELIVER') {
-      return fail('项目未处于可交付态（READY_TO_DELIVER）')
+      return fail('项目未处于可交付态（READY_TO_DELIVER）', 'deliver.state.notReady')
     }
 
     // P2 SUP-01：生产路径真实求值 + 登记（非测试夹具）。项目处于可交付态时，
@@ -1306,6 +1891,11 @@ export class GameWorld {
       pass,
       gate: { pass, violations },
       reasonCodes: [...(snapshot.reasonCodes ?? [])],
+      ...(snapshot.formQualification !== undefined ? { formQualification: snapshot.formQualification } : {}),
+      blockingUnmet: [...(snapshot.blockingUnmet ?? [])],
+      ...(snapshot.coreIntensityGap === undefined ? {} : { coreIntensityGap: snapshot.coreIntensityGap }),
+      ...(snapshot.provenance !== undefined ? { provenance: snapshot.provenance } : {}),
+      ...(snapshot.decision !== undefined ? { decision: snapshot.decision } : {}),
       unavailableReason: null,
       source: snapshot.source ?? 'd02-evaluateDeliveryGate',
       checkedAt: snapshot.checkedAt ?? null,
@@ -1332,17 +1922,25 @@ export class GameWorld {
     const evaluated = evaluateRuntimeDeliveryGate({
       execution: exec,
       project,
+      ledger: this.finance.getLedger(),
       dayIndex: this.dayIndex,
       disclosureProvided,
       form,
       snapshot: this.rec03Snapshots.get(exec.project.snapshotId)?.snapshot,
     })
     const { result } = evaluated
+    const reasonCodes: string[] = [...result.errorCodes]
+    if (evaluated.context.revalidation?.pass !== true) reasonCodes.push('D02-DESIGN-REVALIDATION')
     const input: DeliveryGateEvaluationInput = {
       pass: result.gate === 'PASS',
       // FAIL 的五码均为闸门阻断，按 E 级映射，保证 UI pass 与内核 evaluateGate 同语义。
-      violations: result.errorCodes.map((code) => ({ code, severity: 'E' })),
-      reasonCodes: [...result.errorCodes],
+      violations: reasonCodes.map((code) => ({ code, severity: 'E' })),
+      reasonCodes,
+      formQualification: result.formQualification,
+      blockingUnmet: [...result.blockingUnmet],
+      ...(evaluated.coreIntensityGap === undefined ? {} : { coreIntensityGap: evaluated.coreIntensityGap }),
+      provenance: evaluated.provenance,
+      ...(this.rec03Snapshots.has(exec.project.snapshotId) ? { decision: evaluated.decision } : {}),
       checkedAt: result.checkedAt,
       source: 'd02-evaluateDeliveryGate',
     }
@@ -1363,6 +1961,11 @@ export class GameWorld {
       pass: evaluation.pass === true,
       violations: [...(evaluation.violations ?? [])],
       reasonCodes: [...(evaluation.reasonCodes ?? [])],
+      ...(evaluation.formQualification !== undefined ? { formQualification: evaluation.formQualification } : {}),
+      ...(evaluation.blockingUnmet !== undefined ? { blockingUnmet: [...evaluation.blockingUnmet] } : {}),
+      ...(evaluation.coreIntensityGap === undefined ? {} : { coreIntensityGap: { ...evaluation.coreIntensityGap } }),
+      ...(evaluation.provenance !== undefined ? { provenance: [...evaluation.provenance] } : {}),
+      ...(evaluation.decision !== undefined ? { decision: evaluation.decision } : {}),
       checkedAt: evaluation.checkedAt ?? this.dayIndex,
       source: evaluation.source ?? 'd02-evaluateDeliveryGate',
     })
@@ -1607,6 +2210,12 @@ export class GameWorld {
     if (!company) return { success: false, errorCode: 'NO_COMPANY', message: '公司未找到' }
 
     const before = this.world.projects.find((p) => p.id === projectId)
+    const execution = this.executionProjects.get(projectId)
+    if (before?.phase === 'READY_TO_LAUNCH' &&
+        execution?.project.formulaVersion === REC03_FORMULA_VERSION &&
+        (execution.project.state !== 'COMPLETED' || execution.builds.length === 0)) {
+      return { success: false, errorCode: 'PRJ_DELIVERY_REQUIRED' }
+    }
     const result = this.withProjects(() => this.projects.launch(projectId, this.dayIndex))
     if (!result.success || !result.result) {
       return {
@@ -1620,13 +2229,42 @@ export class GameWorld {
 
     this.world.products.push(result.result.product)
     const launched = this.world.projects.find((p) => p.id === projectId)
+    const launchedProduct = result.result.product
+    if (before?.predecessorProductId !== undefined) launchedProduct.predecessorProductId = before.predecessorProductId
+    const designSnapshot = execution === undefined
+      ? undefined
+      : this.rec03Snapshots.get(execution.project.snapshotId)?.snapshot
+    if (designSnapshot !== undefined) {
+      const moduleTemplateIds = designSnapshot.frozenBlueprint.instances
+        .filter((instance) => instance.state === 'active')
+        .map((instance) => instance.templateId)
+      const moduleAffinityBySegment: Record<string, number> = {}
+      const allSegments = [...new Set(launchedProduct.audienceSegmentIds)]
+      for (const segmentId of allSegments) {
+        const tag = Object.entries(REC03_SEGMENT_MAP).find(([, mapped]) => mapped === segmentId)?.[0]
+        const hasSupportModule = moduleTemplateIds.some((templateId) => templateId === 'MOD-SYSTEM-PROGRESSION' || templateId === 'MOD-SOCIAL-COOP')
+        const values = hasSupportModule ? moduleTemplateIds.map((templateId) => {
+          const template = REC03_MODULES.find((item) => item.templateId === templateId)
+          if (template === undefined) return 1
+          return tag === undefined ? 0.7 : (template.audienceAffinity[tag] ?? 0.7)
+        }) : []
+        moduleAffinityBySegment[segmentId] = values.length === 0
+          ? 1
+          : Math.max(0.05, Math.min(1, values.reduce((sum, value) => sum + value, 0) / values.length))
+      }
+      const product = this.world.products.find((item) => item.id === launchedProduct.id)
+      if (product !== undefined) {
+        product.moduleTemplateIds = moduleTemplateIds
+        product.moduleAffinityBySegment = moduleAffinityBySegment
+      }
+    }
     if (launched) {
       company.brand = Math.max(0, Math.min(100, company.brand + result.result.product.brandImpact))
     }
     // M2-H §4.2：上市建立初始认知度（首发曝光），否则产品永远进不了任何市场
     const product = this.world.products.find((p) => p.sourceProjectId === projectId)
     if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
-      product.awarenessByMarket = seedInitialAwareness(company.brand, this.dayIndex)
+      product.awarenessByMarket = seedRegionalLaunchAwareness(company, this.dayIndex)
     }
     if (product !== undefined && product.awarenessByScope === undefined) {
       product.awarenessByScope = awarenessByScopeOf(product)
@@ -1638,11 +2276,21 @@ export class GameWorld {
   toggleProjectPause(projectId: string): CommandOutcome<Project> {
     const project = this.world.projects.find((p) => p.id === projectId)
     if (!project) return { success: false, message: '项目未找到' }
+    if (project.pauseReason === 'bankruptcy' &&
+        this.world.companies.some((item) => item.id === project.companyId && item.status === 'bankrupt')) {
+      return { success: false, errorCode: 'FIN_COMPANY_BANKRUPT' }
+    }
     const result = this.withProjects(() =>
       project.isPaused ? this.projects.resume(projectId) : this.projects.pause(projectId),
     )
     if (!result.success || !result.result) {
       return { success: false, errorCode: result.errorCode, message: result.errorMessage ?? '操作失败' }
+    }
+    if (!result.result.isPaused && result.result.riskFlags.includes('development_cash_shortage')) {
+      const project = { ...result.result, riskFlags: result.result.riskFlags.filter((flag) => flag !== 'development_cash_shortage') }
+      this.world.projects = this.world.projects.map((item) => item.id === project.id ? project : item)
+      this.projects.reset(this.world.projects)
+      return { success: true, result: project }
     }
     return { success: true, result: result.result }
   }
@@ -1721,7 +2369,24 @@ export class GameWorld {
     if (!result.success || !result.result) {
       return { success: false, errorCode: result.errorCode, message: result.errorMessage ?? '取消失败' }
     }
+    const execution = this.executionProjects.get(projectId)
+    if (execution !== undefined && !isTerminalState(execution.project.state)) {
+      this.releaseUnspentProjectReservations(execution)
+      this.setExecutionProject(projectId, cancelExecutionProject(execution, this.dayIndex))
+    }
+    this.syncRec04RecruitingGuardStates()
     return { success: true, result: result.result }
+  }
+
+  private releaseUnspentProjectReservations(execution: ProjectExecutionState): void {
+    const { companyId, projectId } = execution.project
+    const ledger = this.finance.getLedger()
+    for (const commitment of ledger.getCommitments(companyId, { sourceRef: projectId })) {
+      if (commitment.sourceType !== 'project_budget' || commitment.period !== 'one_off' ||
+          commitment.state === 'cancelled' || commitment.state === 'realized') continue
+      // This is a spending reservation. Development expenses have already been posted per WP.
+      ledger.releaseCommitment(companyId, commitment.commitmentId, monthKeyOf(commitment.startAt))
+    }
   }
 
   /**
@@ -1729,6 +2394,9 @@ export class GameWorld {
    * 破产守卫（DESIGN-OI-21 §2.2）：破产公司仍允许 descope（自救手段）。
    */
   descopeProject(projectId: string, cutRatio: number): CommandOutcome<Project> {
+    if (this.executionProjects.get(projectId)?.project.formulaVersion === REC03_FORMULA_VERSION) {
+      return { success: false, errorCode: 'PRJ_USE_DESIGN_CHANGE' }
+    }
     const result = this.withProjects(() =>
       this.projects.descope({ projectId, cutRatio, dayIndex: this.dayIndex }),
     )
@@ -1897,6 +2565,81 @@ export class GameWorld {
     return { success: true, result }
   }
 
+  updateCatalogProduct(productId: string): CommandOutcome {
+    const company = this.getPlayerCompany()
+    const product = this.world.products.find((item) => item.id === productId && item.companyId === company?.id)
+    const day = this.dayIndex
+    if (!company || !product || (product.pricePerUnitCents ?? product.launchPriceCents) === null || hasFullControl(this.world, productId)) {
+      return { success: false, errorCode: 'catalog.update.unavailable' }
+    }
+    if (day - (product.lastMaintenanceDay ?? product.launchDay) < CATALOG_UPDATE_COOLDOWN_DAYS) {
+      return { success: false, errorCode: 'catalog.update.cooldown' }
+    }
+    const scopes = buildDemandScopesForDay({
+      dayIndex: day, platformIds: product.supportedPlatformIds, segmentIds: product.audienceSegmentIds,
+    }).filter((scope) => isSegmentAvailable(scope.segmentId, day))
+    if (scopes.length === 0) return { success: false, errorCode: 'catalog.update.market' }
+    const cost = CATALOG_UPDATE_COST_CENTS
+    if ((this.getFinancialOverview()?.availableCashCents ?? 0) < cost) return { success: false, errorCode: 'catalog.update.cash' }
+    const posted = this.finance.postTransaction({
+      idempotencyKey: `catalog-update:${product.id}:${day}`,
+      companyId: company.id, day, category: 'project_expense', amountCents: -cost,
+      referenceId: product.id, description: 'Catalog maintenance',
+    })
+    if (!posted.success) return { success: false, errorCode: 'catalog.update.cash' }
+    const refreshed = seedRegionalLaunchAwareness(company, day)
+    for (const [market, awareness] of Object.entries(refreshed)) {
+      refreshed[market] = Math.max(product.awarenessByMarket[market] ?? 0, awareness)
+    }
+    const awarenessByScope = awarenessByScopeOf(product)
+    for (const [key, awareness] of Object.entries(awarenessByScopeOf({ ...product, awarenessByMarket: refreshed, awarenessByScope: {} }))) {
+      awarenessByScope[key] = Math.max(awarenessByScope[key] ?? 0, awareness)
+    }
+    const update = { ...product, awarenessByMarket: refreshed, awarenessByScope, status: 'active' as const,
+      lifecycleStage: 'launch' as const, lastMaintenanceDay: day, version: product.version + 1, updatedAt: day }
+    this.world = {
+      ...this.world,
+      products: this.world.products.map((item) => item.id === productId ? update : item),
+      events: [...this.world.events, { id: `catalog-update:${productId}:${day}`, type: 'ProductUpdated', day, payload: { productId } }],
+    }
+    this.syncCash(company)
+    return { success: true }
+  }
+
+  expandProductReach(productId: string, marketId: string): CommandOutcome {
+    const company = this.getPlayerCompany()
+    const product = this.world.products.find((item) => item.id === productId && item.companyId === company?.id)
+    const day = this.dayIndex
+    if (!company || !product || product.status !== 'active' || (product.pricePerUnitCents ?? product.launchPriceCents) === null
+      || hasFullControl(this.world, productId)) return { success: false, errorCode: 'catalog.expand.unavailable' }
+    const scopes = buildDemandScopesForDay({ dayIndex: day, marketIds: [marketId],
+      platformIds: product.supportedPlatformIds, segmentIds: product.audienceSegmentIds,
+    }).filter((scope) => isSegmentAvailable(scope.segmentId, day))
+    if (scopes.length === 0) return { success: false, errorCode: 'catalog.update.market' }
+    const id = `regional-campaign:${productId}:${marketId}`
+    if (this.finance.hasTransaction(id, company.id)) return { success: false, errorCode: 'catalog.expand.used' }
+    if ((this.getFinancialOverview()?.availableCashCents ?? 0) < REGIONAL_CAMPAIGN_COST_CENTS) {
+      return { success: false, errorCode: 'catalog.update.cash' }
+    }
+    const posted = this.finance.postTransaction({
+      idempotencyKey: id, companyId: company.id, day, category: 'marketing', amountCents: -REGIONAL_CAMPAIGN_COST_CENTS,
+      referenceId: productId, description: 'Regional product campaign',
+    })
+    if (!posted.success) return { success: false, errorCode: 'catalog.update.cash' }
+    const awarenessByScope = awarenessByScopeOf(product)
+    for (const scope of scopes) {
+      const key = `${scope.marketId}:${scope.platformId}:${scope.segmentId}`
+      awarenessByScope[key] = Math.min(0.6, (awarenessByScope[key] ?? 0) + 0.12)
+    }
+    const awarenessByMarket = { ...product.awarenessByMarket,
+      [marketId]: Math.min(0.6, (product.awarenessByMarket[marketId] ?? 0) + 0.12) }
+    this.world = { ...this.world, products: this.world.products.map((item) => item.id === productId
+      ? { ...item, awarenessByMarket, awarenessByScope, version: item.version + 1, updatedAt: day } : item),
+    events: [...this.world.events, { id, type: 'ProductMarketExpanded', day, payload: { productId, marketId, companyId: company.id } }] }
+    this.syncCash(company)
+    return { success: true }
+  }
+
   // ----- Simulation -----
 
   /** 唯一推进入口：日历推进 + 统一调度器 */
@@ -1918,6 +2661,7 @@ export class GameWorld {
       })
       const spec = findAiSpec(company.id)
       if (spec !== undefined) staff.push(...createAiStaff(company, spec, dayIndex))
+      this.syncCash(company)
     }
     this.world = { ...this.world, companies, employees: [...this.world.employees, ...staff] }
     // CODE-06（R15）：AI 公司员工与玩家共用同一迁移路径（Person+Employment+薪资承诺）；
@@ -2046,8 +2790,8 @@ export class GameWorld {
               ?.launchMarketingSpentCents ?? 0,
         })),
       lastMonthRevenueCents: this.finance
-        .getTransactionsByCompany(company.id)
-        .filter((t) => t.category === 'sales_revenue' && t.day >= this.dayIndex - 30)
+        .getTransactionsByCompany(company.id, { fromDay: this.dayIndex - 30 })
+        .filter((t) => t.category === 'sales_revenue')
         .reduce((sum, t) => sum + t.amountCents, 0),
       ...(company.bankruptcyPhase !== undefined ? { bankruptcyPhase: company.bankruptcyPhase } : {}),
       ...(company.restructuringDeadlineDay !== undefined
@@ -2066,15 +2810,16 @@ export class GameWorld {
       (p) => p.companyId === company.id && p.status === 'active',
     )
     if (products.length === 0) return []
-    const revenue12 = (productId: string): number =>
-      this.finance
-        .getTransactionsByCompany(company.id, { fromDay: this.dayIndex - 365, toDay: this.dayIndex })
-        .filter((t) => t.category === 'sales_revenue' && t.referenceId === productId)
-        .reduce((sum, t) => sum + t.amountCents, 0)
-    const total12 = products.reduce((sum, p) => sum + revenue12(p.id), 0)
+    const revenueByProduct = new Map<string, number>()
+    for (const transaction of this.finance.getTransactionsByCompany(company.id, { fromDay: this.dayIndex - 365, toDay: this.dayIndex })) {
+      if (transaction.category !== 'sales_revenue' || transaction.referenceId == null) continue
+      const id = transaction.referenceId
+      revenueByProduct.set(id, (revenueByProduct.get(id) ?? 0) + transaction.amountCents)
+    }
+    const total12 = products.reduce((sum, product) => sum + (revenueByProduct.get(product.id) ?? 0), 0)
     return products
       .map((product) => {
-        const rev = revenue12(product.id)
+        const rev = revenueByProduct.get(product.id) ?? 0
         const project = this.world.projects.find((p) => p.id === product.sourceProjectId)
         const book = project?.budgetTotalCapCents ?? 0
         const value = Math.max(Math.round(rev * 0.5), Math.round(book * 0.2), 100_000)
@@ -2166,13 +2911,22 @@ export class GameWorld {
     const sales = (company.assetSales ?? []).filter((entry) => entry.day >= windowStart)
     if (sales.length >= 1 || (company.assetSales ?? []).length >= 3) return
     const buyers = this.world.companies
-      .filter((c) => c.id !== company.id && c.status === 'active')
+      .filter((c) => !c.isPlayer && c.id !== company.id && c.status === 'active')
       .sort((a, b) => this.finance.getCashBalance(b.id) - this.finance.getCashBalance(a.id))
     const buyer = buyers.find((c) => this.finance.getCashBalance(c.id) >= minPriceCents * 2)
     if (buyer === undefined) return
     const price = Math.min(minPriceCents, Math.floor(this.finance.getCashBalance(buyer.id) * 0.5))
     if (price <= 0) return
-    const posted = this.finance.postTransaction(
+    const posted = this.finance.bulkPostTransactions([
+      {
+        idempotencyKey: `asset_purchase:${assetId}:${dayIndex}`,
+        companyId: buyer.id,
+        day: dayIndex,
+        category: 'asset_sale',
+        amountCents: -price,
+        description: `资产购入：${product.name}`,
+        referenceId: assetId,
+      },
       {
         idempotencyKey: `asset_sale:${assetId}:${dayIndex}`,
         companyId: company.id,
@@ -2182,17 +2936,16 @@ export class GameWorld {
         description: `资产出售：${product.name}`,
         referenceId: assetId,
       },
-      { allowNegativeBalance: true },
-    )
+    ])
     if (!posted.success) return
+    this.syncCash(company)
+    this.syncCash(buyer)
     this.world = {
       ...this.world,
       companies: this.world.companies.map((c) =>
         c.id === company.id
           ? {
               ...c,
-              // 派生回写（A-2）：值来自账本，非第二个写源。
-              cashBalanceCents: this.finance.getCashBalance(c.id),
               assetSales: [
                 ...(c.assetSales ?? []),
                 { assetId, buyerId: buyer.id, priceCents: price, day: dayIndex },
@@ -2313,7 +3066,7 @@ export class GameWorld {
             this.world.products.push(launched.result.product)
             const product = this.world.products.find((p) => p.sourceProjectId === params.projectId)
             if (product !== undefined && Object.keys(product.awarenessByMarket).length === 0) {
-              product.awarenessByMarket = seedInitialAwareness(company.brand, dayIndex)
+              product.awarenessByMarket = seedRegionalLaunchAwareness(company, dayIndex)
               product.awarenessByScope = awarenessByScopeOf(product)
             }
             company.brand = Math.max(0, Math.min(100, company.brand + launched.result.product.brandImpact))
@@ -2407,8 +3160,8 @@ export class GameWorld {
 
   advanceSimulation(days: number): { totalDays: number; events: DomainEvent[] } {
     const events: DomainEvent[] = []
-    const startDay = this.calendar.currentDayIndex
     for (let i = 0; i < days; i++) {
+      const previousDay = this.calendar.currentDayIndex
       this.calendar.advanceDay()
       this.rng.setCurrentDayIndex(this.calendar.currentDayIndex)
       const beforeEvents = this.world.events.length
@@ -2420,10 +3173,9 @@ export class GameWorld {
         }
         this.world = this.scheduler.executeDay(this.world, this.calendar.currentDayIndex)
       } catch (error) {
-        // 单日结算失败：日历回退到本批起点，避免“日期前进但世界未推进”造成的跳日；
-        // 错误继续上抛，由 UI 边界转成可见提示（M2-I）。
-        this.calendar.rewindTo(startDay)
-        this.rng.setCurrentDayIndex(startDay)
+        const lastAppliedDay = Math.max(previousDay, this.world.currentDayIndex)
+        this.calendar.rewindTo(lastAppliedDay)
+        this.rng.setCurrentDayIndex(lastAppliedDay)
         this.projects.reset(this.world.projects)
         this.employees.reset(this.world.employees)
         throw error
@@ -2476,6 +3228,8 @@ export class GameWorld {
         return '目标平台在当前年代不可用，无法上市。'
       case 'PRJ_COMPANY_INACTIVE':
         return '公司当前不处于正常经营状态，无法上市。'
+      case 'PRJ_BANKRUPTCY_PROJECT_NOT_RETAINED':
+        return '公司破产后仅保留的近上市项目可以完成上市。'
       case 'PRJ_PRODUCT_EXISTS':
         return '该项目已经生成过产品，不能重复上市。'
       default:
@@ -2550,22 +3304,24 @@ export class GameWorld {
     return { success: true, message: '合同已签署', result: r.contract }
   }
 
-  estimateContract(cmd: {
-    productId: string
-    template: 'channel' | 'co_marketing' | 'advance'
-    ratePercent: number
-    durationDays: number | null
-    partnerId: string
-    marketScope?: string[]
-    platformScope?: string[]
-    prepaymentCents?: number
-    recoupRatePercent?: number
-    marketingCommitmentCents?: number
-    qualityThreshold?: number
-    deliveryDay?: number
-    controlLevel?: 'full' | 'shared' | 'none'
-  }): ContractEstimate {
-    return estimateContractProceeds(this.world, cmd, this.dayIndex)
+  estimateContract(cmd: SignTemplateCmd): CommandOutcome<ContractEstimate> {
+    const invalid = validateTemplateContract(this.world, cmd)
+    if (invalid !== null) {
+      return { success: false, errorCode: invalid.errorCode, message: invalid.errorMessage ?? '合同条款无效' }
+    }
+    return { success: true, result: estimateContractProceeds(this.world, cmd, this.dayIndex) }
+  }
+
+  requestPublisherQuote(cmd: SignTemplateCmd): CommandOutcome<{ rate: number; estimate: ContractEstimate }> {
+    const validation = this.estimateContract(cmd)
+    if (!validation.success) return { success: false, errorCode: validation.errorCode, message: validation.message }
+    const product = this.world.products.find((item) => item.id === cmd.productId && item.companyId === this.getPlayerCompany()?.id)
+    if (!product) return { success: false, errorCode: 'CONTRACT_FIELD_OUT_OF_RANGE' }
+    const { min, max } = templateRateRange(cmd.template)
+    const publisherPremium = cmd.partnerId === 'global-star' ? 0 : 2
+    const acceptableRate = Math.min(max, min + Math.floor(product.finalQualityScore / 15) + publisherPremium)
+    const rate = Math.min(cmd.ratePercent, acceptableRate)
+    return { success: true, result: { rate, estimate: estimateContractProceeds(this.world, { ...cmd, ratePercent: rate }, this.dayIndex) } }
   }
 
   // ----- Persistence -----
@@ -2579,6 +3335,8 @@ export class GameWorld {
       // CODE-04：承诺集合由账本持久化（唯一来源），读档时随 replay 重放。
       commitments: this.world.companies.flatMap((c) => this.finance.getLedger().getCommitments(c.id)),
       aiDecisionLog: [...this.aiDecisionLog],
+      aiCompetitionEnabled: this.aiCompetitionEnabled,
+      rec04RecruitingGuardByCompany: this.rec04RecruitingGuardByCompany,
       // CODE-07B REVISION / U3（A-25）：ExecutionProject 双索引切片随档持久化。
       // 同一 state 在 Map 中以「内核 projectId + legacy Project id」两键登记，逐键落盘以完整还原索引。
       executionProjects: Array.from(this.executionProjects.entries()).map(([key, state]) => ({ key, state })),
@@ -2622,14 +3380,24 @@ export class GameWorld {
       }
     }
     this.world = state
+    this.rec04RecruitingGuardByCompany = state.rec04RecruitingGuardByCompany ?? {}
     // B-01a：从存档已有 emp-<seed>-<seq> 还原招聘序号，保证读档续跑的新 ID 仍唯一且确定性。
     this.restoreEmploymentSeq(state)
     // CODE-07B REVISION / U3（A-25）：先清空旧内存态再按存档重建双索引，
     // 避免同一 GameWorld 上 load() 残留旧档 ExecutionProject（含交付失败审计）。
     this.executionProjects.clear()
+    const restoredExecutionById = new Map<string, ProjectExecutionState>()
     for (const entry of state.executionProjects ?? []) {
-      this.executionProjects.set(entry.key, entry.state as ProjectExecutionState)
+      const saved = entry.state as ProjectExecutionState
+      const id = saved.project.projectId
+      if (entry.key === id || !restoredExecutionById.has(id)) {
+        restoredExecutionById.set(id, saved)
+      }
     }
+    for (const { key, state: saved } of state.executionProjects ?? []) {
+      this.executionProjects.set(key, restoredExecutionById.get(saved.project.projectId)!)
+    }
+    this.deliveryGateEvaluations.clear()
     this.rec03Snapshots.clear()
     for (const entry of state.rec03Snapshots ?? []) this.rec03Snapshots.set(entry.key, entry.value as never)
     this.rec03Requests.clear()
@@ -2673,6 +3441,8 @@ export class GameWorld {
     this.contracts = new ContractService(this.finance)
     this.scheduler = new DailyScheduler({
       finance: this.finance,
+      isExecutionProject: (projectId) => this.executionProjects.has(projectId),
+      advanceExecutionProjects: this.advanceProjectsBeforeCashCheck,
       sales: this.sales,
       refunds: this.refunds,
       pricing: this.pricing,
@@ -2693,6 +3463,7 @@ export class GameWorld {
         employments: state.employments,
         candidates: state.candidates ?? [],
         personEvents: state.personEvents ?? [],
+        pendingHires: state.pendingHires ?? [],
       }, state.personnelFormulaSnapshot)
     } else if (state.employees.length > 0) {
       const migration = migrateEmployees({
@@ -2722,6 +3493,7 @@ export class GameWorld {
         employments: state.employments,
         candidates: state.candidates,
         personEvents: state.personEvents,
+        pendingHires: state.pendingHires ?? [],
       }, state.personnelFormulaSnapshot)
     }
   }
@@ -2773,7 +3545,7 @@ export class GameWorld {
     this.syncCash(company)
 
     // 竞品档案条数（ADJ-12 S2-2 静态档案，真实 AI 公司归 P3+）
-    const competitorCount = AI_COMPANIES.length
+    const competitorCount = currentMarketCompetitors(this.world.companies).length
     // 方向档：取每个类别跨群体的最大亲和度 → 定性档（阈值 >0.8 高 / ≥0.6 中 / 其余低），不展示数值
     const maxByGenre = new Map<string, number>()
     for (const row of genreSegmentAffinity) {

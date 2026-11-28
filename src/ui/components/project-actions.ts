@@ -128,7 +128,7 @@ export interface RiskBadge {
   value?: number
 }
 
-export const RISK_ORDER = ['scope_descoped', 'launch_delayed', 'budget_exhausted', 'quality_risk'] as const
+export const RISK_ORDER = ['scope_descoped', 'launch_delayed', 'budget_exhausted', 'development_cash_shortage', 'quality_risk'] as const
 
 /** 风险徽标：数值化并统一排序；值为 0/旧存档缺失时用 risk.generic */
 export function selectRiskBadges(project: Project): RiskBadge[] {
@@ -150,6 +150,7 @@ export function selectRiskBadges(project: Project): RiskBadge[] {
   }
 
   if (flags.has('budget_exhausted')) badges.push({ flag: 'budget_exhausted', key: 'project.risk.budget_exhausted' })
+  if (flags.has('development_cash_shortage')) badges.push({ flag: 'development_cash_shortage', key: 'project.risk.development_cash_shortage' })
   if (flags.has('quality_risk')) badges.push({ flag: 'quality_risk', key: 'project.risk.quality_risk' })
 
   return badges.sort((a, b) => RISK_ORDER.indexOf(a.flag as never) - RISK_ORDER.indexOf(b.flag as never))

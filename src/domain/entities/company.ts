@@ -14,7 +14,10 @@ export interface Company {
   cityId: string
   industryStartYear: number
   brand: number                    // 0-100
+  /** P2：按消费者细分保存的短期品牌记忆，按日衰减。 */
+  brandMemoryBySegment?: Record<string, number>
   technologyCapacity: number       // 0-100
+  researchCompletionDays?: Record<string, number>
   managementCapacity: number       // 0-100
   /**
    * 整数分。CODE-08 类型层封口（R8）：对**外部代码只读**——现金唯一事实源是

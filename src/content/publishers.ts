@@ -10,7 +10,10 @@ export interface PublisherSpec {
   specialties: ('channel' | 'co_marketing' | 'advance')[]
 }
 
-export const PUBLISHERS: readonly PublisherSpec[] = publishersRaw as PublisherSpec[]
+export const PUBLISHERS: readonly PublisherSpec[] = (publishersRaw as PublisherSpec[]).map((publisher) => ({
+  ...publisher,
+  markets: publisher.markets.map((id) => id === 'europe' ? 'western_europe' : id),
+}))
 
 export function getPublisherSpec(partnerId: string): PublisherSpec | undefined {
   return PUBLISHERS.find((p) => p.id === partnerId)

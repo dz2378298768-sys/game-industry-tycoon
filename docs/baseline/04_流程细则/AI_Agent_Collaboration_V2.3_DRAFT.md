@@ -1,5 +1,7 @@
 # Game Industry Tycoon · AI Agent 协作规范 V2.3（DRAFT / 待 Owner 批准）
 
+> **历史状态更新（2026-11-24）**：此文件是本次批准前的旧 V2.3 草案，未被批准为现行策略。当前执行依据为同目录 `AI_Agent_Collaboration_V2.3_APPROVED.md`；本文件仅作草案历史留痕。
+
 | 字段 | 内容 |
 |---|---|
 | 文档版本 | V2.3（DRAFT / PROPOSED，未生效） |

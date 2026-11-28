@@ -8,7 +8,7 @@ vi.mock('idb-keyval', () => ({
   del: vi.fn(async (key: string) => { mem.delete(key) }),
 }))
 
-import { saveGame, loadGame } from '@infrastructure/storage/save-service'
+import { saveGame, loadGame, clearSave, hasSave } from '@infrastructure/storage/save-service'
 import { parseSave, SAVE_SCHEMA_VERSION } from '@infrastructure/storage/save-schema'
 import { GameWorld } from '@application/mediators/game-world'
 
@@ -31,6 +31,21 @@ function sampleWorld() {
 describe('存档安全 (G10/G21)', () => {
   beforeEach(() => { mem.clear() })
 
+  it('保留上一份有效存档，并在主档损坏时恢复', async () => {
+    await Promise.all([saveGame({ ...sampleWorld(), saveSeed: 9 }), saveGame({ ...sampleWorld(), saveSeed: 10 })])
+    expect(await loadGame()).toMatchObject({ status: 'ok', state: { saveSeed: 10 } })
+
+    mem.set('git_save_v1', 'broken')
+    expect(await loadGame()).toMatchObject({ status: 'ok', recovered: true, state: { saveSeed: 9 } })
+    await saveGame({ ...sampleWorld(), saveSeed: 11 })
+    mem.set('git_save_v1', 'broken again')
+    expect(await loadGame()).toMatchObject({ status: 'ok', recovered: true, state: { saveSeed: 9 } })
+
+    await clearSave()
+    expect(await hasSave()).toBe(false)
+    expect(await loadGame()).toEqual({ status: 'empty' })
+  })
+
   it('正常保存与读取，状态一致', async () => {
     const world = sampleWorld()
     await saveGame(world)
@@ -45,6 +60,67 @@ describe('存档安全 (G10/G21)', () => {
     expect(result.state.companies[0]?.cashBalanceCents).toBe(
       world.companies[0]?.cashBalanceCents,
     )
+  })
+
+  it('音频岗位可保存并读档恢复', async () => {
+    const gw = new GameWorld(9)
+    gw.createCompany({ name: 'Audio Acme', cityId: 'san_francisco' })
+    const hired = gw.hireEmployee({
+      name: 'Audio',
+      role: 'audio_designer',
+      skillLevel: 4,
+      salaryMonthlyCents: 120_000,
+    })
+    expect(hired.success).toBe(true)
+    await saveGame(gw.serialize())
+
+    const result = await loadGame()
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.state.employees[0]?.role).toBe('audio_designer')
+  })
+
+  it('待到岗招聘可保存、读档并保留到岗日与招聘承诺', async () => {
+    const gw = new GameWorld(904)
+    gw.createCompany({ name: 'Pending Hire Studio', cityId: 'san_francisco' })
+    const candidate = gw.listCandidates()[0]
+    expect(candidate).toBeDefined()
+    const recruited = gw.recruitFromCandidate(candidate!.candidateId)
+    expect(recruited.success).toBe(true)
+    const pendingBefore = gw.world.pendingHires?.find((hire) => hire.state === 'pending')
+    expect(pendingBefore).toBeDefined()
+    expect(gw.world.employees).toHaveLength(0)
+
+    await saveGame(gw.serialize())
+    const loaded = await loadGame()
+    expect(loaded.status).toBe('ok')
+    if (loaded.status !== 'ok') return
+
+    const restored = new GameWorld(loaded.state.saveSeed)
+    restored.restore(loaded.state)
+    const pendingAfter = restored.listPendingHires().find((hire) => hire.pendingHireId === pendingBefore!.pendingHireId)
+    expect(pendingAfter).toMatchObject({
+      state: 'pending',
+      arrivalDay: pendingBefore!.arrivalDay,
+      candidateExpiresAtDay: pendingBefore!.candidateExpiresAtDay,
+      salaryCommitmentId: pendingBefore!.salaryCommitmentId,
+      recruitFeeCommitmentId: pendingBefore!.recruitFeeCommitmentId,
+    })
+    expect(restored.world.employees).toHaveLength(0)
+    expect(restored.world.employments?.filter((employment) => employment.occupiesPerson)).toHaveLength(0)
+    expect(restored.getFinancialOverview()?.committedCents).toBe(gw.getFinancialOverview()?.committedCents)
+
+    restored.advanceSimulation(Math.max(0, pendingBefore!.arrivalDay - restored.world.currentDayIndex))
+    const employmentId = pendingBefore!.employmentId
+    expect(restored.world.employments?.filter((employment) => employment.employmentId === employmentId && employment.occupiesPerson)).toHaveLength(1)
+    expect(restored.world.employees.filter((employee) => employee.id === employmentId)).toHaveLength(1)
+    const feeCommitment = restored.serialize().commitments?.find((commitment) => commitment.commitmentId === pendingBefore!.recruitFeeCommitmentId)
+    expect(feeCommitment?.realizedCents).toBe(feeCommitment?.amountCents)
+    expect(feeCommitment?.linkedTxIds).toHaveLength(1)
+    const feeTransactionIds = [...(feeCommitment?.linkedTxIds ?? [])]
+    // The next scheduler tick must not re-realize an already arrived one-off commitment.
+    restored.advanceSimulation(1)
+    expect(restored.serialize().commitments?.find((commitment) => commitment.commitmentId === pendingBefore!.recruitFeeCommitmentId)?.linkedTxIds).toEqual(feeTransactionIds)
   })
 
   it('损坏存档拒绝加载', async () => {

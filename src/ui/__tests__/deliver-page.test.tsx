@@ -52,6 +52,8 @@ describe('P-09 交付与上市页（批次 07B）', () => {
       pass: result.gate === 'PASS',
       violations: result.errorCodes.map((code) => ({ code, severity: 'P1' as const })),
       reasonCodes: [...result.errorCodes],
+      blockingUnmet: [...result.blockingUnmet],
+      formQualification: result.formQualification,
       checkedAt: result.checkedAt,
       source: 'd02-evaluateDeliveryGate',
     })
@@ -72,6 +74,36 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(screen.getByTestId('deliver-qual-status-early_access').textContent).toContain('评估不可用')
     expect(screen.getByTestId('deliver-disclosures-early_access').textContent).toContain('信息不足')
     expect(screen.getByTestId('deliver-unmet-blocking').textContent).toContain('评估不可用')
+  })
+
+  it('自然闸门结果接入资格、披露和未解决项展示', () => {
+    const projectId = readyToDeliver()
+    const result = registerRealGate(projectId)
+    renderDeliver()
+    expect(screen.getByTestId('deliver-qual-status-full').textContent).not.toContain('评估不可用')
+    expect(screen.getByTestId('deliver-qual-status-full').textContent).toContain('符合资格')
+    expect(screen.getByTestId('deliver-disclosures-full').textContent).toContain('无')
+    if (result.errorCodes.length === 0) {
+      expect(screen.getByTestId('deliver-unmet-blocking').textContent).toContain('没有未解决')
+    }
+  })
+
+  it('shows the actual intensity gap and takes the player to design changes', () => {
+    const projectId = readyToDeliver()
+    const game = useGameStore.getState().game!
+    const evaluation = game.getDeliveryGateEvaluation(projectId, 'full')
+    vi.spyOn(game, 'getDeliveryGateEvaluation').mockReturnValue({
+      ...evaluation,
+      pass: false,
+      reasonCodes: ['D02-MISSING-CORE', 'D02-FORM-INELIGIBLE'],
+      blockingUnmet: ['N-01'],
+      coreIntensityGap: { current: 2, required: 3 },
+    })
+    const navigate = vi.fn()
+    render(<Deliver projectId={projectId} onNavigate={navigate} />)
+    expect(screen.getByTestId('deliver-current-blockers').textContent).toContain('核心玩法强度为 2，当前正式交付要求至少达到 3')
+    fireEvent.click(screen.getByRole('button', { name: '去调整核心玩法强度' }))
+    expect(navigate).toHaveBeenCalledWith('projectRework', projectId)
   })
 
   it('方向档直读领域标准（low/medium/high），DOM 无合成质量词（U1）', () => {
@@ -112,6 +144,19 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     for (const tier of [...pricingTiers, ...marketingBudgetTiers]) {
       expect('status' in tier).toBe(false)
     }
+  })
+
+  it('reopening an accepted delivery shows its confirmed spend and no editable marketing controls', () => {
+    const projectId = useGameStore.getState().projects[0]!.id
+    const store = useGameStore.getState()
+    store.game!.getExecutionProject(projectId)!.project.state = 'COMPLETED'
+    store.setDeliveryLaunchPlan(projectId, { priceCents: 35, dailyBudgetCents: 150_000 })
+    renderDeliver()
+
+    const plan = screen.getByTestId('deliver-confirmed-launch-plan')
+    expect(plan.textContent).toContain('$0.35')
+    expect(plan.textContent).toContain('$4,500')
+    expect(screen.queryByRole('radio')).toBeNull()
   })
 
   /** ADJ-26 A6 接线夹具：走真实命令把项目推到可上市态，不手改任何状态字段。 */
@@ -285,11 +330,27 @@ describe('P-09 交付与上市页（批次 07B）', () => {
 
   it('07B-REV2 真点击 PASS：确认弹窗 → 真点击确认 → 内核提交被触发 → 上市 products 0→1', () => {
     const projectId = readyToDeliver()
+    // 新 REC-05 契约要求 PASS 交付有真实账本成本来源；注入一笔合法的
+    // 既有项目支出交易，保持本 UI 夹具只测试交付页行为。
+    const game = useGameStore.getState().game!
+    const companyId = game.getPlayerCompany()!.id
+    const tx = game.finance.getLedger().postTransaction({
+      companyId,
+      day: game.calendar.currentDayIndex,
+      category: 'project_expense',
+      cashFlowType: 'operating',
+      amountCents: -1,
+      idempotencyKey: `deliver-page-test-expense-${projectId}`,
+      referenceId: projectId,
+      source: 'system_auto',
+      description: 'test project expense',
+    }, { allowNegativeBalance: true })
+    expect(tx.success).toBe(true)
+    game.getExecutionProject(projectId)!.expenseTxIds.push(tx.result!.transaction.transactionId)
     expect(useGameStore.getState().products).toHaveLength(0)
     const gate = registerRealGate(projectId)
     expect(gate.gate).toBe('PASS')
 
-    const game = useGameStore.getState().game!
     const submitSpy = vi.spyOn(game, 'submitDeliveryForProject')
     renderDeliver()
     fireEvent.click(screen.getByTestId('deliver-submit-open'))
@@ -309,17 +370,17 @@ describe('P-09 交付与上市页（批次 07B）', () => {
     expect(after.builds).toHaveLength(1)
     expect(after.builds[0]!.buildId).toBeTruthy()
 
-    // 真点击交付时已暂存默认中价档方案（空组合 → 默认参考价 $29.99）
-    expect(useGameStore.getState().deliveryLaunchPlans[projectId]).toEqual({ priceCents: 2_999, dailyBudgetCents: 50_000 })
+    // The default plan retains reference pricing with no marketing expense.
+    expect(useGameStore.getState().deliveryLaunchPlans[projectId]).toEqual({ priceCents: 2_999, dailyBudgetCents: 0 })
     const legacy = useGameStore.getState().projects[0]!
     legacy.phase = 'READY_TO_LAUNCH'
     legacy.plannedLaunchDay = 0
     expect(useGameStore.getState().launchProject(projectId).success).toBe(true)
     expect(useGameStore.getState().products).toHaveLength(1)
-    // 上市经内核命令写入真实定价与三渠道预算
+    // Launch applies price and does not start a campaign without player selection.
     const launchedProduct = useGameStore.getState().products[0]!
     expect(launchedProduct.pricePerUnitCents).toBe(2_999)
-    expect(useGameStore.getState().marketingCampaigns.filter((c) => c.productId === launchedProduct.id)).toHaveLength(3)
+    expect(useGameStore.getState().marketingCampaigns.filter((c) => c.productId === launchedProduct.id)).toHaveLength(0)
   })
 
   it('SUP-01 真点击 FAIL：真实字段缺失 → 生产求值 FAIL → 失败原因逐条可见、state 保持 READY_TO_DELIVER（R14）', () => {

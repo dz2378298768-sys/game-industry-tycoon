@@ -12,32 +12,34 @@ import { ProductDetail } from '@ui/pages/product-detail'
 import { Market } from '@ui/pages/market'
 import { Deliver } from '@ui/pages/deliver'
 import { Review } from '@ui/pages/review'
+import { Research } from '@ui/pages/research'
+import { Chronicle } from '@ui/pages/chronicle'
 import { CompanyAlertBanner } from '@ui/components/company-alert-banner'
 import type { CalendarSpeed } from '@domain/enums'
+import { Archive, Building2, CircleDollarSign, Gamepad2, Globe2, UsersRound } from 'lucide-react'
+import { StudioOffice } from '@ui/studio/studio-office'
+import '@ui/styles/studio.css'
+import { TapTapAccount } from './taptap-account'
 
-type Route = 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver' | 'review'
+type Route = 'office' | 'overview' | 'employees' | 'hire' | 'projects' | 'projectDetail' | 'newProject' | 'finance' | 'products' | 'productDetail' | 'market' | 'deliver' | 'review' | 'research' | 'chronicle'
 
-interface NavItem { key: Route; label: string }
+const CATEGORIES = [
+  { icon: Building2, home: 'office', label: 'studio.title', links: ['office', 'overview'] },
+  { icon: Gamepad2, home: 'projects', label: 'studio.development', links: ['projects', 'newProject', 'projectDetail', 'deliver', 'research'] },
+  { icon: UsersRound, home: 'employees', label: 'studio.team', links: ['employees', 'hire'] },
+  { icon: Globe2, home: 'market', label: 'nav.market', links: ['market', 'chronicle'] },
+  { icon: CircleDollarSign, home: 'finance', label: 'nav.finance', links: ['finance', 'review'] },
+  { icon: Archive, home: 'products', label: 'nav.products', links: ['products', 'productDetail'] },
+] as const satisfies ReadonlyArray<{ icon: typeof Building2; home: Route; label: string; links: readonly Route[] }>
+const SUBNAV: Record<Route, readonly Route[]> = {
+  office: [], overview: ['overview'], employees: ['employees', 'hire'], hire: ['employees', 'hire'],
+  projects: ['projects', 'newProject', 'research'], projectDetail: ['projects', 'newProject', 'research'], newProject: ['projects', 'newProject', 'research'],
+  research: ['projects', 'newProject', 'research'],
+  deliver: ['projects', 'newProject'], finance: ['finance', 'review'], review: ['finance', 'review'],
+  market: ['market', 'chronicle'], chronicle: ['market', 'chronicle'], products: ['products'], productDetail: ['products'],
+}
 
-const NAV_ITEMS: NavItem[] = [
-  { key: 'overview', label: t('nav.overview') },
-  { key: 'market', label: t('nav.market') },
-  { key: 'employees', label: t('nav.employees') },
-  { key: 'hire', label: t('nav.hire') },
-  { key: 'projects', label: t('nav.projects') },
-  { key: 'newProject', label: t('nav.newProject') },
-  { key: 'finance', label: t('nav.finance') },
-  { key: 'products', label: t('nav.products') },
-  { key: 'review', label: t('nav.review') },
-]
-
-const SPEEDS: { value: CalendarSpeed; label: string }[] = [
-  { value: 'paused', label: t('gameCalendar.speed.paused') },
-  { value: 'slow', label: t('gameCalendar.speed.slow') },
-  { value: 'normal', label: t('gameCalendar.speed.normal') },
-  { value: 'fast', label: t('gameCalendar.speed.fast') },
-  { value: 'ultra', label: t('gameCalendar.speed.ultra') },
-]
+const SPEEDS: readonly CalendarSpeed[] = ['paused', 'slow', 'normal', 'fast', 'ultra']
 
 export const GameShell: React.FC = () => {
   const store = useGameStore()
@@ -46,18 +48,31 @@ export const GameShell: React.FC = () => {
     setSpeed, advanceDays, save, load, restartNewGame,
     locale, setLocale,
   } = store
+  React.useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
 
-  const [route, setRoute] = React.useState<Route>('overview')
+  const [route, setRoute] = React.useState<Route>('office')
+  const [selectedStudioProject, setSelectedStudioProject] = React.useState<string>()
+  const [showScene, setShowScene] = React.useState(true)
   const [projectDetailId, setProjectDetailId] = React.useState<string | null>(null)
+  const [projectFocus, setProjectFocus] = React.useState<'design' | 'qa' | 'team' | undefined>(undefined)
   const [productDetailId, setProductDetailId] = React.useState<string | null>(null)
   /** P-09 交付页入口项目（仅 projectDetail 交付按钮跳转） */
   const [deliverProjectId, setDeliverProjectId] = React.useState<string | null>(null)
   /** P-02 → P-03 类别预填（规格 §2 P-02 跳转） */
   const [prefillGenreId, setPrefillGenreId] = React.useState<string | undefined>(undefined)
+  const [predecessorId, setPredecessorId] = React.useState<string>()
 
   const handleNavigate = (r: string, param?: string) => {
-    if (r === 'newProject') {
-      setPrefillGenreId(param)
+    if (r === 'overview') {
+      setRoute('office')
+      return
+    }
+    if (r === 'newProject' || r === 'newSequel') {
+      const predecessor = r === 'newSequel' ? store.products.find((product) => product.id === param) : undefined
+      setPredecessorId(predecessor?.id)
+      setPrefillGenreId(r === 'newProject' ? param : predecessor?.genreId)
       setRoute('newProject')
       return
     }
@@ -67,12 +82,15 @@ export const GameShell: React.FC = () => {
       return
     }
     if (r === 'deliver' && param) {
+      setSelectedStudioProject(param)
       setDeliverProjectId(param)
       setRoute('deliver')
       return
     }
-    if (r === 'projectDetail' && param) {
+    if ((r === 'projectDetail' || r === 'projectRework' || r === 'projectQa' || r === 'projectTeam') && param) {
       setProjectDetailId(param)
+      setSelectedStudioProject(param)
+      setProjectFocus(r === 'projectRework' ? 'design' : r === 'projectQa' ? 'qa' : r === 'projectTeam' ? 'team' : undefined)
       setRoute('projectDetail')
     } else {
       setProjectDetailId(null)
@@ -91,18 +109,22 @@ export const GameShell: React.FC = () => {
 
   const renderContent = () => {
     switch (route) {
+      case 'office': return <StudioOffice selectedId={selectedStudioProject} onSelect={setSelectedStudioProject} onNavigate={handleNavigate}
+        showScene={showScene} onToggleScene={() => setShowScene((enabled) => !enabled)} />
       case 'overview': return <Overview onNavigate={handleNavigate} />
       case 'market': return <Market onNavigate={handleNavigate} />
       case 'employees': return <Employees />
       case 'hire': return <Hire onNavigate={handleNavigate} />
       case 'projects': return <Projects onNavigate={handleNavigate} />
-      case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
-      case 'newProject': return <NewProject onNavigate={handleNavigate} initialGenreId={prefillGenreId} />
+      case 'projectDetail': return projectDetailId ? <ProjectDetail projectId={projectDetailId} onNavigate={handleNavigate} focusSection={projectFocus} /> : <Projects onNavigate={handleNavigate} />
+      case 'newProject': return <NewProject key={predecessorId ?? 'new'} onNavigate={handleNavigate} initialGenreId={prefillGenreId} initialPredecessorId={predecessorId} />
       case 'finance': return <Finance onNavigate={handleNavigate} />
       case 'products': return <Products onNavigate={handleNavigate} />
       case 'productDetail': return productDetailId ? <ProductDetail productId={productDetailId} onNavigate={handleNavigate} /> : <Products onNavigate={handleNavigate} />
       case 'deliver': return deliverProjectId ? <Deliver projectId={deliverProjectId} onNavigate={handleNavigate} /> : <Projects onNavigate={handleNavigate} />
       case 'review': return <Review onNavigate={handleNavigate} />
+      case 'research': return <Research />
+      case 'chronicle': return <Chronicle onNavigate={handleNavigate} />
       default: return <Overview onNavigate={handleNavigate} />
     }
   }
@@ -121,13 +143,13 @@ export const GameShell: React.FC = () => {
         : t('topbar.runwayInfinity')
 
   return (
-    <div className="app-shell">
+    <div className="app-shell arcade-shell">
       <div className="top-bar">
         <h1>{t('app.title')}</h1>
         <div className="day-label">{formatDay(dayIndex)}</div>
-        <div className="day-label" style={{ color: '#c9a865' }}>💰 {formatMoney(company?.cashBalanceCents ?? 0)}</div>
+        <div className="day-label studio-money">{t('overview.cash')} {formatMoney(company?.cashBalanceCents ?? 0)}</div>
         {/* CODE-07A：顶栏公司级可用现金（FIN §6.2 口径）与现金跑道（月） */}
-        <div className="day-label" style={{ color: '#c9a865' }} data-testid="topbar-available-cash">
+        <div className="day-label studio-money" data-testid="topbar-available-cash">
           {t('topbar.availableCash')} {financial ? formatMoney(financial.availableCashCents) : '—'}
         </div>
         <div className="day-label" style={{ color: runwayColor }} data-testid="topbar-runway">
@@ -135,23 +157,25 @@ export const GameShell: React.FC = () => {
         </div>
         {/* FIX-5 / ADJ-16 R-3：Brand 玩法面 v1 隐藏；入口代码保留，恢复时按 ADJ-16 R-3 处理 */}
         <div className="controls">
-          {SPEEDS.map(s => (
+          <TapTapAccount />
+          {SPEEDS.map(value => (
             <button
-              key={s.value}
-              className={`btn ${speed === s.value ? '' : 'btn-secondary'} btn-small`}
-              style={speed === s.value ? { background: '#c9a865', color: '#0a192f' } : undefined}
-              onClick={() => setSpeed(s.value)}
+              key={value}
+              className={`btn ${speed === value ? '' : 'btn-secondary'} btn-small`}
+              onClick={() => setSpeed(value)}
+              aria-pressed={speed === value}
             >
-              {s.label}
+              {t(`gameCalendar.speed.${value}`)}
             </button>
           ))}
-          <button className="btn btn-secondary btn-small" onClick={() => advanceDays(30)}>+30d</button>
+          <button className="btn btn-secondary btn-small" onClick={() => advanceDays(30)}>{t('button.advance30d')}</button>
           <span style={{ width: 1, height: 20, background: 'rgba(201,168,101,0.3)' }} />
           <button className="btn btn-secondary btn-small" onClick={save}>{t('button.save')}</button>
           <button className="btn btn-secondary btn-small" onClick={load}>{t('button.load')}</button>
           <select
             value={locale}
-            onChange={e => setLocale(e.target.value as any)}
+            aria-label={t('app.language')}
+            onChange={(e) => setLocale(e.target.value === 'en' ? 'en' : 'zh-CN')}
             style={{ padding: '4px 8px', background: '#0a192f', border: '1px solid var(--border)', color: 'var(--off-white)', fontSize: 12 }}
           >
             <option value="zh-CN">中文</option>
@@ -168,25 +192,41 @@ export const GameShell: React.FC = () => {
         onRestart={() => { void restartNewGame() }}
       />
 
-      <div className="main-layout">
-        <nav className="sidebar">
-          {NAV_ITEMS.map(item => (
-            <a
-              key={item.key}
-              className={route === item.key ? 'active' : ''}
-              onClick={() => handleNavigate(item.key)}
+      <div className={`main-layout ${route === 'office' ? 'studio-home-layout' : ''}`}>
+        {route !== 'office' && <aside className="sidebar studio-side" aria-label={t('studio.sections')}>
+          {SUBNAV[route].map(key => (
+            <button
+              key={key}
+              type="button"
+              aria-current={route === key ? 'page' : undefined}
+              className={route === key ? 'active' : ''}
+              onClick={() => key === 'overview' ? setRoute('overview') : handleNavigate(key)}
             >
-              {item.label}
-            </a>
+              {t(`nav.${key}`)}
+            </button>
           ))}
-        </nav>
+        </aside>}
 
         <main className="content-area">
           {renderContent()}
         </main>
       </div>
 
-      <div className="message-overlay">
+      <nav className="studio-dock" aria-label={t('studio.navigation')}>
+        {CATEGORIES.map(({ icon: Icon, home, label, links }) => (
+          <button key={home} type="button" aria-current={(links as readonly Route[]).includes(route) ? 'page' : undefined}
+            onClick={() => handleNavigate(home)}>
+            <Icon size={19} aria-hidden="true" />{t(label)}
+          </button>
+        ))}
+        <div className="studio-shortcuts">
+          {!SUBNAV[route].includes('hire') && <button type="button" onClick={() => handleNavigate('hire')}>{t('nav.hire')}</button>}
+          {!SUBNAV[route].includes('newProject') && <button type="button" onClick={() => handleNavigate('newProject')}>{t('nav.newProject')}</button>}
+          {!SUBNAV[route].includes('review') && <button type="button" onClick={() => handleNavigate('review')}>{t('nav.review')}</button>}
+          {route === 'office' && <button type="button" onClick={() => setRoute('overview')}>{t('nav.overview')}</button>}
+        </div>
+      </nav>
+      <div className="message-overlay" role="status">
         {messages.map(m => (
           <div key={m.id} className={`message-toast ${m.type}`}>{m.text}</div>
         ))}

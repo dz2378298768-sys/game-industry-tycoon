@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Product } from '@domain/entities/product'
 import { Review } from '@ui/pages/review'
@@ -29,7 +29,7 @@ describe('P-12 经营复盘 + S12-4 媒体评价聚合卡（批次 07B）', () =
     const financial = gw.getFinancialOverview()!
     useGameStore.setState({
       game: gw, company, financial,
-      products: [makeProduct()], projects: [], transactions: [], dayIndex: financial.dayIndex,
+      products: [makeProduct({ companyId: company.id })], projects: [], transactions: [], refundBatches: [], dayIndex: financial.dayIndex,
     } as never)
   })
 
@@ -43,22 +43,48 @@ describe('P-12 经营复盘 + S12-4 媒体评价聚合卡（批次 07B）', () =
     expect(screen.getByTestId('p12-empty').textContent).toContain('暂无经营结果可复盘')
   })
 
-  it('S12-4：口碑档降级、窗口 n/N=0/10、最近评价列表无伪造条目', () => {
+  it('S12-4：档位摘要来自产品生产事实，页面没有伪造的评价数量和条目', () => {
     const { container } = renderReview()
     expect(screen.getByTestId('p12-media-card')).toBeTruthy()
-    expect(screen.getByTestId('p12-media-band').textContent).toContain('暂无评价')
-    expect(screen.getByTestId('p12-media-count').textContent).toContain('0 / 10')
-    expect(screen.getByTestId('p12-media-list').textContent).toContain('暂无评价，上市后积累')
+    expect(screen.getByTestId('p12-media-band').textContent).toBe('偏正面')
+    expect(screen.queryByTestId('p12-media-count')).toBeNull()
+    expect(screen.queryByTestId('p12-media-list')).toBeNull()
     // G1 不建 BrandMemory：不渲染品牌值 / Brand 点数
     expect(container.textContent).not.toMatch(/BrandMemory|品牌值|Brand 点数|品牌点数/)
   })
 
-  it('A-35/A-36：四域归因空集占位，各域数据不足且无伪造锚点', () => {
+  it('A-35/A-36：没有产品时四域均如实显示数据不足', () => {
+    useGameStore.setState({ products: [] })
     const { container } = renderReview()
     for (const domain of ['design', 'execution', 'market', 'finance']) {
       expect(screen.getByTestId(`p12-domain-${domain}`).textContent).toContain('数据不足')
     }
     expect(container.textContent).not.toMatch(/事件 id:|交易 id:|清单项 id:/)
+  })
+
+  it('复盘可跳到实际销售和退款记录，缺少需求池归因仍显示数据不足', () => {
+    const onNavigate = vi.fn()
+    render(<Review onNavigate={onNavigate} />)
+    const finance = screen.getByTestId('p12-domain-finance')
+    expect(finance.textContent).toContain('$140')
+    fireEvent.click(within(finance).getByRole('button'))
+    expect(onNavigate).toHaveBeenCalledWith('productDetail', 'P-1')
+    expect(screen.getByTestId('p12-domain-market').textContent).toContain('数据不足')
+  })
+
+  it('冷启动时读取存档中的销售归因', () => {
+    const product = useGameStore.getState().products[0]!
+    useGameStore.setState({
+      products: [{
+        ...product,
+        latestMarketFeedback: {
+          dayIndex: 101, soldUnits: 73, addressableUnits: 100, purchaseIntentReductionUnits: 20,
+          allocationReductionUnits: 7, marketingAddedIntentUnits: 0, bySegment: {},
+        },
+      }],
+    })
+    renderReview()
+    expect(screen.getByTestId('p12-domain-market').textContent).toContain('73')
   })
 
   it('U1：三质量分列终值渲染为 —，无综合分/合成词', () => {
@@ -69,11 +95,13 @@ describe('P-12 经营复盘 + S12-4 媒体评价聚合卡（批次 07B）', () =
     expect(container.textContent).not.toMatch(/综合|总评|加权平均|平均分|qualityScore|finalQualityScore|overall/)
   })
 
-  it('继承项五卡齐备，ProductArchive 未接线显示数据不足', () => {
+  it('二次立项显示当前现金、团队、上款结果和市场，档案经验仍然等待数据', () => {
     renderReview()
-    for (const key of ['cash', 'team', 'lastProduct', 'experience', 'market']) {
-      expect(screen.getByTestId(`p12-inherit-${key}`).textContent).toContain('数据不足')
-    }
+    expect(screen.getByTestId('p12-inherit-cash').textContent).toContain('可用现金')
+    expect(screen.getByTestId('p12-inherit-team').textContent).toContain('0')
+    expect(screen.getByTestId('p12-inherit-lastProduct').textContent).toContain('Test Game')
+    expect(screen.getByTestId('p12-inherit-market').textContent).toMatch(/0$/)
+    expect(screen.getByTestId('p12-inherit-experience').textContent).toContain('数据不足')
   })
 
   it('A-34 / S12-3：第二款入口无禁用态，点击跳 P-02（market）', () => {
@@ -92,10 +120,23 @@ describe('P-12 经营复盘 + S12-4 媒体评价聚合卡（批次 07B）', () =
     expect(screen.getByTestId('p12-cash-curve').textContent).toContain('$500')
   })
 
-  it('经营汇总销量与净收入来自产品真实销售记录', () => {
+  it('经营汇总按已入账退款扣减净收入，未入账退款不计', () => {
+    useGameStore.setState({ refundBatches: [
+      {
+        id: 'posted', productId: 'P-1', salesRecordId: 'SR-1', marketId: 'JP', platformId: 'home_console_g2',
+        saleDayIndex: 100, refundDayIndex: 110, refundedUnits: 1, refundAmountCents: 2000,
+        source: 'auto_window', status: 'posted', idempotencyKey: 'posted',
+      },
+      {
+        id: 'pending', productId: 'P-1', salesRecordId: 'SR-1', marketId: 'JP', platformId: 'home_console_g2',
+        saleDayIndex: 100, refundDayIndex: 110, refundedUnits: 1, refundAmountCents: 2000,
+        source: 'auto_window', status: 'pending', idempotencyKey: 'pending',
+      },
+    ] })
     renderReview()
     const summary = screen.getByTestId('p12-summary')
     expect(summary.textContent).toContain('10')
-    expect(summary.textContent).toContain('$140')
+    expect(summary.textContent).toContain('$120')
+    expect(summary.textContent).toContain('$20')
   })
 })

@@ -1,9 +1,17 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
+import { tapLogin } from './server/taptap-login.mjs'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'taptap-login',
+      configureServer(server) { server.middlewares.use(tapLogin) },
+      configurePreviewServer(server) { server.middlewares.use(tapLogin) },
+    },
+  ],
   resolve: {
     alias: {
       '@domain': path.resolve(__dirname, 'src/domain'),

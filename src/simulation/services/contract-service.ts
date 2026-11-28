@@ -255,19 +255,17 @@ export function isInScope(
   return true
 }
 
-function templateRateRange(template: SignTemplateCmd['template']): { min: number; max: number } {
+export function templateRateRange(template: SignTemplateCmd['template']): { min: number; max: number } {
   if (template === 'channel') return { min: 15, max: 30 }
   if (template === 'co_marketing') return { min: 20, max: 35 }
   return { min: 15, max: 30 }
 }
 
-/** 三模板签署：预付款走 FinanceService 一次性入账，其余字段纯数据。 */
-export function signTemplateContract(
+/** Shared, read-only validation for quotes and signings. */
+export function validateTemplateContract(
   world: WorldState,
   cmd: SignTemplateCmd,
-  day: number,
-  finance: FinanceService,
-): ContractResult {
+): ContractResult | null {
   if (!['channel', 'co_marketing', 'advance'].includes(cmd.template)) {
     return { ok: false, world, errorCode: 'CONTRACT_TEMPLATE_INVALID', errorMessage: '未知合同模板' }
   }
@@ -346,6 +344,18 @@ export function signTemplateContract(
     }
   }
 
+  return null
+}
+
+/** 三模板签署：预付款走 FinanceService 一次性入账，其余字段纯数据。 */
+export function signTemplateContract(
+  world: WorldState,
+  cmd: SignTemplateCmd,
+  day: number,
+  finance: FinanceService,
+): ContractResult {
+  const invalid = validateTemplateContract(world, cmd)
+  if (invalid !== null) return invalid
   const product = world.products.find((p) => p.id === cmd.productId)!
   const contract: PublishingContract = {
     id: makeContractId(cmd.productId, 'revenue_share', nextSeq(world, cmd.productId, 'revenue_share')),

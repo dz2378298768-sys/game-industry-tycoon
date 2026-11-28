@@ -109,7 +109,7 @@ describe('P-07 变更返工 + P-08 测试优化面板（批次 07B）', () => {
 
   it('A-21：缺陷明细 fail-closed 降级，不伪造 E 级缺陷横幅', () => {
     renderDetail()
-    expect(screen.getByTestId('p08-defect-list').textContent).toContain('缺陷明细待接线')
+    expect(screen.getByTestId('p08-defect-list').textContent).toContain('当前没有可用的缺陷明细')
     expect(screen.queryByTestId('p08-e-defect-banner')).toBeNull()
   })
 
@@ -117,6 +117,6 @@ describe('P-07 变更返工 + P-08 测试优化面板（批次 07B）', () => {
     renderDetail()
     const btn = screen.getByTestId('p08-optimize')
     expect(btn.hasAttribute('disabled')).toBe(true)
-    expect(btn.getAttribute('title')).toContain('OPEN-D02-WIRING')
+    expect(btn.getAttribute('title')).toContain('完成可用的质量评估')
   })
 })

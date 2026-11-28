@@ -260,7 +260,16 @@ describe('M3-C1-T8 破产重整', () => {
     const sold = gw.world.events.filter((e) => e.type === 'CompanyAssetSold')
     expect(sold.length).toBeGreaterThan(0)
     expect(gw.world.products.find((p) => p.id === 'sell-p1')!.status).toBe('retired')
-    expect(gw.finance.getCashBalance(seller.id)).toBeGreaterThan(0)
+    const price = gw.finance.getCashBalance(seller.id)
+    expect(price).toBeGreaterThan(0)
+    expect(gw.finance.getCashBalance(buyer.id)).toBe(5_000_000 - price)
+    expect(gw.finance.getCashBalance(player.id)).toBe(5_000_000)
+    for (const company of gw.world.companies) {
+      expect(company.cashBalanceCents).toBe(gw.finance.getCashBalance(company.id))
+      if (company.id === seller.id || company.id === buyer.id) {
+        expect(gw.finance.getSyncedCash(company.id)).toBe(company.cashBalanceCents)
+      }
+    }
   })
 
   it('E06 AI 破产期：有可售资产先 SELL_ASSET，无资产则清仓定价', () => {

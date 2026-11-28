@@ -1,0 +1,152 @@
+{
+  "seed": 99,
+  "years": 5,
+  "days": 1825,
+  "commit": "398ecee039098269256e091827f8e40e7132983f",
+  "startedAt": "2026-11-28T04:48:39.274Z",
+  "elapsedMs": 76397,
+  "peakRssMb": 1922,
+  "timeline": [
+    {
+      "year": 1970,
+      "day": 365,
+      "activeAi": 4,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.421,
+      "products": 5,
+      "avgAiCashCents": 32524321,
+      "personaActive": {
+        "indie": 1,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 1
+      },
+      "personaTotal": {
+        "indie": 1,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 1
+      }
+    },
+    {
+      "year": 1971,
+      "day": 730,
+      "activeAi": 6,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.3549,
+      "products": 11,
+      "avgAiCashCents": 50851218,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1972,
+      "day": 1095,
+      "activeAi": 6,
+      "activePlayer": false,
+      "bankruptcies": 1,
+      "recoveries": 1,
+      "dissolutions": 0,
+      "bankruptcyRate": 0.1667,
+      "recoveryRate": 1,
+      "hhi": 0.3167,
+      "products": 19,
+      "avgAiCashCents": 22324604877,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1973,
+      "day": 1460,
+      "activeAi": 7,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2484,
+      "products": 25,
+      "avgAiCashCents": 82322597372,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1974,
+      "day": 1825,
+      "activeAi": 9,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2103,
+      "products": 30,
+      "avgAiCashCents": 153376250629,
+      "personaActive": {
+        "indie": 3,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 3
+      },
+      "personaTotal": {
+        "indie": 3,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 3
+      }
+    }
+  ],
+  "persona": {
+    "indie": {
+      "at5": 1,
+      "at10": null,
+      "at20": null
+    },
+    "genre_specialist": {
+      "at5": 1,
+      "at10": null,
+      "at20": null
+    },
+    "integrated_dev_publisher": {
+      "at5": 1,
+      "at10": null,
+      "at20": null
+    }
+  },
+  "failures": [
+    "未评估：AI 全灭/单一垄断需要第 20 年数据（当前为缩短版）",
+    "未评估：玩家被碾压需要同策略克隆对照（本机未跑）"
+  ]
+}

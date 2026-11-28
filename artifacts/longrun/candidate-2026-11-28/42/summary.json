@@ -1,0 +1,522 @@
+{
+  "seed": 42,
+  "years": 20,
+  "days": 7300,
+  "commit": "398ecee039098269256e091827f8e40e7132983f",
+  "startedAt": "2026-11-28T04:03:50.484Z",
+  "elapsedMs": 2544339,
+  "peakRssMb": 4142,
+  "timeline": [
+    {
+      "year": 1970,
+      "day": 365,
+      "activeAi": 4,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.4191,
+      "products": 5,
+      "avgAiCashCents": 35239448,
+      "personaActive": {
+        "indie": 1,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 1
+      },
+      "personaTotal": {
+        "indie": 1,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 1
+      }
+    },
+    {
+      "year": 1971,
+      "day": 730,
+      "activeAi": 6,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.4141,
+      "products": 11,
+      "avgAiCashCents": 54507423,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1972,
+      "day": 1095,
+      "activeAi": 6,
+      "activePlayer": false,
+      "bankruptcies": 1,
+      "recoveries": 1,
+      "dissolutions": 0,
+      "bankruptcyRate": 0.1667,
+      "recoveryRate": 1,
+      "hhi": 0.264,
+      "products": 18,
+      "avgAiCashCents": 20986023366,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1973,
+      "day": 1460,
+      "activeAi": 7,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2458,
+      "products": 24,
+      "avgAiCashCents": 77103512412,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 2
+      },
+      "personaTotal": {
+        "indie": 2,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 2
+      }
+    },
+    {
+      "year": 1974,
+      "day": 1825,
+      "activeAi": 9,
+      "activePlayer": false,
+      "bankruptcies": 2,
+      "recoveries": 2,
+      "dissolutions": 0,
+      "bankruptcyRate": 0.2222,
+      "recoveryRate": 1,
+      "hhi": 0.2125,
+      "products": 27,
+      "avgAiCashCents": 147560738701,
+      "personaActive": {
+        "indie": 3,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 3
+      },
+      "personaTotal": {
+        "indie": 3,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 3
+      }
+    },
+    {
+      "year": 1975,
+      "day": 2190,
+      "activeAi": 8,
+      "activePlayer": false,
+      "bankruptcies": 1,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0.1,
+      "recoveryRate": 0,
+      "hhi": 0.2385,
+      "products": 31,
+      "avgAiCashCents": 219612163887,
+      "personaActive": {
+        "indie": 2,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 3
+      },
+      "personaTotal": {
+        "indie": 3,
+        "genre_specialist": 4,
+        "integrated_dev_publisher": 3
+      }
+    },
+    {
+      "year": 1976,
+      "day": 2555,
+      "activeAi": 9,
+      "activePlayer": false,
+      "bankruptcies": 2,
+      "recoveries": 0,
+      "dissolutions": 1,
+      "bankruptcyRate": 0.2,
+      "recoveryRate": 0,
+      "hhi": 0.2189,
+      "products": 27,
+      "avgAiCashCents": 312903876291,
+      "personaActive": {
+        "indie": 3,
+        "genre_specialist": 2,
+        "integrated_dev_publisher": 4
+      },
+      "personaTotal": {
+        "indie": 4,
+        "genre_specialist": 4,
+        "integrated_dev_publisher": 4
+      }
+    },
+    {
+      "year": 1977,
+      "day": 2920,
+      "activeAi": 10,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 2,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2876,
+      "products": 32,
+      "avgAiCashCents": 433751293783,
+      "personaActive": {
+        "indie": 3,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 4
+      },
+      "personaTotal": {
+        "indie": 4,
+        "genre_specialist": 5,
+        "integrated_dev_publisher": 4
+      }
+    },
+    {
+      "year": 1978,
+      "day": 3285,
+      "activeAi": 12,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.309,
+      "products": 37,
+      "avgAiCashCents": 986381348565,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 3,
+        "integrated_dev_publisher": 5
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 5,
+        "integrated_dev_publisher": 5
+      }
+    },
+    {
+      "year": 1979,
+      "day": 3650,
+      "activeAi": 13,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.3282,
+      "products": 41,
+      "avgAiCashCents": 1756256707902,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 4,
+        "integrated_dev_publisher": 5
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 6,
+        "integrated_dev_publisher": 5
+      }
+    },
+    {
+      "year": 1980,
+      "day": 4015,
+      "activeAi": 14,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.3225,
+      "products": 31,
+      "avgAiCashCents": 2719407065336,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 4,
+        "integrated_dev_publisher": 6
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 6,
+        "integrated_dev_publisher": 6
+      }
+    },
+    {
+      "year": 1981,
+      "day": 4380,
+      "activeAi": 15,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.3011,
+      "products": 37,
+      "avgAiCashCents": 3559149349203,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 5,
+        "integrated_dev_publisher": 6
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 6
+      }
+    },
+    {
+      "year": 1982,
+      "day": 4745,
+      "activeAi": 16,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2734,
+      "products": 37,
+      "avgAiCashCents": 4641881987740,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 5,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1983,
+      "day": 5110,
+      "activeAi": 17,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2286,
+      "products": 39,
+      "avgAiCashCents": 6027812373904,
+      "personaActive": {
+        "indie": 4,
+        "genre_specialist": 6,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 5,
+        "genre_specialist": 8,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1984,
+      "day": 5475,
+      "activeAi": 18,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2163,
+      "products": 41,
+      "avgAiCashCents": 7841532788919,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 6,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 8,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1985,
+      "day": 5840,
+      "activeAi": 18,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.2209,
+      "products": 17,
+      "avgAiCashCents": 10528328787937,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 6,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 8,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1986,
+      "day": 6205,
+      "activeAi": 19,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.1916,
+      "products": 18,
+      "avgAiCashCents": 13558100688199,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 9,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1987,
+      "day": 6570,
+      "activeAi": 19,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.1878,
+      "products": 18,
+      "avgAiCashCents": 18093066780941,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 7
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 9,
+        "integrated_dev_publisher": 7
+      }
+    },
+    {
+      "year": 1988,
+      "day": 6935,
+      "activeAi": 20,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.1775,
+      "products": 20,
+      "avgAiCashCents": 22359881271387,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 8
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 9,
+        "integrated_dev_publisher": 8
+      }
+    },
+    {
+      "year": 1989,
+      "day": 7300,
+      "activeAi": 20,
+      "activePlayer": false,
+      "bankruptcies": 0,
+      "recoveries": 0,
+      "dissolutions": 0,
+      "bankruptcyRate": 0,
+      "recoveryRate": 0,
+      "hhi": 0.1615,
+      "products": 22,
+      "avgAiCashCents": 27016901380732,
+      "personaActive": {
+        "indie": 5,
+        "genre_specialist": 7,
+        "integrated_dev_publisher": 8
+      },
+      "personaTotal": {
+        "indie": 6,
+        "genre_specialist": 9,
+        "integrated_dev_publisher": 8
+      }
+    }
+  ],
+  "persona": {
+    "indie": {
+      "at5": 1,
+      "at10": 0.8,
+      "at20": 0.8333333333333334
+    },
+    "genre_specialist": {
+      "at5": 1,
+      "at10": 0.6666666666666666,
+      "at20": 0.7777777777777778
+    },
+    "integrated_dev_publisher": {
+      "at5": 1,
+      "at10": 1,
+      "at20": 1
+    }
+  },
+  "failures": [
+    "无恢复：1975-1979 连续 5 年恢复率为 0",
+    "无恢复：1976-1980 连续 5 年恢复率为 0",
+    "无恢复：1977-1981 连续 5 年恢复率为 0",
+    "无恢复：1978-1982 连续 5 年恢复率为 0",
+    "无恢复：1979-1983 连续 5 年恢复率为 0",
+    "无恢复：1980-1984 连续 5 年恢复率为 0",
+    "无恢复：1981-1985 连续 5 年恢复率为 0",
+    "无恢复：1982-1986 连续 5 年恢复率为 0",
+    "无恢复：1983-1987 连续 5 年恢复率为 0",
+    "无恢复：1984-1988 连续 5 年恢复率为 0",
+    "无恢复：1985-1989 连续 5 年恢复率为 0",
+    "未评估：玩家被碾压需要同策略克隆对照（本机未跑）"
+  ]
+}

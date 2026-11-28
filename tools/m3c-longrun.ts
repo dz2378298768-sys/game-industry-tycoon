@@ -11,9 +11,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { createGameWorld } from '@application/factories/create-game-world'
 import type { WorldState } from '@simulation/services/world-state'
-import type { Company, CompanyPersona } from '@domain/entities/company'
+import type { Company } from '@domain/entities/company'
+import type { CompanyPersona } from '@domain/enums'
 
-const OUT = 'artifacts/longrun'
+const OUT = process.env.GIT_LONGRUN_OUTPUT ?? 'artifacts/longrun'
 const SEEDS = [42, 7, 99, 123, 2026, 31415, 2718, 808]
 const PERSONAS: CompanyPersona[] = ['indie', 'genre_specialist', 'integrated_dev_publisher']
 
@@ -130,10 +131,11 @@ function runSeed(seed: number, years: number): Summary {
 
   const failures: string[] = []
   if (timeline.some((r) => r.bankruptcyRate > 0.25)) failures.push('破产悬崖：任一年破产率 > 25%')
-  let zeroRun = 0
-  for (const row of timeline) {
-    zeroRun = row.recoveryRate === 0 ? zeroRun + 1 : 0
-    if (zeroRun >= 5) failures.push(`无恢复：${row.year - 4}-${row.year} 连续 5 年恢复率为 0`)
+  for (let index = 4; index < timeline.length; index += 1) {
+    const window = timeline.slice(index - 4, index + 1)
+    if (window.some((row) => row.bankruptcies > 0) && window.every((row) => row.recoveries === 0)) {
+      failures.push(`无恢复：${window[0]!.year}-${window[4]!.year} 有破产但没有恢复`)
+    }
   }
   const y20 = timeline.find((r) => r.year === 1989)
   if (y20 !== undefined && y20.activeAi < 3) failures.push('AI 全灭：第 20 年 active AI < 3')

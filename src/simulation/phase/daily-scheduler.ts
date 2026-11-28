@@ -18,6 +18,7 @@ import {
   budgetExhaustedEventKey,
   createBudgetExhaustedEvent,
   createPauseTimeoutCancelledEvent,
+  createBankruptcyCancelledEvent,
   createCompanyBankruptedEvent,
   createCompanyRecoveredEvent,
   createCompanyDissolvedEvent,
@@ -50,6 +51,13 @@ import { cityRentMultiplier } from '@content/queries'
 
 export interface DailySchedulerDeps {
   finance: FinanceService
+  /**
+   * ExecutionProject-backed projects use the execution state machine as the
+   * authority for READY_TO_DELIVER. The legacy project carrier must not move
+   * to READY_TO_LAUNCH before all execution work packages are complete.
+   */
+  isExecutionProject?: (projectId: string) => boolean
+  advanceExecutionProjects?: (state: WorldState, dayIndex: number) => WorldState
   /** 销售阶段（M2-B）；未注入时跳过，保持 M1 行为不变 */
   sales?: MarketSimulationService
   /** 退款阶段（M2-C）；未注入时跳过到期兑现，保持 M2-A/B 行为不变 */
@@ -117,11 +125,15 @@ export class DailyScheduler {
       state = this.deps.personnelTick(state, dayIndex)
     }
     state = this.applyMonthlySettlement(state, dayIndex)
+    if (this.deps.advanceExecutionProjects !== undefined) {
+      state = this.deps.advanceExecutionProjects(state, dayIndex)
+    }
     // 预算耗尽在当日所有工资分摊/合同付款/直接支出入账后统一判定一次（DESIGN-G05 §6.1）
     state = this.applyBudgetExhaustion(state, dayIndex)
     state = this.syncCompanyCash(state)
     // 破产检查：公司现金为负时触发 status='bankrupt'（DESIGN-OI-21 §2.3）
     state = this.applyBankruptcyCheck(state, dayIndex)
+    state = this.applyBankruptcyProjectPolicy(state, dayIndex)
     state = this.applyClearanceMode(state)
     state = this.applyRestructuringClock(state, dayIndex)
     // 终局：破产满 360 天仍未恢复 → dissolved（仅月末判定，DECISION-M3-P0-ENDGAME-002 §D1）
@@ -146,8 +158,14 @@ export class DailyScheduler {
       const pausedDays = project.pausedDays + 1
       changed = true
 
-      if (pausedDays >= PAUSE_TIMEOUT_DAYS) {
-        events.push(createPauseTimeoutCancelledEvent(uuid(), project.id, dayIndex))
+      const bankruptcyPause = project.pauseReason === 'bankruptcy'
+      const timeoutDays = bankruptcyPause ? 30 : PAUSE_TIMEOUT_DAYS
+      if (pausedDays >= timeoutDays) {
+        events.push(
+          bankruptcyPause
+            ? createBankruptcyCancelledEvent(uuid(), project.id, dayIndex)
+            : createPauseTimeoutCancelledEvent(uuid(), project.id, dayIndex),
+        )
         const cancelled: Project = {
           ...project,
           phase: 'CANCELLED' as ProjectPhase,
@@ -157,7 +175,7 @@ export class DailyScheduler {
           pauseReason: null,
           budgetExhausted: false,
           riskFlags: project.riskFlags.filter((f) => f !== 'budget_exhausted'),
-          cancellationReason: 'pause_timeout' as CancellationReason,
+          cancellationReason: (bankruptcyPause ? 'restructuring' : 'pause_timeout') as CancellationReason,
           // 终态解除团队分配（DESIGN-G05 v1.7 §3.3）：超时取消同样必须释放员工
           teamAssignments: [],
           version: project.version + 1,
@@ -196,6 +214,11 @@ export class DailyScheduler {
       if (project.isPaused) return project
       if (isTerminalProjectPhase(project.phase)) return project
 
+      // REC-04：ExecutionProject 是执行项目的唯一研发/成本事实源。legacy Project
+      // 仅作为 UI 生命周期投影，不能再在此处重复产出，否则会与执行引擎双推进。
+      const executionBacked = this.deps.isExecutionProject?.(project.id) === true
+      if (executionBacked) return project
+
       const allowed = allowedDisciplinesForPhase(project.phase)
       if (allowed.length === 0) return project
 
@@ -209,7 +232,7 @@ export class DailyScheduler {
         next = { ...next, version: next.version + 1, updatedAt: dayIndex }
       }
 
-      if (project.phase === 'PRODUCTION') {
+      if (!executionBacked && project.phase === 'PRODUCTION') {
         if (allProductionDisciplinesCompleteAtLeast(next, TUNING.project.productionCompletionThreshold)) {
           const transitioned = transitionProject(next, 'QA', dayIndex)
           if (transitioned) {
@@ -222,7 +245,7 @@ export class DailyScheduler {
             })
           }
         }
-      } else if (project.phase === 'QA') {
+      } else if (!executionBacked && project.phase === 'QA') {
         if (isQaComplete(next)) {
           const transitioned = transitionProject(next, 'READY_TO_LAUNCH', dayIndex)
           if (transitioned) {
@@ -368,6 +391,9 @@ export class DailyScheduler {
         for (const p of state.projects) {
           if (p.companyId !== company.id) continue
           if (isTerminalProjectPhase(p.phase)) continue
+          // ExecutionProject 以自身的 DailyOutput/project_expense 记录执行成本；
+          // 不再把同一笔月薪分摊到 legacy 预算，避免执行项目被旧预算阈值提前暂停。
+          if (this.deps.isExecutionProject?.(p.id) === true) continue
           for (const a of p.teamAssignments) {
             if (a.employeeId !== entry.employmentId) continue
             assignments.push({ projectId: p.id, allocationRatio: a.allocationRatio })
@@ -604,6 +630,71 @@ export class DailyScheduler {
       companies,
       events: [...state.events, ...events],
     }
+  }
+
+  /** M3 §3.2：破产项目暂停 30 天；只保留一个破产当日近上市且成本达标的生产项目。 */
+  private applyBankruptcyProjectPolicy(state: WorldState, dayIndex: number): WorldState {
+    const updates = new Map<string, Project>()
+
+    for (const project of state.projects) {
+      const company = state.companies.find((candidate) => candidate.id === project.companyId)
+      if (company?.status === 'active' && project.riskFlags.includes('bankruptcy_retained')) {
+        updates.set(project.id, {
+          ...project,
+          riskFlags: project.riskFlags.filter((flag) => flag !== 'bankruptcy_retained'),
+          version: project.version + 1,
+          updatedAt: dayIndex,
+        })
+      }
+    }
+
+    for (const company of state.companies) {
+      if (company.status !== 'bankrupt' || company.bankruptSinceDay !== dayIndex) continue
+      const companyProjects = state.projects
+        .filter((project) => project.companyId === company.id && !isTerminalProjectPhase(project.phase))
+        .sort((a, b) => a.id.localeCompare(b.id))
+      const retained = companyProjects.find((project) => project.riskFlags.includes('bankruptcy_retained'))
+        ?? companyProjects.find((project) => {
+          const remainingCost = Math.max(0, project.budgetTotalCapCents - project.budgetSpentCents - project.budgetCommittedCents)
+          const threshold = Math.max(0, company.cashBalanceCents) * 0.1
+          return project.phase === 'PRODUCTION'
+            && allProductionDisciplinesCompleteAtLeast(project, 0.8)
+            && remainingCost <= threshold
+        })
+
+      for (const project of companyProjects) {
+        if (project.id === retained?.id) {
+          if (!project.riskFlags.includes('bankruptcy_retained')) {
+            updates.set(project.id, {
+              ...project,
+              isPaused: false,
+              pauseReason: null,
+              pausedDays: 0,
+              budgetExhausted: false,
+              riskFlags: [...project.riskFlags.filter((flag) => flag !== 'budget_exhausted'), 'bankruptcy_retained'],
+              version: project.version + 1,
+              updatedAt: dayIndex,
+            })
+          }
+          continue
+        }
+        if (project.pauseReason !== 'bankruptcy' || !project.isPaused) {
+          updates.set(project.id, {
+            ...project,
+            isPaused: true,
+            pauseReason: 'bankruptcy',
+            pausedDays: 0,
+            budgetExhausted: false,
+            riskFlags: project.riskFlags.filter((flag) => flag !== 'budget_exhausted'),
+            version: project.version + 1,
+            updatedAt: dayIndex,
+          })
+        }
+      }
+    }
+
+    if (updates.size === 0) return state
+    return { ...state, projects: state.projects.map((project) => updates.get(project.id) ?? project) }
   }
   /** 破产/恢复时切换清仓价：重整 40%，winddown 50%，恢复后清除。 */
   private applyClearanceMode(state: WorldState): WorldState {

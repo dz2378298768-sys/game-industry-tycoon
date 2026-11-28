@@ -35,8 +35,8 @@ const WATCH_STYLE: React.CSSProperties = {
 
 const CRITICAL_REMEDIES: Array<{ label: string; route: string }> = [
   { label: 'project.actions.descope', route: 'projects' },
-  { label: 'banner.critical.remedy.pauseProject', route: 'projects' },
-  { label: 'banner.critical.remedy.cutStaff', route: 'hire' },
+  { label: 'banner.critical.remedy.pauseProject', route: 'finance' },
+  { label: 'banner.critical.remedy.cutStaff', route: 'employees' },
 ]
 
 /** 跑道展示：+∞ → ∞；非有限数 → '—'；否则保留 1 位小数 */
@@ -113,16 +113,11 @@ export const CompanyAlertBanner: React.FC<Props> = ({ company, crisis, onRestart
               {' · '}
               {t('banner.critical.gapCash').replace('{amount}', committed)}
             </p>
-            <p
-              className="muted alert-hint"
-              title={t('banner.critical.deadlineTitle')}
-            >
-              {t('banner.critical.deadline')}: —
-            </p>
+            <p className="muted alert-hint">{t('finance.crisis.dailyCheck')}</p>
             <div className="flex-gap alert-actions">
-              {CRITICAL_REMEDIES.map((r) => (
+              {CRITICAL_REMEDIES.map((r, index) => (
                 <button
-                  key={r.route}
+                  key={`${r.route}-${r.label}-${index}`}
                   className="btn btn-secondary btn-small"
                   onClick={() => onNavigate(r.route)}
                 >

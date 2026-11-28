@@ -27,6 +27,7 @@ export function roleToD03Discipline(role: EmployeeRole): D03Discipline | null {
     case 'designer': return 'design'
     case 'programmer': return 'code'
     case 'artist': return 'art'
+    case 'audio_designer': return 'audio'
     case 'qa': return 'qa'
     default: return null
   }

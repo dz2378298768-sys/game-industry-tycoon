@@ -16,9 +16,19 @@ export const PROJECT_CANCELLED_EVENT = 'ProjectCancelled'
 /** pause_timeout 自动取消的事件载荷；actor 与 reasonCode 为固定值 */
 export type ProjectCancelledPayload = {
   projectId: string
-  reasonCode: 'pause_timeout'
+  reasonCode: 'pause_timeout' | 'bankruptcy_timeout'
   actor: 'system'
   description: string
+}
+
+export function createBankruptcyCancelledEvent(id: string, projectId: string, day: number): DomainEvent {
+  const payload: ProjectCancelledPayload = {
+    projectId,
+    reasonCode: 'bankruptcy_timeout',
+    actor: 'system',
+    description: '项目在公司破产后暂停满 30 个游戏日，系统自动取消',
+  }
+  return { id, type: PROJECT_CANCELLED_EVENT, day, payload }
 }
 
 /**

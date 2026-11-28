@@ -1,0 +1,6 @@
+year,day,activeAi,activePlayer,bankruptcies,recoveries,dissolutions,bankruptcyRate,recoveryRate,hhi,products,avgAiCashCents
+1970,365,4,false,0,0,0,0,0,0.421,5,32524321
+1971,730,6,false,0,0,0,0,0,0.3549,11,50851218
+1972,1095,6,false,1,1,0,0.1667,1,0.3167,19,22324604877
+1973,1460,7,false,0,0,0,0,0,0.2484,25,82322597372
+1974,1825,9,false,0,0,0,0,0,0.2103,30,153376250629

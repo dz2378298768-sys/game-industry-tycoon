@@ -1,24 +1,17 @@
 import React, { useMemo, useState } from 'react'
-import { useGameStore, t, formatMoney } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
 import type { Candidate } from '@domain/entities/personnel'
+import { PendingHireList } from '@ui/components/pending-hire-list'
+import { personLabel, personnelRoleLabel, rosterForCompany } from '@ui/components/personnel-display'
 
 interface Props {
   /** 保留签名兼容（顶栏导航注入）；P-05 候选池流程内无页面跳转 */
   onNavigate?: (route: string) => void
 }
 
-const DISCIPLINE_LABELS: Record<Candidate['discipline'], string> = {
-  design: 'employee.role.designer',
-  code: 'employee.role.programmer',
-  art: 'employee.role.artist',
-  qa: 'employee.role.qa',
-  // S5-1：候选池固定 4 学科，audio 不参与；枚举兜底文案（不应出现）
-  audio: 'employee.discipline.audio',
-}
-
 /**
  * P-05 招聘与人才配置（S05，批次 07A）：
- *  - 候选池卡片列表（D-03 Candidate，S5-1 每日刷新 5 名 / 4 学科 / 档位 0..5）；
+ *  - 候选池卡片列表（D-03 Candidate，S5-1 每日刷新 5 名 / 五学科 / 档位 0..5）；
  *    手填姓名/薪资表单移除（代码保留见 git 历史，ADJ-12 §S5 两档）。
  *  - 池空 → "本周无候选"（fail-closed，不伪造候选）。
  *  - 确认卡：中介费 $Y（一次性，= 月薪 × recruitFeeMonths，ADJ-12 S5-3）+ 月薪承诺 $Z/月。
@@ -27,8 +20,8 @@ const DISCIPLINE_LABELS: Record<Candidate['discipline'], string> = {
  */
 export const Hire: React.FC<Props> = () => {
   const {
-    company, employees,
-    listCandidates, recruitFromCandidate, previewRecruitImpact,
+    game, company, employees, pendingHires, dayIndex,
+    listCandidates, recruitFromCandidate, previewRecruitImpact, cancelPendingHire,
   } = useGameStore()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
@@ -37,10 +30,14 @@ export const Hire: React.FC<Props> = () => {
   const preview = selectedId === null ? null : previewRecruitImpact(selectedId)
   const selected = candidates.find((c) => c.candidateId === selectedId) ?? null
 
-  const hiredCount = employees.filter((e) => e.status === 'hired').length
+  const roster = rosterForCompany(company?.id, employees, game?.world.employments ?? [], pendingHires)
+  const hiredCount = roster.employees.length
+  const pending = roster.pending
   const capacity = company?.managementCapacity ?? 0
   const isBankrupt = company?.status === 'bankrupt'
-  const atCapacity = hiredCount >= capacity
+  const atCapacity = hiredCount + pending.length >= capacity
+
+  const people = new Map((game?.world.persons ?? []).map((person) => [person.personId, person]))
 
   const grouped = useMemo(() => {
     const map = new Map<Candidate['discipline'], Candidate[]>()
@@ -69,9 +66,11 @@ export const Hire: React.FC<Props> = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h2>{t('hire.title')}</h2>
         <span className={atCapacity ? 'negative' : 'muted'} style={{ fontSize: 12 }}>
-          {t('employee.capacity')}: {hiredCount} / {capacity}
+          {t('employee.capacity')}: {hiredCount} + {pending.length} {t('hire.pending.capacitySuffix')} / {capacity}
         </span>
       </div>
+
+      <PendingHireList hires={pending} people={people} dayIndex={dayIndex} onCancel={cancelPendingHire} />
 
       {isBankrupt && (
         <p className="negative" style={{ fontSize: 12, marginBottom: 12 }} role="alert">
@@ -85,28 +84,45 @@ export const Hire: React.FC<Props> = () => {
 
       {grouped.map(([discipline, list]) => (
         <div key={discipline} style={{ marginBottom: 16 }}>
-          <h3 style={{ fontSize: 14, margin: '8px 0' }}>{t(DISCIPLINE_LABELS[discipline])}</h3>
+          <h3 style={{ fontSize: 14, margin: '8px 0' }}>{personnelRoleLabel(discipline)}</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-            {list.map((c) => (
-              <button
-                key={c.candidateId}
-                type="button"
-                className={`panel ${selectedId === c.candidateId ? '' : 'btn-secondary'}`}
-                style={{ textAlign: 'left', cursor: 'pointer', borderColor: selectedId === c.candidateId ? 'var(--gold)' : undefined }}
-                data-testid="candidate-card"
-                onClick={() => { setSelectedId(c.candidateId); setConfirming(false) }}
-                disabled={blocked}
-                aria-disabled={blocked}
-              >
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{c.candidateId.replace('d03-cand-entry-', '')}</div>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  {t('hire.candidate.skill')}: {c.skillLevel}
-                </div>
-                <div style={{ fontSize: 12 }}>
-                  {t('hire.candidate.salary')}: {formatMoney(c.askingSalaryCents)} = {c.askingSalaryCents} cents
-                </div>
-              </button>
-            ))}
+            {list.map((c) => {
+              const person = people.get(c.personId)
+              const guardSequence = c.personId.startsWith('d03-cand-rec04a-guard:')
+                ? Number(c.personId.split(':').at(-2)) + 1
+                : null
+              return (
+                <button
+                  key={c.candidateId}
+                  type="button"
+                  className={`panel ${selectedId === c.candidateId ? '' : 'btn-secondary'}`}
+                  style={{ textAlign: 'left', cursor: 'pointer', borderColor: selectedId === c.candidateId ? 'var(--gold)' : undefined }}
+                  data-testid="candidate-card"
+                  onClick={() => { setSelectedId(c.candidateId); setConfirming(false) }}
+                  disabled={blocked}
+                  aria-disabled={blocked}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 13 }} data-testid="candidate-name">
+                    {personLabel(person, t('hire.candidate.unnamed'))}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {t('hire.candidate.skill')}: {c.skillLevel}
+                    {person !== undefined && <> · {t(`employee.seniority.${person.seniority}`)}</>}
+                  </div>
+                  {guardSequence !== null && Number.isSafeInteger(guardSequence) && (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {t('hire.candidate.guaranteed').replace('{discipline}', personnelRoleLabel(c.discipline)).replace('{sequence}', String(guardSequence))}
+                    </div>
+                  )}
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {t('hire.candidate.available')}: {formatDay(c.availableFromDay)} · {t('hire.candidate.expires')}: {formatDay(c.expiresAtDay)}
+                  </div>
+                  <div style={{ fontSize: 12 }}>
+                    {t('hire.candidate.salary')}: {formatMoney(c.askingSalaryCents)} = {c.askingSalaryCents} cents
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
       ))}
@@ -123,6 +139,14 @@ export const Hire: React.FC<Props> = () => {
           <p style={{ margin: '4px 0', fontSize: 13 }}>
             {t('hire.confirm.salary').replace('{salary}', formatMoney(preview.salaryMonthlyCents))}
           </p>
+            <p style={{ margin: '4px 0', fontSize: 13 }} data-testid="recruit-arrival-preview">
+              {t('hire.confirm.arrival')
+                .replace('{arrival}', formatDay(preview.arrivalDay))
+                .replace('{expires}', formatDay(preview.candidateExpiresAtDay))}
+            </p>
+            <p className="muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+              {t('hire.confirm.pendingNote')}
+            </p>
           {/* 招聘后影响预览（可用现金/跑道 前→后，ADJ-11 §5.4-6 同源） */}
           <table className="data-table" style={{ margin: '8px 0' }} data-testid="recruit-impact-preview">
             <thead>

@@ -310,7 +310,7 @@ describe('OI-21 破产守卫 V6 命令守卫', () => {
   })
 })
 
-describe('T-FIX-1/2 破产后仍可解雇 / 上市', () => {
+describe('T-FIX-1/2 破产后仍可解雇 / M3 近上市例外上市', () => {
   function bankruptWorldWith(projectIds: string[] = []) {
     const gw = new GameWorld(11)
     const company = gw.createCompany({ name: 'Acme', cityId: 'san_francisco' })
@@ -353,15 +353,15 @@ describe('T-FIX-1/2 破产后仍可解雇 / 上市', () => {
     expect(gw.world.employees.find((e) => e.id === 'emp-1')!.status).toBe('fired')
   })
 
-  it('V20：破产公司 launchProject() 成功上市，不再 PRJ_COMPANY_INACTIVE', () => {
+  it('V20：破产公司普通 READY 项目不得上市', () => {
     const { gw } = bankruptWorldWith(['prj-bankrupt-launch'])
     const r = gw.launchProject('prj-bankrupt-launch')
-    expect(r.success).toBe(true)
-    expect(gw.world.projects.find((p) => p.id === 'prj-bankrupt-launch')!.phase).toBe('LAUNCHED')
-    expect(gw.world.products).toHaveLength(1)
+    expect(r.success).toBe(false)
+    expect(r.errorCode).toBe('PRJ_PAUSED')
+    expect(gw.world.products).toHaveLength(0)
   })
 
-  it('V20：ProjectService.launch 仅对 dissolved 返回 PRJ_COMPANY_INACTIVE', () => {
+  it('V20：ProjectService.launch 只允许 retained 例外，dissolved 仍返回 PRJ_COMPANY_INACTIVE', () => {
     const makeSvc = (status: 'active' | 'bankrupt' | 'dissolved') => {
       const svc = new ProjectService({ getCompanyStatus: () => status })
       svc.reset([
@@ -376,7 +376,17 @@ describe('T-FIX-1/2 破产后仍可解雇 / 上市', () => {
       return svc
     }
     expect(makeSvc('active').launch('project-1', 1).success).toBe(true)
-    expect(makeSvc('bankrupt').launch('project-1', 1).success).toBe(true)
+    expect(makeSvc('bankrupt').launch('project-1', 1).errorCode).toBe('PRJ_BANKRUPTCY_PROJECT_NOT_RETAINED')
+    const retained = new ProjectService({ getCompanyStatus: () => 'bankrupt' })
+    retained.reset([makeProject({
+      phase: 'READY_TO_LAUNCH',
+      plannedLaunchDay: 0,
+      workTotalByDiscipline: { design: 100, programming: 100, art: 100, qa: 0 },
+      workRemainingByDiscipline: { design: 0, programming: 0, art: 0, qa: 0 },
+      teamAssignments: [],
+      riskFlags: ['bankruptcy_retained'],
+    })])
+    expect(retained.launch('project-1', 1).success).toBe(true)
     const dissolved = makeSvc('dissolved').launch('project-1', 1)
     expect(dissolved.success).toBe(false)
     expect(dissolved.errorCode).toBe('PRJ_COMPANY_INACTIVE')

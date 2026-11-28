@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 |---|---|
 | 审核对象 | `docs/design/REC-03_最小产品创造表达设计规格_V0.1.md`、`REC-03_设计交付说明_V0.1.md`（提交 `7161af7`，包含 `d5d9bac`） |
-| 审核依据 | `docs/AI-DEVELOPMENT-WORKFLOW.md` §2 八维与体验四问；当前 D-01/D-02/D-04、执行项目和 UI 实现 |
+| 审核依据 | `docs/collaboration/AI-DEVELOPMENT-WORKFLOW.md` §2 八维与体验四问；当前 D-01/D-02/D-04、执行项目和 UI 实现 |
 | 结论 | **REVISE_REQUIRED** |
 | 代码/规格修改 | 无；本报告为只读审核产物 |
 

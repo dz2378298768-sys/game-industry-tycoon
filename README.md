@@ -1,56 +1,41 @@
 # Game Industry Tycoon（游戏产业大亨）
 
-单机经营模拟游戏 · 从工作室到行业巨头。当前处于 **P1 执行期 / G1 里程碑**。
+电脑版单机经营模拟游戏。当前已有首作可玩闭环、三地竞争开局和基础科技研发，正式 1.0 正在准备发布验收。
 
-## 新成员上手指南（半天路径）
+- 接手开发、获取候选包和查阅剩余事项见[项目交接](docs/项目交接.md)
+- 看总体目标和各阶段出口：[阶段规划](docs/阶段规划.md)
+- 看当前验收证据、已修问题和剩余事项：[P1 收口台账](docs/review/P1_阶段收口与问题台账_2026-11-27.md)
+- 查找规格、裁定、工作流程和历史资料：[文档导航](docs/DOCS-INDEX.md)
+- 浏览网页总览：[项目指挥台](docs/项目指挥台_二次规划.html)
 
-### 第 1 步：读三份文档（按序，约 40 分钟）
+## 本地运行
 
-| 顺序 | 文档 | 作用 |
-|---|---|---|
-| ① | `docs/STATUS_进度快照.md` | 项目现状一分钟看懂：在跑什么、下一步、异常 |
-| ② | `docs/任务阶段总规划_V1.0.md` | 全局地图：P0~P7 八阶段、G0~G6 里程碑、五波推进 |
-| ③ | `docs/baseline/04_流程细则/AI_Agent_Collaboration_V2.2.md` | 协作规范：八角色、双闸门、任务分级、你必须遵守的纪律 |
-
-### 第 2 步：了解最近发生了什么（15 分钟）
-
-- 项目留言板：搜「项目指挥台」，最新一条就是实时状态仪表盘
-- 最近裁定：`docs/decisions/` 下按日期命名的 ADJ 文件（ADJ-2026-11-23 系列最新）
-- 阶段验收：`docs/review/主AI整体验收报告_G0.md`
-
-### 第 3 步：环境搭建（约 1 小时）
+从仓库根目录运行。项目用 Node.js 和 npm，依赖版本以 `package-lock.json` 为准。
 
 ```bash
-# 前置：Node.js 22+、pnpm
-cd code/worktree
-npm install
-npm run typecheck && npm run lint:check   # 应全 0 退出码
-npx vitest run                             # 当前基线 1109+ 用例全绿
+npm ci
+npm run dev
 ```
 
-### 第 4 步：找你能参与的事
+提交前，本地回归命令为：
 
-- 全部任务卡在 `docs/tasks/`（状态：READY 可认领 / IN_PROGRESS 进行中 / CLOSED 已收口）
-- **认领任何任务前**：先读 V2.2 规范 §6（任务状态机）与 §13（审核纪律），改动前在任务卡登记
-- 有疑问在项目留言板 @主 AI
-
-## 项目文档地图
-
-```
-docs/
-├── STATUS_进度快照.md          ← 实时状态（每次状态变化更新）
-├── baseline/                   ← 基线文档（总规划、协作规范、流程细则）
-├── design/                     ← 设计规格（D-01~D-07、G1 场景、UI 规格）
-├── decisions/                  ← ADJ 裁定登记（跨任务口径的唯一权威）
-├── review/                     ← 独立审核报告（设计审核 + 编码审核）
-├── tasks/                      ← 任务卡（统一任务记录）
-└── coding/                     ← 编码实施报告
+```bash
+npm run typecheck
+npm run lint:check
+npm test
+npm run build
 ```
 
-## 铁律（违反会被审核打回）
+## 仓库结构
 
-1. **业务口径以设计规格 + ADJ 裁定为唯一权威**，不得凭经验猜规则
-2. **数值单位双写**：业务值 + 代码单位并列（如 `$120,000 = 12_000_000 cents`）
-3. **先红后绿**：新规则必须先有失败测试证明旧代码缺陷，再实现转绿
-4. **独立审核**：编码不经独立审核不得 CLOSED；自己写的自己不能审
-5. **测试基线只增不减**：全量 vitest 必须全绿，禁止 skip
+| 路径 | 内容 |
+|---|---|
+| [src](src/) | 游戏源码，含界面、应用编排、领域规则、模拟、内容和存档 |
+| [docs](docs/DOCS-INDEX.md) | 现行规划、设计规格、裁定、任务和真实验收证据 |
+| [docs/archive](docs/archive/milestones/README.md) | 早期工程里程碑、交接、旧仪表盘和审核材料 |
+| [spec](spec/README.md) | 既有产品规格，后续裁定见文档导航 |
+| [scripts](scripts/)、[tools](tools/) | 内容生成、数值分析和长期模拟工具 |
+| [artifacts](artifacts/) | 已归档的模拟结果。纯本地运行日志和构建缓存由 Git 忽略 |
+| [privacy-policy.html](privacy-policy.html) | 隐私政策页面，由独立的 Pages 工作流发布 |
+
+Agent 工作从[已批准的 V2.3 协作规范](docs/baseline/04_流程细则/AI_Agent_Collaboration_V2.3_APPROVED.md)和对应 [任务卡](docs/tasks/)进入。改规则时保留规格与裁定来源，核对金额单位和实际测试证据。

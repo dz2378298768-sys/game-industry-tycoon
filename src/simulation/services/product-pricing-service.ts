@@ -226,7 +226,7 @@ export class ProductPricingService {
     let result = world
     for (const product of world.products) {
       if (isRetired(product)) continue
-      const nextStage = resolveLifecycleStage(product.launchDay, dayIndex)
+      const nextStage = resolveLifecycleStage(product.lastMaintenanceDay ?? product.launchDay, dayIndex)
       if (lifecycleStageRank(nextStage) > lifecycleStageRank(product.lifecycleStage)) {
         const updated: Product = {
           ...product,
@@ -259,10 +259,11 @@ export class ProductPricingService {
   /** 自动退市判据：已定价 + 上市满 7 天 + 最近 90 个日历日窗口内无任何销售记录（N-2）。 */
   private shouldAutoRetire(product: Product, dayIndex: number): boolean {
     if (product.launchPriceCents === null) return false
-    const elapsed = dayIndex - product.launchDay
+    const firstSaleDay = product.lastMaintenanceDay ?? product.launchDay
+    const elapsed = dayIndex - firstSaleDay
     if (elapsed < MIN_DAYS_BEFORE_RETIRE) return false
     const windowStart = dayIndex - (AUTO_RETIRE_WINDOW_DAYS - 1)
-    if (windowStart < product.launchDay + MIN_DAYS_BEFORE_RETIRE) return false
+    if (windowStart < firstSaleDay + MIN_DAYS_BEFORE_RETIRE) return false
     return !product.salesByPeriod.some(
       (r) => r.dayIndex >= windowStart && r.dayIndex <= dayIndex,
     )
@@ -281,7 +282,7 @@ export class ProductPricingService {
       version: product.version + 1,
       updatedAt: dayIndex,
     }
-    const eventId = `product-retired:${product.id}`
+    const eventId = `product-retired:${product.id}${product.lastMaintenanceDay === undefined ? '' : `:${product.lastMaintenanceDay}`}`
     const events = world.events.some((e) => e.id === eventId)
       ? world.events
       : [

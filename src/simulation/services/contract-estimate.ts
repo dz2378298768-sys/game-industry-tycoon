@@ -3,7 +3,7 @@
  *
  * 口径：
  *   - 历史窗口取签署日前最近 90 天；不足 90 天按已过天数摊平。
- *   - 基准情形：窗口日均净销售 × 365。
+ *   - 基准情形：窗口日均净销售 × 合同天数。无限期合同展示一年估算。
  *   - 最差情形：基准净收入 × 50%（§5「净收入 −50%」），不使用隐藏参数。
  *   - 同式估算：渠道/联合营销按费率算分成；预付款先回收，回收期内玩家到手为 0。
  */
@@ -16,6 +16,7 @@ const HORIZON_DAYS = 365
 
 export interface ContractEstimate {
   windowDays: number
+  horizonDays: number
   averageDailyNetCents: number
   projectedNetCents: number
   worstNetCents: number
@@ -43,7 +44,8 @@ export function estimateContractProceeds(
   day: number,
 ): ContractEstimate {
   const { avg, windowDays } = dailyAverageNet(world, cmd, day)
-  const projectedNet = Math.max(0, avg * HORIZON_DAYS)
+  const horizonDays = cmd.durationDays ?? HORIZON_DAYS
+  const projectedNet = Math.max(0, avg * horizonDays)
   const worstNet = Math.round(projectedNet * 0.5)
   const prepay = cmd.prepaymentCents ?? 0
   const recoupRate = cmd.recoupRatePercent ?? 100
@@ -54,15 +56,16 @@ export function estimateContractProceeds(
     const recouped = Math.min(prepay, recoupCapacity)
     return prepay + Math.max(0, share - Math.round((Math.min(net, recouped) * cmd.ratePercent) / 100))
   }
-  const monthlyNet = Math.round((projectedNet / 12))
+  const monthlyRecoup = Math.floor(avg * 30 * recoupRate / 100)
   return {
     windowDays,
+    horizonDays,
     averageDailyNetCents: avg,
     projectedNetCents: projectedNet,
     worstNetCents: worstNet,
     projectedPlayerProceedsCents: playerProceeds(projectedNet),
     worstPlayerProceedsCents: playerProceeds(worstNet),
-    recoupMonths: cmd.template === 'advance' && prepay > 0 && monthlyNet > 0 ? Math.ceil(prepay / monthlyNet) : null,
+    recoupMonths: cmd.template === 'advance' && prepay > 0 && monthlyRecoup > 0 ? Math.ceil(prepay / monthlyRecoup) : null,
     controlLevel: cmd.controlLevel ?? (cmd.template === 'advance' ? 'full' : 'shared'),
   }
 }

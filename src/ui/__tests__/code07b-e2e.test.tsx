@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** idb-keyval 内存 mock，使存读档链路可在 jsdom 下端到端走通（A-37）。 */
@@ -29,7 +29,10 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
   it('UI 页面链路可达：市场 → 立项 → 项目详情 → 财务 → 产品 → 复盘，交付入口以项目为单位', () => {
     render(<GameShell />)
 
-    fireEvent.click(screen.getByText(t('nav.market')))
+    const nav = within(screen.getByRole('navigation', { name: t('studio.navigation') }))
+    expect(screen.getByText(t('studio.activeStaff'))).toBeTruthy()
+    expect(screen.getByRole('button', { name: t('studio.openFinance') })).toBeTruthy()
+    fireEvent.click(nav.getByRole('button', { name: t('nav.market') }))
     expect(screen.getByTestId('market-trend-section')).toBeTruthy()
 
     fireEvent.click(screen.getByText(t('nav.newProject')))
@@ -71,7 +74,7 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     expect(hired.error).toBeUndefined()
     expect(useGameStore.getState().employees).toHaveLength(1)
     const hireView = render(<GameShell />)
-    fireEvent.click(screen.getByText(t('nav.hire')))
+    fireEvent.click(within(screen.getByRole('navigation', { name: t('studio.navigation') })).getByRole('button', { name: t('nav.hire') }))
     expect(screen.getAllByTestId('candidate-card').length).toBeGreaterThan(0)
     hireView.unmount()
 
@@ -117,6 +120,21 @@ describe('CODE-07B 端到端闭环（批次 07B）', () => {
     // —— 4. 交付 PASS：真点击 UI 确认按钮（P2 SUP-01，生产路径真实求值 + 登记，无 gate 夹具）——
     // 游戏态推进到可交付态；gate 快照由 Deliver 渲染时的生产路径 evaluateRuntimeDeliveryGate 生成。
     afterRework.project.state = 'READY_TO_DELIVER'
+    // REC-05：PASS 交付需要可追溯的项目支出交易。该夹具仅补一笔合法账本事实，
+    // 不绕过闸门，也不手写 Build 字段。
+    const expense = useGameStore.getState().game!.finance.getLedger().postTransaction({
+      companyId: useGameStore.getState().game!.getPlayerCompany()!.id,
+      day: useGameStore.getState().game!.calendar.currentDayIndex,
+      category: 'project_expense',
+      cashFlowType: 'operating',
+      amountCents: -1,
+      idempotencyKey: `code07b-buildfacts-expense-${projectId}`,
+      referenceId: projectId,
+      source: 'system_auto',
+      description: 'test project expense',
+    }, { allowNegativeBalance: true })
+    expect(expense.success).toBe(true)
+    afterRework.expenseTxIds.push(expense.result!.transaction.transactionId)
     const registerSpy = vi.spyOn(useGameStore.getState().game!, 'registerDeliveryGateEvaluation')
     const submitSpy = vi.spyOn(useGameStore.getState().game!, 'submitDeliveryForProject')
     const deliverView = render(<Deliver projectId={projectId} onNavigate={vi.fn()} />)

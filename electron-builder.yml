@@ -1,0 +1,13 @@
+appId: com.gameindustrytycoon.game
+productName: Game Industry Tycoon
+executableName: GameIndustryTycoon
+directories:
+  output: artifacts/pc-build
+files:
+  - dist/**/*
+  - desktop/main.mjs
+  - server/taptap-login.mjs
+win:
+  target:
+    - dir
+  signAndEditExecutable: false

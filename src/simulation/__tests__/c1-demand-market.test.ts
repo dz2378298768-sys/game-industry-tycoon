@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { gregorianToDayIndex } from '@domain/value-objects/day-index'
-import { makeSalesProduct, makeSalesService, makeSalesWorld } from './sales-fixtures'
+import { referencePriceCents } from '@content/c1-content'
+import { FIXTURE, makeSalesProduct, makeSalesService, makeSalesWorld } from './sales-fixtures'
 
 function runDay(dayIndex: number, productOverrides = {}, options = {}) {
   const product = makeSalesProduct(productOverrides)
@@ -55,14 +56,17 @@ describe('C1-T4 demand market pipeline', () => {
     expect(state.products[0]!.salesByPeriod).toHaveLength(0)
   })
 
-  it('M05 价格只影响 attraction，降价 50% 销量不超过 2 倍', () => {
+  it.each([0.75, 1, 1.25])('M05 E31 首发档 %f 的真实 50%% 折扣销量不超过两倍', (tier) => {
     const day = 30
-    const normal = runDay(day)
-    const cheap = runDay(day, { launchPriceCents: 1499, pricePerUnitCents: 1499 })
-    const normalUnits = normal.products[0]!.salesByPeriod[0]!.grossUnits
-    const cheapUnits = cheap.products[0]!.salesByPeriod[0]!.grossUnits
-    expect(cheapUnits).toBeGreaterThanOrEqual(normalUnits)
-    expect(cheapUnits).toBeLessThanOrEqual(normalUnits * 2)
+    const reference = referencePriceCents('action', FIXTURE.platformId, FIXTURE.segmentId)
+    const price = Math.round(reference * tier)
+    const priced = { launchPriceCents: price, pricePerUnitCents: price }
+    const normal = runDay(day, priced).products[0]!.salesByPeriod[0]!
+    const discount = runDay(day, { ...priced, discountRatePercent: 50 }).products[0]!.salesByPeriod[0]!
+    expect(normal.unitPriceAtSaleCents).toBe(price)
+    expect(discount.unitPriceAtSaleCents).toBe(Math.round(price / 2))
+    expect(discount.grossUnits).toBeGreaterThan(normal.grossUnits)
+    expect(discount.grossUnits).toBeLessThanOrEqual(normal.grossUnits * 2)
   })
 
   it('M06 awarenessByMarket 由 scope 按 audience 汇总', () => {

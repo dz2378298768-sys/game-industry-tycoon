@@ -49,3 +49,5 @@ export function validateRec03Catalog(): void {
 }
 
 validateRec03Catalog()
+/** Every P1 studio has the basic 2D tools required by the starter catalog. */
+export const REC03_BASELINE_CAPABILITIES: Readonly<Record<string, number>> = Object.freeze({ rendering_2d: 1 })

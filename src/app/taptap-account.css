@@ -1,0 +1,19 @@
+.tap-account { display: inline-flex; }
+.welcome-card > .tap-account { margin-block: 12px; }
+.tap-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(400px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 24px;
+  color: #fff1d8;
+  background: #282021;
+  border: 1px solid #a57945;
+  border-radius: 6px;
+}
+.tap-dialog::backdrop { background: #0a090bc9; }
+.tap-dialog h2, .tap-dialog p { margin-bottom: 12px; }
+.tap-qr { display: block; width: min(240px, 100%); height: auto; margin: 16px auto; }
+.tap-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }

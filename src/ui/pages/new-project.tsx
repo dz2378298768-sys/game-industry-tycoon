@@ -1,15 +1,20 @@
 import React, { useState } from 'react'
-import { useGameStore, t, formatMoney, formatDay } from '@ui/state/game-store'
+import { useGameStore, t, formatMoney, formatDay, ERROR_I18N } from '@ui/state/game-store'
 import { content } from '@infrastructure/loading/content-loader'
 import { availablePlatforms, availableSegments, yearOfDay } from '@content/queries'
 import { TUNING } from '@content/tuning'
+import { STUDIO_RESEARCH } from '@content/studio-research'
 import { REC03_MODULES, REC03_CONTENT_PACKS } from '@content/rec03-content'
 import type { BlueprintDraftInput } from '@application/mediators/game-world'
 
+import { moduleLabel } from '@ui/components/module-label'
+import { formatUnitPrice } from '@ui/components/money-format'
+
 interface Props {
-  onNavigate: (route: string) => void
+  onNavigate: (route: string, id?: string) => void
   /** CODE-07B P-02：市场页"以此方向立项"预填类别（增量可选，不传则沿用默认） */
   initialGenreId?: string | undefined
+  initialPredecessorId?: string | undefined
 }
 
 /**
@@ -23,11 +28,11 @@ interface Props {
  *  确认 = PROJ_BUDGET_CAPACITY_EXCEEDS_CASH 校验 + project_budget 承诺（A-8：Σ = Budget_cap），原子。
  *  破产禁入（C-3/N-01）。qualityCeilingBand 不展示（U5 / A-39）。
  */
-export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
-  const { dayIndex, company, previewExecutionProject, createExecutionProject } = useGameStore()
+export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId, initialPredecessorId }) => {
+  const { dayIndex, company, projects, products: allProducts, financial, locale, previewExecutionProject, createExecutionProject } = useGameStore()
   const isBankrupt = company?.status === 'bankrupt'
   const [step, setStep] = useState<1 | 2>(1)
-  const [error, setError] = useState('')
+  const [errorKey, setErrorKey] = useState<string | null>(null)
   const [locked, setLocked] = useState(false)
 
   // ===== 第 1 步（P-03）字段 =====
@@ -35,35 +40,49 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   const [genreId, setGenreId] = useState(initialGenreId ?? content.genres[0]?.id ?? 'action')
   const [platformId, setPlatformId] = useState('')
   const [segmentIds, setSegmentIds] = useState<string[]>([])
-  const [hrb, setHrb] = useState<number>(TUNING.project.hrbConservativeRatio)
   const [coreModule, setCoreModule] = useState('MOD-CORE-ACTION')
   const [supportModules, setSupportModules] = useState<string[]>([])
+  const isFirstProject = projects.filter((project) => project.companyId === company?.id).length === 0
+  const [scopeMode, setScopeMode] = useState<'recommended' | 'custom'>(isFirstProject ? 'recommended' : 'custom')
+  const predecessor = allProducts.find((product) => product.id === initialPredecessorId && product.companyId === company?.id)
+  const previousProduct = predecessor ?? allProducts
+    .filter((product) => product.companyId === company?.id)
+    .sort((a, b) => b.launchDay - a.launchDay)[0]
 
   const year = yearOfDay(dayIndex)
   const platforms = availablePlatforms(dayIndex)
   const segments = availableSegments(dayIndex)
   const effectivePlatformId = platformId || platforms[0]?.id || ''
+  const contentName = (entry: { displayName: string; displayNameZh: string }) =>
+    locale === 'zh-CN' ? entry.displayNameZh : entry.displayName
+  const chosenSegments = segments.filter((segment) => segmentIds.includes(segment.id)).map(contentName)
+  const listFormat = new Intl.ListFormat(locale)
+  const activeResearch = STUDIO_RESEARCH.filter((item) =>
+    (company?.researchCompletionDays?.[item.id] ?? Infinity) <= dayIndex,
+  )
 
   // 五要素摘要（总纲 §S3.3）：名称/定位/目标用户/模块组合/方案
   const fiveElements = [
     { label: t('newProject.elements.name'), value: productName || t('newProject.elements.missing') },
-    { label: t('newProject.elements.positioning'), value: content.genres.find(g => g.id === genreId)?.displayNameZh ?? genreId },
-    { label: t('newProject.elements.segments'), value: segmentIds.length === 0 ? t('newProject.elements.missing') : segmentIds.map(id => segments.find(s => s.id === id)?.displayNameZh ?? id).join('、') },
-    { label: t('newProject.elements.modules'), value: [coreModule, ...supportModules, 'MOD-CONTENT-EPISODES'].join(' / ') },
-    { label: t('newProject.elements.plan'), value: `HRB ${Math.round(hrb * 100)}%` },
+    { label: t('newProject.elements.positioning'), value: t(`genre.${genreId}`) },
+    { label: t('newProject.elements.segments'), value: chosenSegments.length === 0 ? t('newProject.elements.missing') : listFormat.format(chosenSegments) },
+    { label: t('newProject.elements.modules'), value: listFormat.format([coreModule, ...supportModules, 'MOD-CONTENT-EPISODES'].map((id) => moduleLabel(id))) },
+    { label: t('newProject.scope.label'), value: t(`newProject.scope.${scopeMode}`) },
   ]
   const canLock = productName.trim().length > 0 && segmentIds.length > 0
 
   // ===== 第 2 步（P-04）字段 =====
-  const [projectName, setProjectName] = useState('')
-  // ADJ-2026-11-24-30 §3.2 默认配置组合定值：默认容量 $136,000 × 默认 HRB 0.45 = 承诺 $61,200。
-  // $61,200 是确定性扫描（B-01b，N=8）得出的最小可行预算帽；不改任何冻结锚点（HRB 两值/起始现金/薪资/horizon 均未动）。
-  // 先立项（无薪资承诺 → availableCash $120,000 ≥ 承诺 $61,200）后招聘为默认自洽路径；若先招满 4 人，
-  // availableCash 降至 $48,656，守卫会按"承诺额 ≤ 可用现金"拒绝并提示玩家（纪律不放宽）。
-  const [budgetCapacity, setBudgetCapacity] = useState<number>(TUNING.project.defaultBudgetCapacityUsd) // USD
-  const budgetCapacityCents = Math.max(0, Math.round(budgetCapacity * 100))
-  const budgetCapCents = Math.round(hrb * budgetCapacityCents)
-  const requestId = ['new-project', productName.trim(), genreId, effectivePlatformId, segmentIds.join(','), coreModule, supportModules.join(','), hrb, budgetCapacityCents].join('|')
+  const hrb = TUNING.project.hrbConservativeRatio
+  const suggestedBudget = Math.round(TUNING.project.defaultBudgetCapacityUsd * 100 * hrb)
+  const [budget, setBudget] = useState(String(suggestedBudget / 100))
+  const enteredCents = Math.round(Number(budget) * 100)
+  const budgetCapCents = Number.isSafeInteger(enteredCents) && enteredCents > 0 ? enteredCents : 0
+  // The existing project command derives the commitment from a ratio and a capacity.
+  const budgetCapacityCents = Math.round(budgetCapCents / hrb)
+  const availableCash = financial?.availableCashCents ?? 0
+  const displayBudget = (cents: number) => cents % 100 === 0 ? formatMoney(cents) : formatUnitPrice(cents)
+  const scopeIntensity = scopeMode === 'recommended' ? 1 : 3
+  const requestId = ['new-project', productName.trim(), genreId, effectivePlatformId, segmentIds.join(','), coreModule, supportModules.join(','), scopeMode, hrb, budgetCapacityCents, predecessor?.id].join('|')
   const segmentTags: Record<string, string> = { arcade_enthusiasts: 'SEG-YOUTH', online_gamers: 'SEG-COMPETITIVE', pc_gamers: 'SEG-HARDCORE', home_players: 'SEG-MASS_MARKET' }
   const selectedSegmentTags = segmentIds.map((id) => segmentTags[id] ?? id).filter((id) => id.startsWith('SEG-'))
   const draftInput = (): BlueprintDraftInput => ({
@@ -74,27 +93,22 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
     primaryTypeId: genreId,
     targetSegmentClaims: selectedSegmentTags,
     platformTargets: effectivePlatformId ? [effectivePlatformId === 'arcade' ? 'PLT-ARCADE' : effectivePlatformId] : [],
+    scopePolicy: scopeMode,
+    ...(predecessor && { predecessorProductId: predecessor.id }),
     modules: [
-      { templateId: coreModule, slotId: 'REC03-SLOT-CORE', instanceId: 'rec03-core', intensity: 3, depthSelection: 'standard', optionSelections: {}, contentPackId: null },
-      ...supportModules.map((id) => ({ templateId: id, slotId: 'REC03-SLOT-SUPPORT' as const, instanceId: `rec03-${id}`, intensity: 3 as const, depthSelection: 'standard' as const, optionSelections: {}, contentPackId: null })),
-      { templateId: 'MOD-CONTENT-EPISODES', slotId: 'REC03-SLOT-CONTENT', instanceId: 'rec03-content', intensity: 3, depthSelection: 'standard', optionSelections: {}, contentPackId: REC03_CONTENT_PACKS[0]?.packId ?? null },
+      { templateId: coreModule, slotId: 'REC03-SLOT-CORE', instanceId: 'rec03-core', intensity: scopeIntensity, depthSelection: 'standard', optionSelections: {}, contentPackId: null },
+      ...supportModules.map((id) => ({ templateId: id, slotId: 'REC03-SLOT-SUPPORT' as const, instanceId: `rec03-${id}`, intensity: scopeIntensity as 1 | 3, depthSelection: 'standard' as const, optionSelections: {}, contentPackId: null })),
+      { templateId: 'MOD-CONTENT-EPISODES', slotId: 'REC03-SLOT-CONTENT', instanceId: 'rec03-content', intensity: scopeIntensity, depthSelection: 'standard', optionSelections: {}, contentPackId: REC03_CONTENT_PACKS[0]?.packId ?? null },
     ],
     deliveryForm: 'full',
     hrb,
     budgetCapacityCents,
   })
-  const preview = productName.trim() && segmentIds.length > 0
-    ? (() => { const r = previewExecutionProject(draftInput()); return r.success ? r.preview ?? null : null })()
-    : null
+  const previewResult = canLock ? previewExecutionProject(draftInput()) : null
+  const preview = previewResult?.success ? previewResult.preview ?? null : null
+  const previewMessage = t(previewResult === null ? 'newProject.modules.workloadPending' : 'newProject.modules.previewUnavailable')
   const previewWork = preview?.estimates?.workUnits.byDiscipline
   const previewAffinity = preview?.estimates?.marketFit?.affinity ?? null
-  const moduleNameKey: Record<string, string> = {
-    'MOD-CORE-ACTION': 'newProject.modules.card.coreAction.name',
-    'MOD-CORE-SIM': 'newProject.modules.card.coreSim.name',
-    'MOD-SYSTEM-PROGRESSION': 'newProject.modules.card.progression.name',
-    'MOD-SOCIAL-COOP': 'newProject.modules.card.social.name',
-    'MOD-CONTENT-EPISODES': 'newProject.modules.card.episodes.name',
-  }
   const moduleDescriptionKey: Record<string, string> = {
     'MOD-CORE-ACTION': 'newProject.modules.card.coreAction.description',
     'MOD-CORE-SIM': 'newProject.modules.card.coreSim.description',
@@ -131,20 +145,20 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
             type={isCore ? 'radio' : 'checkbox'}
             name={isCore ? 'rec03-core' : undefined}
             checked={selected}
-            disabled={isContent}
+            disabled={isContent || (scopeMode === 'recommended' && !isCore)}
             onChange={() => {
               if (isCore) setCoreModule(module.templateId)
               else if (!isContent) setSupportModules(prev => prev.includes(module.templateId) ? prev.filter(x => x !== module.templateId) : prev.length < 2 ? [...prev, module.templateId] : prev)
             }}
           />{' '}
-          <strong>{t(moduleNameKey[module.templateId] ?? 'newProject.modules.unknown')}</strong>
+          <strong>{moduleLabel(module.templateId)}</strong>
         </label>
         <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>{t(moduleDescriptionKey[module.templateId] ?? 'newProject.modules.unknown')}</p>
         <p style={{ fontSize: 11, margin: '4px 0' }} data-testid={`module-audience-${module.templateId}`}>
           {t('newProject.modules.audienceLabel')}: {audience || t('newProject.modules.impact.noClaims')}
         </p>
         <p className="muted" style={{ fontSize: 11, margin: '4px 0' }} data-testid={`module-workload-${module.templateId}`}>
-          {t('newProject.modules.workloadLabel')}: {moduleWorkload(module.templateId)}
+          {selected ? `${t('newProject.modules.workloadLabel')}: ${moduleWorkload(module.templateId)}` : t('newProject.modules.workloadUnselected')}
         </p>
         {isContent && <p className="muted" style={{ fontSize: 11, margin: '4px 0' }}>{t('newProject.modules.contentPack').replace('{pack}', REC03_CONTENT_PACKS[0]?.packId ?? t('newProject.modules.unknown'))}</p>}
       </div>
@@ -157,26 +171,34 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
   }
 
   const handleLock = () => {
-    setError('')
+    setErrorKey(null)
     // R-COM-7：E-EMPTY/E-EMPTY-CONTENT/E-USP 逐条报因，禁止锁定
-    if (!productName.trim()) { setError(t('error.emptyContent')); return }
-    if (segmentIds.length === 0) { setError(t('error.emptyContent')); return }
+    if (!productName.trim()) { setErrorKey('error.emptyContent'); return }
+    if (segmentIds.length === 0) { setErrorKey('error.emptyContent'); return }
     setLocked(true)
     setStep(2)
   }
 
+  const selectScopeMode = (mode: 'recommended' | 'custom') => {
+    setScopeMode(mode)
+    if (mode === 'recommended') setSupportModules([])
+  }
+
   const handleConfirm = () => {
-    setError('')
-    if (isBankrupt) { setError(t('finance.bankrupt.blocked.create')); return }
-    if (!projectName.trim()) { setError(t('error.requiredField')); return }
+    setErrorKey(null)
+    if (isBankrupt) { setErrorKey('finance.bankrupt.blocked.create'); return }
     const r = createExecutionProject(draftInput())
-    if (r.success) onNavigate('projects')
-    else setError(r.message ?? t('error.unknown'))
+    if (r.success) onNavigate(r.projectId ? 'projectDetail' : 'projects', r.projectId)
+    else setErrorKey((r.errorCode && ERROR_I18N[r.errorCode]) || 'error.unknown')
   }
 
   return (
     <div className="panel">
       <h2>{t('newProject.title')}</h2>
+      {predecessor && <p>{t('catalog.sequelOf').replace('{name}', predecessor.name)}</p>}
+      {activeResearch.length > 0 && <p className="muted">
+        {t('research.applied').replace('{tools}', listFormat.format(activeResearch.map((item) => t(`research.${item.id}`))))}
+      </p>}
       {/* 步骤指示器 1/2 */}
       <p className="muted" style={{ fontSize: 12 }} data-testid="wizard-step">{t('newProject.step').replace('{n}', String(step))}</p>
       {isBankrupt && (
@@ -192,35 +214,35 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
           </p>
           <div style={{ maxWidth: 560 }}>
             <div className="form-row">
-              <label>{t('newProject.form.productName')}（{t('newProject.elements.name')}）</label>
-              <input value={productName} onChange={e => setProductName(e.target.value)} placeholder="Product Name" data-testid="product-name" />
+              <label htmlFor="new-project-product-name">{t('newProject.form.productName')}</label>
+              <input id="new-project-product-name" value={productName} onChange={e => setProductName(e.target.value)} data-testid="product-name" />
             </div>
             <div className="form-row">
-              <label>{t('newProject.form.genre')}</label>
-              <select value={genreId} onChange={e => setGenreId(e.target.value)}>
+              <label htmlFor="new-project-genre">{t('newProject.form.genre')}</label>
+              <select id="new-project-genre" value={genreId} onChange={e => setGenreId(e.target.value)}>
                 {content.genres.map(g => (
-                  <option key={g.id} value={g.id}>{g.displayNameZh} / {g.displayName}</option>
+                  <option key={g.id} value={g.id}>{t(`genre.${g.id}`)}</option>
                 ))}
               </select>
             </div>
             <div className="form-row">
-              <label>{t('newProject.form.platform')}</label>
+              <label htmlFor="new-project-platform">{t('newProject.form.platform')}</label>
               {platforms.length === 0 ? (
                 <p className="negative">{t('newProject.form.noPlatform')}</p>
               ) : (
-                <select value={effectivePlatformId} onChange={e => setPlatformId(e.target.value)}>
+                <select id="new-project-platform" value={effectivePlatformId} onChange={e => setPlatformId(e.target.value)}>
                   {platforms.map(p => (
                     <option key={p.id} value={p.id}>
-                      {p.displayNameZh} / {p.displayName}（{p.earliestAvailabilityYear}）
+                      {contentName(p)} ({p.earliestAvailabilityYear})
                     </option>
                   ))}
                 </select>
               )}
             </div>
             <div className="form-row">
-              <label>{t('newProject.form.segmentsMulti')}（{t('newProject.elements.segments')}）</label>
+              <label>{t('newProject.form.segmentsMulti')}</label>
               {segments.length === 0 ? (
-                <p className="negative">{t('newProject.form.noPlatform')}</p>
+                <p className="negative">{t('newProject.form.noAudience')}</p>
               ) : (
                 <div className="flex-gap" data-testid="segment-multiselect">
                   {segments.map(s => (
@@ -230,33 +252,47 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
                         checked={segmentIds.includes(s.id)}
                         onChange={() => toggleSegment(s.id)}
                       />{' '}
-                      {s.displayNameZh} / {s.displayName}
+                      {contentName(s)}
                     </label>
                   ))}
                 </div>
               )}
             </div>
-            {/* HRB 两档（ADJ-12 S3-2）：radio 二选一，默认保守 */}
-            <div className="form-row" role="radiogroup" aria-label="HRB">
-              <label>{t('newProject.form.hrb')}</label>
-              <label style={{ fontSize: 12, cursor: 'pointer' }}>
-                <input type="radio" name="hrb" checked={hrb === TUNING.project.hrbConservativeRatio} onChange={() => setHrb(TUNING.project.hrbConservativeRatio)} />
-                {t('newProject.form.hrbConservative').replace('{pct}', String(Math.round(TUNING.project.hrbConservativeRatio * 100)))}
-              </label>
-              <label style={{ fontSize: 12, cursor: 'pointer' }}>
-                <input type="radio" name="hrb" checked={hrb === TUNING.project.hrbStandardRatio} onChange={() => setHrb(TUNING.project.hrbStandardRatio)} />
-                {t('newProject.form.hrbStandard').replace('{pct}', String(Math.round(TUNING.project.hrbStandardRatio * 100)))}
-              </label>
-            </div>
             {/* 玩法模块槽位：词表缺种子 → fail-closed，不伪造（OPEN-CONTENT-MODULES） */}
             <div className="form-row" data-testid="module-selection">
               <label>{t('newProject.form.modules')}</label>
-              <span data-testid="module-slots-failclosed" style={{ display: 'none' }}>{t('newProject.form.modulesOpen')}</span>
-              <div className="module-card-grid" data-testid="module-cards">
-                {REC03_MODULES.map(moduleCard)}
+              {previousProduct !== undefined && (
+                <div className="panel" style={{ margin: '8px 0', padding: 10 }} data-testid="p2-inheritance-choice">
+                  <strong>{t('studio.previousGame')}</strong>
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+                    {previousProduct.name} · {t('sales.units')} {new Intl.NumberFormat(locale).format(previousProduct.salesByPeriod.reduce((sum, record) => sum + record.grossUnits, 0))} · {previousProduct.moduleTemplateIds?.length ? listFormat.format(previousProduct.moduleTemplateIds.map(moduleLabel)) : t('studio.noModules')}
+                  </p>
+                  <button className="btn btn-secondary btn-small" type="button" onClick={() => {
+                    const inheritedCore = previousProduct.moduleTemplateIds?.find((id) => id.startsWith('MOD-CORE-'))
+                    if (inheritedCore !== undefined) setCoreModule(inheritedCore)
+                  }}>{t('studio.reuseModule')}</button>
+                  <p className="muted">{t('newProject.inherit.scopeHint')}</p>
+                </div>
+              )}
+              <div className="form-row" role="radiogroup" aria-label={t('newProject.scope.label')} data-testid="scope-policy">
+                  <label style={{ fontSize: 12, cursor: 'pointer' }}>
+                    <input type="radio" name="scope-policy" checked={scopeMode === 'recommended'} onChange={() => selectScopeMode('recommended')} />{' '}
+                    {t('newProject.scope.recommended')}
+                  </label>
+                  <label style={{ fontSize: 12, cursor: 'pointer' }}>
+                    <input type="radio" name="scope-policy" checked={scopeMode === 'custom'} onChange={() => selectScopeMode('custom')} />{' '}
+                    {t('newProject.scope.custom')}
+                  </label>
+                  <p className="muted" style={{ fontSize: 11, margin: '4px 0' }}>{t(scopeMode === 'recommended' ? 'newProject.scope.recommendedHint' : 'newProject.scope.customHint')}</p>
               </div>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-work">{previewWork ? t('newProject.modules.impact.work').replace('{work}', Object.entries(previewWork).map(([d, units]) => `${d}:${Math.round(units)}`).join(' / ')) : t('newProject.form.modulesOpen')}</p>
-              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-audience">{previewAffinity ? Object.entries(previewAffinity).filter(([tag]) => selectedSegmentTags.includes(tag)).map(([tag, value]) => `${t(audienceKey(tag))}:${value.toFixed(2)}`).join(' / ') || t('newProject.modules.impact.noClaims') : t('newProject.form.modulesOpen')}{!supportModules.includes('MOD-SYSTEM-PROGRESSION') && t('newProject.modules.impact.noProgression')}</p>
+              <details key={scopeMode} open={scopeMode === 'custom'}>
+                <summary>{t('newProject.scope.moduleDetails')}</summary>
+                <div className="module-card-grid" data-testid="module-cards">
+                  {REC03_MODULES.map(moduleCard)}
+                </div>
+              </details>
+              <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-work">{previewWork ? t('newProject.modules.impact.work').replace('{work}', formatWorkload(previewWork)) : previewMessage}</p>
+              {previewAffinity && <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }} data-testid="module-impact-audience">{Object.entries(previewAffinity).filter(([tag]) => selectedSegmentTags.includes(tag)).map(([tag, value]) => `${t(audienceKey(tag))}:${value.toFixed(2)}`).join(' / ') || t('newProject.modules.impact.noClaims')}{!supportModules.includes('MOD-SYSTEM-PROGRESSION') && t('newProject.modules.impact.noProgression')}</p>}
             </div>
 
             {/* 产品身份五要素摘要（快照预览） */}
@@ -271,7 +307,7 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
               </tbody>
             </table>
 
-            {error && <p className="negative mb-16">{error}</p>}
+            {errorKey && <p className="negative mb-16" role="alert">{t(errorKey)}</p>}
 
             <div className="flex-gap">
               <button
@@ -291,45 +327,51 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
       {step === 2 && locked && (
         <>
           <div style={{ maxWidth: 560 }}>
+            <h3>{productName.trim()}</h3>
             <div className="form-row">
-              <label>{t('newProject.form.name')}（{t('newProject.step2.projectNameNote')}）</label>
-              <input value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="Project Name" data-testid="project-name" />
-            </div>
-            <div className="form-row">
-              <label>{t('newProject.form.budgetCapacity')} ($)</label>
+              <label htmlFor="new-project-budget">{t('newProject.budget.amount')} ($)</label>
               <input
+                id="new-project-budget"
                 type="number"
-                min={1000}
-                step={1000}
-                value={budgetCapacity}
-                onChange={e => setBudgetCapacity(Number(e.target.value))}
-                data-testid="budget-capacity"
+                min={0.01}
+                step={0.01}
+                value={budget}
+                onChange={e => { setBudget(e.target.value); setErrorKey(null) }}
+                data-testid="project-budget"
               />
-              {/* Budget_cap 双写（$X = X cents）+ 联动 */}
               <span className="muted" style={{ fontSize: 11 }} data-testid="budget-cap">
-                {t('newProject.step2.budgetCap')
-                  .replace('{cap}', formatMoney(budgetCapCents))
-                  .replace('{capCents}', String(budgetCapCents))
-                  .replace('{pct}', String(Math.round(hrb * 100)))}
+                {t('newProject.budget.suggested').replace('{amount}', formatMoney(suggestedBudget))}
               </span>
             </div>
+            <p data-testid="commitment-note">
+              {budgetCapCents > availableCash ? t('newProject.budget.shortfall')
+                .replace('{available}', displayBudget(availableCash))
+                .replace('{gap}', displayBudget(budgetCapCents - availableCash))
+                : t('newProject.budget.after')
+                .replace('{amount}', displayBudget(budgetCapCents))
+                .replace('{after}', displayBudget(availableCash - budgetCapCents))}
+            </p>
+            <p className="muted mb-16">{t('newProject.budget.hint')}</p>
 
             {preview && (
-              <>
+              <details className="mb-16">
+                <summary>{t('newProject.budget.workDetails')}</summary>
                 {/* Cost_est：团队为 0 → 暂不可估（A-9：禁止显示 Infinity） */}
                 <div className="kpi-grid" style={{ margin: '12px 0' }}>
                   <div className="kpi-card" data-testid="cost-est">
                     <div className="label">{t('newProject.step2.costEst')}</div>
                     <div className="value">
                       {preview.costEstInfinite
-                        ? t('newProject.step2.costEstUnavailable').replace('{discipline}', 'code')
+                        ? t('project.execution.costEstUnavailable')
                         : formatMoney(preview.costEstCents ?? 0)}
                     </div>
                   </div>
                   <div className="kpi-card" data-testid="cost-verdict">
                     <div className="label">{t('newProject.step2.verdict')}</div>
-                    <div className="value">{`${(preview.ratio * 100).toFixed(1)}%`}</div>
-                    <div className="muted" style={{ fontSize: 11 }}>{t(`newProject.step2.verdict.${preview.verdict}`)}</div>
+                    {preview.costEstInfinite ? <p>{t('studio.needTeam')}</p> : <>
+                      <div className="value">{`${(preview.ratio * 100).toFixed(1)}%`}</div>
+                      <div className="muted" style={{ fontSize: 11 }}>{t(`newProject.step2.verdict.${preview.verdict}`)}</div>
+                    </>}
                   </div>
                 </div>
                 {/* WP 清单预览（§5.2；不显示优先级列，A-10） */}
@@ -345,31 +387,25 @@ export const NewProject: React.FC<Props> = ({ onNavigate, initialGenreId }) => {
                     {preview.workPackages.length === 0 ? (
                       <tr><td colSpan={3} className="muted">{t('newProject.step2.wp.open')}</td></tr>
                     ) : (
-                      preview.workPackages.map(wp => (
+                      preview.workPackages.map((wp, index) => (
                         <tr key={wp.workPackageId}>
-                          <td>{wp.workPackageId}</td>
-                          <td>{wp.discipline}</td>
-                          <td>{wp.baselineWorkUnits}</td>
+                          <td>{index + 1}</td>
+                          <td>{t(`newProject.modules.discipline.${wp.discipline}`)}</td>
+                          <td>{new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(wp.baselineWorkUnits)}</td>
                         </tr>
                       ))
                     )}
                   </tbody>
                 </table>
-              </>
+              </details>
             )}
 
-            {/* 预算承诺双口径说明（FIN BR-3） */}
-            <p className="muted" style={{ fontSize: 12, margin: '8px 0' }} data-testid="commitment-note">
-              {t('newProject.step2.commitmentNote')
-                .replace('{amount}', formatMoney(budgetCapCents))
-                .replace('{available}', formatMoney(useGameStore.getState().financial?.availableCashCents ?? 0))}
-            </p>
             {/* plannedLaunchDay 默认值（只读展示，ADJ-12 S4-2） */}
             <p className="muted" style={{ fontSize: 12, margin: '8px 0' }}>
               {t('newProject.step2.launchDay')}: {formatDay(plannedLaunchDay)}
             </p>
 
-            {error && <p className="negative mb-16">{error}</p>}
+            {errorKey && <p className="negative mb-16" role="alert">{t(errorKey)}</p>}
 
             <div className="flex-gap">
               <button className="btn btn-secondary" onClick={() => setStep(1)}>{t('newProject.prevStep')}</button>
